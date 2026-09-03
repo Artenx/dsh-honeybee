@@ -266,7 +266,9 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
   const selectedNode = selectedId === 'new' ? undefined : nodes.find((n) => n.id === selectedId)
 
   return (
-    <div style={{ display: 'flex', gap: 20, minHeight: 320 }}>
+    <>
+    <style>{`@media (max-width:767px){.dshb-node-section{flex-direction:column!important}.dshb-node-section>div:first-child{width:100%!important;border-right:none!important;border-bottom:1px solid var(--dsw-border,#3a4050);padding-right:0!important;padding-bottom:12px;margin-bottom:12px}}`}</style>
+    <div className="dshb-node-section" style={{ display: 'flex', gap: 20, minHeight: 320 }}>
       <div style={{ width: 200, flexShrink: 0, borderRight: '1px solid var(--dsw-border, #3a4050)', paddingRight: 16 }}>
         <button type="button" onClick={() => selectNode('new')} style={{ ...buttonStyle, width: '100%', background: 'var(--dsw-accent, #3b82f6)', color: '#fff', marginBottom: 10 }}>
           新建节点
@@ -409,6 +411,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
         </div>
       </div>
     </div>
+    </>
   )
 }
 
