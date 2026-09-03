@@ -1,1 +1,3 @@
-[]
+- insert:
+    - id: dshb-exec-ssh
+      name: dshb-exec-ssh

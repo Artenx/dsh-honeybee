@@ -45,7 +45,7 @@
   - `RouterFileSystem extends SandboxedFileSystem`、`RouterSubprocess extends LocalSubprocessRuntime`、`RouterShell extends SandboxBashExecutor`；patch 禁用 dsh-base 三行并插入路由器
   - `ExecutionWorldProvider` 接口定义（fs/subprocess/shell/terminal/ensureDir/testConnection）
 - [ ]* 10.1 属性测试：镜像根外路径行为与上游本地实现一致（设计正确性属性 2/6）
-- [ ] 11. 实现 dshb-exec-ssh 连接层（对应需求 8.4）
+- [x] 11. 实现 dshb-exec-ssh 连接层（对应需求 8.4）
   - ssh2 单连接复用；密码/私钥/passphrase/ssh-agent/ProxyJump 多跳
   - 远端登录环境 `env -i` 净化（剔除 `DSH_*` 与凭据形变量名）
   - 指数退避自动重连（上限 5 次），断连期间调用返回分类错误（对应需求 6.5）
