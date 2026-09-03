@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { NodeRegistry, type NodeProfile, type NodeType } from './node-registry.js'
+import { readSshConfig, resolveSshConfigEntry } from './ssh-config.js'
+import type { KnownHostsStore } from './known-hosts.js'
 import { testNode } from './test.js'
 
 const MAX_BODY = 64 * 1024
@@ -135,6 +137,51 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
         if (req.method === 'POST' && segs[4] === 'test') {
           const report = await testNode(registry, resourceId)
           sendJson(res, 200, { ok: true, report })
+          return
+        }
+
+        sendJson(res, 404, { ok: false, error: 'not found' })
+      },
+    }),
+  )
+}
+
+export async function registerSshConfigRoutes(ctx: Context, knownHosts: KnownHostsStore): Promise<void> {
+  const webServer = ctx.webServer
+
+  ctx.effect(() =>
+    webServer.register({
+      kind: 'exact',
+      path: '/api/dshb/ssh-config',
+      handler: (_req, res) => {
+        const entries = readSshConfig().map(resolveSshConfigEntry)
+        sendJson(res, 200, { ok: true, entries })
+      },
+    }),
+  )
+
+  ctx.effect(() =>
+    webServer.register({
+      kind: 'prefix',
+      path: '/api/dshb/known-hosts',
+      handler: async (req, res) => {
+        const segs = pathSegments(req)
+        const action = segs[3]
+
+        if (req.method === 'GET' && action === undefined) {
+          sendJson(res, 200, { ok: true, hosts: knownHosts.list() })
+          return
+        }
+
+        if (req.method === 'POST' && action === 'forget') {
+          const body = await readBody(req)
+          if (!body || typeof body.host !== 'string') {
+            sendJson(res, 400, { ok: false, error: '需要 host' })
+            return
+          }
+          const port = Number(body.port ?? 22)
+          knownHosts.forget(String(body.host), port)
+          sendJson(res, 200, { ok: true })
           return
         }
 

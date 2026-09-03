@@ -32,7 +32,7 @@
 - [x] 7. 实现 dshb-core 节点注册表（对应需求 4.1/4.2/4.5）
   - `ctx.nodeRegistry` 服务：create/update/remove/list/get/test/status
   - 档案存 `$DSH_HOME/dshb/nodes.json`（0600），秘密字段写入上游 credentials 服务仅存 credentialId，API 响应只含 hasSecret 标识
-- [ ] 8. 实现 SSH 连接参数解析与导入（对应需求 4.4/4.6）
+- [x] 8. 实现 SSH 连接参数解析与导入（对应需求 4.4/4.6）
   - `~/.ssh/config` 解析（别名/User/Port/IdentityFile/ProxyJump）为节点档案草稿
   - TOFU 主机密钥库 `known_hosts.json`（0600）：首连记录、变更拒绝
 - [ ]* 8.1 属性测试：档案 CRUD 后节点唯一性不变量（设计正确性属性 1）

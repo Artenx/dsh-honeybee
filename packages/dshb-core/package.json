@@ -7,6 +7,8 @@
   "exports": {
     ".": "./lib/index.js",
     "./node-registry": "./lib/node-registry.js",
+    "./ssh-config": "./lib/ssh-config.js",
+    "./known-hosts": "./lib/known-hosts.js",
     "./package.json": "./package.json"
   },
   "files": ["lib", "cordis.patch.yml"],
