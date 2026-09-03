@@ -1,0 +1,20 @@
+{
+  "name": "dsh-honeybee",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "vitest run",
+    "typecheck": "pnpm -r --if-present run typecheck"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh": "0.1.1-rc.2",
+    "tsdown": "^0.22.14",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.11"
+  }
+}

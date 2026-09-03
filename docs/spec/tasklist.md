@@ -4,16 +4,16 @@
 
 **P0 调研与仓库骨架**
 
-- [ ] 1. 初始化 DSHB 独立仓库与构建骨架（对应需求 3.1/3.2/9.1）
+- [x] 1. 初始化 DSHB 独立仓库与构建骨架（对应需求 3.1/3.2/9.1）
   - 在 `/workspace/dsh-honeybee/` 创建独立 git 仓库：pnpm workspace、tsconfig.base、tsdown 构建、vitest 配置
   - `packages/` 下建立 dshb-auth / dshb-core / dshb-router / dshb-exec-ssh / dshb-ui 空包（各含 `dsh.bundle` 声明的 package.json 骨架）
   - `profiles/dshb/` 下编写 profile 模板：按序叠加 dsh-base + dsh-web-app + dsh-web-mobile + dshb-*
   - package.json 锁定上游 `@deepseek-ai/dsh` 版本范围并记录已验证版本
-- [ ] 2. 跑通上游组装与插件开发循环（对应需求 3.3/3.4）
+- [x] 2. 跑通上游组装与插件开发循环（对应需求 3.3/3.4）
   - `dsh --profile web --dump-config` 导出完整插件树，确认三处 patch 目标行 id（startup、fs-sandbox/subprocess/bash-sandbox、directory-picker-auto）
   - 编写 hello-world bundle 验证 patch 热重载与 `dsh plugin add` 安装链路
   - 编写契约测试：断言三个 patch 目标行 id 存在于上游构建产物（升级时第一发现点）
-- [ ] 3. 检查点 - 确保所有测试通过，profile 可启动并打开 Web UI
+- [x] 3. 检查点 - 确保所有测试通过，profile 可启动并打开 Web UI
 
 **P1 认证与节点骨架（一期）**
 

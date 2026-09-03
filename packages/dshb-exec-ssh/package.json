@@ -1,0 +1,24 @@
+{
+  "name": "dshb-exec-ssh",
+  "version": "0.0.1",
+  "description": "DSHB 远程 SSH 执行世界（exec 行协议 / SFTP / PTY over ssh2）",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ssh2": "^1.16.0"
+  }
+}

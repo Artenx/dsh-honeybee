@@ -1,0 +1,29 @@
+{
+  "name": "dshb-profile",
+  "version": "0.0.1",
+  "private": true,
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-web-mobile",
+        "dshb-auth",
+        "dshb-core",
+        "dshb-router",
+        "dshb-exec-ssh",
+        "dshb-ui"
+      ]
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-base": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-web-app": "0.1.1-rc.2",
+    "dsh-web-mobile": "2.3.0",
+    "dshb-auth": "workspace:*",
+    "dshb-core": "workspace:*",
+    "dshb-router": "workspace:*",
+    "dshb-exec-ssh": "workspace:*",
+    "dshb-ui": "workspace:*"
+  }
+}
