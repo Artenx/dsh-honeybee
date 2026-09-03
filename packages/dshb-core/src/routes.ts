@@ -56,7 +56,7 @@ function pathSegments(req: IncomingMessage): string[] {
 
 const VALID_TYPES: NodeType[] = ['local-host', 'local-docker', 'remote-ssh', 'remote-docker']
 
-export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry, worlds?: WorldsLike): Promise<void> {
+export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): Promise<void> {
   const webServer = ctx.webServer
   ctx.effect(() =>
     webServer.register({
@@ -65,6 +65,7 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry, w
       handler: async (req, res) => {
         const segs = pathSegments(req)
         const resourceId = segs[3]
+        const worlds = ctx.get('dshbWorlds') as WorldsLike | undefined
 
         if (req.method === 'GET' && segs[4] === 'browse' && resourceId) {
           const node = registry.get(resourceId)

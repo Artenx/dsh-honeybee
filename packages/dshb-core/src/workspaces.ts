@@ -59,13 +59,13 @@ function slugify(name: string): string {
 
 export function registerWorkspaceRoutes(ctx: Context, registry: NodeRegistry, bindings: WorkspaceBindingsStore): void {
   const webServer = ctx.webServer
-  const worlds = ctx.get('dshbWorlds') as WorldsLike | undefined
 
   ctx.effect(() =>
     webServer.register({
       kind: 'prefix',
       path: '/api/dshb/workspaces',
       handler: async (req, res) => {
+        const worlds = ctx.get('dshbWorlds') as WorldsLike | undefined
         const segs = pathSegments(req)
         const action = segs[3]
 

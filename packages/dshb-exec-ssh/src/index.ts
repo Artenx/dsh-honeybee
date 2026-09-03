@@ -5,6 +5,8 @@ import { SshWorldRegistry } from './world.js'
 
 export const name = 'dshb-exec-ssh'
 
+export const inject = ['nodeRegistry']
+
 export function apply(ctx: Context): void {
   const pool = new SshConnectionPool(ctx)
   const nodeRegistry = ctx.get('nodeRegistry') as ConstructorParameters<typeof SshWorldRegistry>[1]
