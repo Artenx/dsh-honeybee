@@ -49,7 +49,7 @@
   - ssh2 单连接复用；密码/私钥/passphrase/ssh-agent/ProxyJump 多跳
   - 远端登录环境 `env -i` 净化（剔除 `DSH_*` 与凭据形变量名）
   - 指数退避自动重连（上限 5 次），断连期间调用返回分类错误（对应需求 6.5）
-- [ ] 12. 实现 dshb-exec-ssh 命令与文件通道（对应需求 6.3/8.1/8.2）
+- [x] 12. 实现 dshb-exec-ssh 命令与文件通道（对应需求 6.3/8.1/8.2）
   - exec 静态字面量 runner + argv/env/cwd 单行 base64 行协议经 stdin 传输（兼容 bash 3.2 与 BSD base64）
   - SFTP 协议级 fs 提供方：读/原子写/列目录/stat/mkdir/删除
   - rg 自举：远端探测、缺失时经 SFTP 上传管理端自带 ripgrep
