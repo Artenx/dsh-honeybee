@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsdown'
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/startup.ts', 'src/loopback.ts'],
+  entry: ['src/index.ts', 'src/startup.ts', 'src/webserver.ts', 'src/loopback.ts'],
   outDir: 'lib',
   format: ['esm'],
   dts: true,

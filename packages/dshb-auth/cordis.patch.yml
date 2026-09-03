@@ -7,3 +7,14 @@
 - insert:
     - id: dshb-web-startup
       name: dshb-auth/startup
+- id: webserver
+  name: '@deepseek-ai/dsh-host-webserver'
+  disabled: true
+- insert:
+    - id: dshb-webserver
+      name: dshb-auth/webserver
+      inject:
+        - webStartup
+      config:
+        host: !!js ctx.webStartup.host ?? '127.0.0.1'
+        port: !!js ctx.webStartup.port ?? 3080

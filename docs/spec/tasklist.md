@@ -20,7 +20,7 @@
 - [x] 4. 实现 dshb-auth 的 startup 替换与网络绑定（对应需求 1.1/1.3/1.7）
   - patch 按 id 替换 `dsh-web-app/startup` 行，允许 `--host 0.0.0.0`
   - 回环判定仅依据 TCP 对端地址 + Host 头，拒绝采信 X-Forwarded-For
-- [ ] 5. 实现 dshb-auth 认证路由与会话（对应需求 1.1/1.2/1.4/1.5/1.6）
+- [x] 5. 实现 dshb-auth 认证路由与会话（对应需求 1.1/1.2/1.4/1.5/1.6）
   - `/api/auth/*`：register（仅凭据未初始化时开放）/ login / logout / change-password / change-username
   - scrypt（随机盐，64 字节）密码散列 + HMAC-SHA256 签名 Cookie（HttpOnly，14 天），凭据文件 0600
   - 认证中间件保护 `/api/*`、第三方 RPC 路由与 WebSocket 握手；同 IP 5 次失败锁 30 秒

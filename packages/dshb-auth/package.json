@@ -7,6 +7,7 @@
   "exports": {
     ".": "./lib/index.js",
     "./startup": "./lib/startup.js",
+    "./webserver": "./lib/webserver.js",
     "./loopback": "./lib/loopback.js",
     "./package.json": "./package.json"
   },
@@ -22,6 +23,7 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-cmdline": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.2",
     "commander": "^15.0.0"
   },
   "devDependencies": {
