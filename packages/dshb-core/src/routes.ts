@@ -1,10 +1,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { mkdirSync, readdirSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { NodeRegistry, type NodeProfile, type NodeType } from './node-registry.js'
 import { readSshConfig, resolveSshConfigEntry } from './ssh-config.js'
 import type { KnownHostsStore } from './known-hosts.js'
 import { testNode } from './test.js'
+
+interface WorldsLike {
+  ensure(nodeId: string): Promise<{
+    ensureDir(path: string): Promise<void>
+    fs: { listDir(path: string): Promise<Array<{ name: string; path: string; isDirectory: boolean; isFile: boolean }>> }
+  } | undefined>
+}
 
 const MAX_BODY = 64 * 1024
 
@@ -48,7 +56,7 @@ function pathSegments(req: IncomingMessage): string[] {
 
 const VALID_TYPES: NodeType[] = ['local-host', 'local-docker', 'remote-ssh', 'remote-docker']
 
-export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): Promise<void> {
+export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry, worlds?: WorldsLike): Promise<void> {
   const webServer = ctx.webServer
   ctx.effect(() =>
     webServer.register({
@@ -57,6 +65,76 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
       handler: async (req, res) => {
         const segs = pathSegments(req)
         const resourceId = segs[3]
+
+        if (req.method === 'GET' && segs[4] === 'browse' && resourceId) {
+          const node = registry.get(resourceId)
+          if (!node) {
+            sendJson(res, 404, { ok: false, error: 'node not found' })
+            return
+          }
+          const path = new URL(req.url ?? '/', 'http://x').searchParams.get('path') ?? (node.type === 'local-host' ? process.env.HOME ?? '/' : '~')
+          try {
+            if (node.type === 'local-host') {
+              const entries = readdirSync(path, { withFileTypes: true }).map((e) => ({
+                name: e.name,
+                path: `${path.replace(/\/$/, '')}/${e.name}`,
+                isDirectory: e.isDirectory(),
+                isFile: e.isFile(),
+              }))
+              sendJson(res, 200, { ok: true, path, entries })
+              return
+            }
+            if (!worlds) {
+              sendJson(res, 503, { ok: false, error: '远程执行世界不可用' })
+              return
+            }
+            const world = await worlds.ensure(resourceId)
+            if (!world) {
+              sendJson(res, 503, { ok: false, error: '节点执行世界未就绪' })
+              return
+            }
+            const entries = await world.fs.listDir(path)
+            sendJson(res, 200, { ok: true, path, entries })
+          } catch (err) {
+            sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) })
+          }
+          return
+        }
+
+        if (req.method === 'POST' && segs[4] === 'mkdir' && resourceId) {
+          const node = registry.get(resourceId)
+          if (!node) {
+            sendJson(res, 404, { ok: false, error: 'node not found' })
+            return
+          }
+          const body = await readBody(req)
+          const path = body && typeof body.path === 'string' ? body.path : undefined
+          if (!path) {
+            sendJson(res, 400, { ok: false, error: '需要 path' })
+            return
+          }
+          try {
+            if (node.type === 'local-host') {
+              mkdirSync(path, { recursive: true })
+              sendJson(res, 200, { ok: true, path })
+              return
+            }
+            if (!worlds) {
+              sendJson(res, 503, { ok: false, error: '远程执行世界不可用' })
+              return
+            }
+            const world = await worlds.ensure(resourceId)
+            if (!world) {
+              sendJson(res, 503, { ok: false, error: '节点执行世界未就绪' })
+              return
+            }
+            await world.ensureDir(path)
+            sendJson(res, 200, { ok: true, path })
+          } catch (err) {
+            sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) })
+          }
+          return
+        }
 
         if (req.method === 'GET' && resourceId === undefined) {
           const nodes = registry.list()

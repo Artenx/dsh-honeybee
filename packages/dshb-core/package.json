@@ -23,7 +23,8 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-credentials": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.2"
+    "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.2",
+    "dshb-router": "workspace:*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2"

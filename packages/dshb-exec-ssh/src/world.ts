@@ -55,10 +55,18 @@ export class SshExecutionWorld implements ExecutionWorldProvider {
   }
 }
 
+interface NodeRegistryLike {
+  get(id: string): { id: string; type: string; ssh?: { host: string; port: number; username: string; auth: { kind: 'password' | 'key' | 'agent'; keyPath?: string }; jump?: Array<{ host: string; port?: number; username?: string; keyPath?: string }> } } | undefined
+  getSecrets(id: string): Promise<{ password?: string; privateKey?: string; passphrase?: string } | undefined>
+}
+
 export class SshWorldRegistry {
   private readonly worlds = new Map<string, SshExecutionWorld>()
 
-  constructor(private readonly pool: SshConnectionPool) {}
+  constructor(
+    private readonly pool: SshConnectionPool,
+    private readonly nodeRegistry?: NodeRegistryLike,
+  ) {}
 
   register(config: SshNodeConfig): SshExecutionWorld {
     const world = new SshExecutionWorld(config.nodeId, config, this.pool)
@@ -68,6 +76,24 @@ export class SshWorldRegistry {
 
   get(nodeId: string): SshExecutionWorld | undefined {
     return this.worlds.get(nodeId)
+  }
+
+  async ensure(nodeId: string): Promise<SshExecutionWorld | undefined> {
+    const existing = this.worlds.get(nodeId)
+    if (existing) return existing
+    if (!this.nodeRegistry) return undefined
+    const node = this.nodeRegistry.get(nodeId)
+    if (!node || node.type !== 'remote-ssh' || !node.ssh) return undefined
+    const secrets = (await this.nodeRegistry.getSecrets(nodeId)) ?? {}
+    return this.register({
+      nodeId,
+      host: node.ssh.host,
+      port: node.ssh.port,
+      username: node.ssh.username,
+      auth: node.ssh.auth,
+      secrets,
+      jump: node.ssh.jump,
+    })
   }
 
   remove(nodeId: string): void {

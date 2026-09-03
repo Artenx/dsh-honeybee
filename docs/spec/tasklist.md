@@ -62,7 +62,7 @@
 
 - [x] 14. 实现 dshb-ui 节点管理设置页（对应需求 4.1/4.3/4.5/4.6）
   - 节点 CRUD 表单（一期：local-host 内置 + remote-ssh）、连接测试按钮（分类错误提示）、健康状态展示、ssh config 一键导入
-- [ ] 15. 实现 dshb-ui 节点感知添加工作区 occupant（对应需求 5.1/5.2/5.3/5.4）
+- [x] 15. 实现 dshb-ui 节点感知添加工作区 occupant（对应需求 5.1/5.2/5.3/5.4）
   - 接管 directoryFlow slot：第一步节点选择，第二步节点内目录浏览（list/createDirectory 动词转发到目标节点）
   - 创建本地镜像目录 `mirrors/<nodeId>/<slug>`，调用上游 workspace 注册，落盘工作区绑定（镜像路径 → 节点 + 远端路径）
   - 侧栏工作区标题含节点归属标识

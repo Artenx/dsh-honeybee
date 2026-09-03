@@ -9,13 +9,15 @@ const EXTERNAL = [
   '@deepseek-ai/dsh-client-runtime/client',
   '@deepseek-ai/dsh-client-ui-settings',
   '@deepseek-ai/dsh-client-ui-settings/client',
+  '@deepseek-ai/dsh-client-ui-workspace',
+  '@deepseek-ai/dsh-client-ui-workspace/client',
 ]
 
 const BUNDLE_ID = 'dshb-ui'
 
 export default defineConfig([
   {
-    entry: ['src/index.ts'],
+    entry: ['src/index.ts', 'src/picker.ts'],
     outDir: 'lib',
     format: ['esm'],
     dts: true,

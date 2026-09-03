@@ -1,8 +1,10 @@
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CSSProperties, ReactElement } from 'react'
 import { useCallback, useEffect, useState } from 'react'
+import { DirectoryFlowOccupant } from './directory-flow.js'
 
 export const inject = ['connection']
 
@@ -416,6 +418,12 @@ export function apply(ctx: ClientContext): void {
     apply: (sub: ClientContext): void => {
       sub.slots.inject('settings.section', () =>
         sub.slots.register({ name: 'settings.section', id: SECTION_ID, order: 110, label: () => '工作节点' }, NodeSection),
+      )
+      sub.slots.inject('conversation.hero.workspace.directoryFlow', () =>
+        sub.slots.register({ name: 'conversation.hero.workspace.directoryFlow' }, DirectoryFlowOccupant),
+      )
+      sub.slots.inject('sidebar.workspaces.directoryFlow', () =>
+        sub.slots.register({ name: 'sidebar.workspaces.directoryFlow' }, DirectoryFlowOccupant),
       )
     },
   })

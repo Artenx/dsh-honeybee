@@ -7,9 +7,13 @@ export const name = 'dshb-exec-ssh'
 
 export function apply(ctx: Context): void {
   const pool = new SshConnectionPool(ctx)
-  const worlds = new SshWorldRegistry(pool)
+  const nodeRegistry = ctx.get('nodeRegistry') as ConstructorParameters<typeof SshWorldRegistry>[1]
+  const worlds = new SshWorldRegistry(pool, nodeRegistry)
   ctx.provide('dshbSshPool', pool)
   ctx.provide('dshbSshWorlds', worlds)
+  ctx.provide('dshbWorlds', {
+    ensure: (nodeId: string) => worlds.ensure(nodeId),
+  })
   sharedWorldResolver().setRegistry({
     get: (nodeId: string) => worlds.get(nodeId),
   })
