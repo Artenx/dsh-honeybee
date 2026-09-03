@@ -1,3 +1,3 @@
-export interface DshbPluginConfig {}
+export const name = 'dshb-auth'
 
-export function apply(_ctx: unknown, _config: DshbPluginConfig = {}): void {}
+export function apply(): void {}

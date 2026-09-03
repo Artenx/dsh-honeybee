@@ -1,1 +1,9 @@
-[]
+- insert:
+    - id: dshb-auth
+      name: dshb-auth
+- id: web-startup
+  name: '@deepseek-ai/dsh-web-app/startup'
+  disabled: true
+- insert:
+    - id: dshb-web-startup
+      name: dshb-auth/startup

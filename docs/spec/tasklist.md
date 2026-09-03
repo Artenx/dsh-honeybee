@@ -17,7 +17,7 @@
 
 **P1 认证与节点骨架（一期）**
 
-- [ ] 4. 实现 dshb-auth 的 startup 替换与网络绑定（对应需求 1.1/1.3/1.7）
+- [x] 4. 实现 dshb-auth 的 startup 替换与网络绑定（对应需求 1.1/1.3/1.7）
   - patch 按 id 替换 `dsh-web-app/startup` 行，允许 `--host 0.0.0.0`
   - 回环判定仅依据 TCP 对端地址 + Host 头，拒绝采信 X-Forwarded-For
 - [ ] 5. 实现 dshb-auth 认证路由与会话（对应需求 1.1/1.2/1.4/1.5/1.6）
