@@ -1,3 +1,5 @@
-export interface DshbPluginConfig {}
+import type { Context } from '@deepseek-ai/cordis'
 
-export function apply(_ctx: unknown, _config: DshbPluginConfig = {}): void {}
+export const name = 'dshb-ui'
+
+export function apply(_ctx: Context): void {}
