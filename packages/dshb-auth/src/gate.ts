@@ -3,15 +3,15 @@ import { isLoopbackRequest } from './loopback.js'
 import { readCookie, SESSION_COOKIE, verifySession } from './session.js'
 import type { CredentialStore } from './credentials.js'
 
-export type GateDecision = 'allow' | 'redirect-login' | 'reject'
+export type GateDecision = 'allow' | 'exempt' | 'redirect-login' | 'reject'
 
 export class AuthGate {
   constructor(private readonly store: CredentialStore) {}
 
   decide(req: IncomingMessage): GateDecision {
-    if (isLoopbackRequest(req.socket.remoteAddress, req.headers.host)) return 'allow'
     const path = new URL(req.url ?? '/', 'http://x').pathname
-    if (path === '/login' || path.startsWith('/api/auth/')) return 'allow'
+    if (path === '/login' || path.startsWith('/api/auth/')) return 'exempt'
+    if (isLoopbackRequest(req.socket.remoteAddress, req.headers.host)) return 'allow'
     const secret = this.store.sessionSecret
     const username = this.store.username
     if (secret && username) {

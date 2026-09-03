@@ -36,6 +36,9 @@ export default class AuthedWebServer extends WebServer {
       rewriteToLoopback(req, this.port)
       return route.handler(req, res)
     }
+    if (decision === 'exempt') {
+      return route.handler(req, res)
+    }
     if (decision === 'redirect-login') {
       res.writeHead(302, { location: '/login' })
       res.end()
@@ -51,12 +54,12 @@ export default class AuthedWebServer extends WebServer {
     socket: Duplex,
     head: Buffer,
   ): void | Promise<void> {
-    if (this.gate.decide(req) !== 'allow') {
-      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
-      socket.destroy()
-      return
+    const decision = this.gate.decide(req)
+    if (decision === 'allow' || decision === 'exempt') {
+      if (decision === 'allow') rewriteToLoopback(req, this.port)
+      return route.handler(req, socket, head)
     }
-    rewriteToLoopback(req, this.port)
-    return route.handler(req, socket, head)
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+    socket.destroy()
   }
 }

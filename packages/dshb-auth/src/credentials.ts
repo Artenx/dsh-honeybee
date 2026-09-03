@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
@@ -25,28 +25,42 @@ export function sanitizeUsername(input: string): string {
 export class CredentialStore {
   private data: AuthStoreData | null = null
   private loaded = false
+  private loadedMtime = 0
 
   private file(): string {
     return authFilePath()
   }
 
+  private maybeReload(): void {
+    if (!this.loaded) {
+      this.load()
+      return
+    }
+    try {
+      const mtime = statSync(this.file()).mtimeMs
+      if (mtime !== this.loadedMtime) this.load()
+    } catch {
+      this.data = null
+    }
+  }
+
   isInitialized(): boolean {
-    this.load()
+    this.maybeReload()
     return this.data !== null
   }
 
   get username(): string | null {
-    this.load()
+    this.maybeReload()
     return this.data?.username ?? null
   }
 
   get sessionSecret(): Buffer | null {
-    this.load()
+    this.maybeReload()
     return this.data ? Buffer.from(this.data.sessionSecret, 'base64') : null
   }
 
   register(username: string, password: string): void {
-    this.load()
+    this.maybeReload()
     if (this.data) throw new Error('auth: already initialized')
     const salt = randomBytes(16)
     const hash = scryptSync(password, salt, 64)
@@ -60,7 +74,7 @@ export class CredentialStore {
   }
 
   verify(password: string): boolean {
-    this.load()
+    this.maybeReload()
     if (!this.data) return false
     const hash = scryptSync(password, Buffer.from(this.data.salt, 'base64'), 64)
     const expected = Buffer.from(this.data.hash, 'base64')
@@ -68,7 +82,7 @@ export class CredentialStore {
   }
 
   changePassword(username: string, password: string): void {
-    this.load()
+    this.maybeReload()
     if (!this.data) throw new Error('auth: not initialized')
     const salt = randomBytes(16)
     this.data = {
@@ -81,18 +95,17 @@ export class CredentialStore {
   }
 
   changeUsername(username: string): void {
-    this.load()
+    this.maybeReload()
     if (!this.data) throw new Error('auth: not initialized')
     this.data = { ...this.data, username, sessionSecret: randomBytes(32).toString('base64') }
     this.save()
   }
 
   private load(): void {
-    if (this.loaded) return
     this.loaded = true
     const file = this.file()
-    if (!existsSync(file)) return
     try {
+      this.loadedMtime = statSync(file).mtimeMs
       const parsed = JSON.parse(readFileSync(file, 'utf8')) as AuthStoreData
       if (parsed.username && parsed.salt && parsed.hash && parsed.sessionSecret) {
         this.data = parsed
@@ -109,6 +122,9 @@ export class CredentialStore {
     writeFileSync(tmp, JSON.stringify(this.data), { mode: 0o600 })
     renameSync(tmp, file)
     chmodSync(file, 0o600)
+    try {
+      this.loadedMtime = statSync(file).mtimeMs
+    } catch {}
   }
 }
 
