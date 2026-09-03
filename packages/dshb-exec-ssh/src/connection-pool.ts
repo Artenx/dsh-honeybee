@@ -16,7 +16,7 @@ export class SshConnectionPool {
     return `${target.host}:${target.port}:${target.username}`
   }
 
-  async acquire(target: SshTarget, secrets: SshSecrets): Promise<SshConnection> {
+  acquire(target: SshTarget, secrets: SshSecrets): SshConnection {
     const k = this.key(target)
     const existing = this.pool.get(k)
     if (existing) return existing.connection

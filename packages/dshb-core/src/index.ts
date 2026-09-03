@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { sharedWorldResolver } from 'dshb-router/resolve'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { sharedAuditLogger } from './audit.js'
 import { KnownHostsStore } from './known-hosts.js'
 import { NodeRegistry } from './node-registry.js'
 import { registerNodeRoutes, registerSshConfigRoutes } from './routes.js'
@@ -18,6 +19,7 @@ export function apply(ctx: Context): void {
   ctx.provide('nodeRegistry', registry)
   ctx.provide('knownHosts', knownHosts)
   ctx.provide('workspaceBindings', bindings)
+  ctx.provide('dshbAudit', sharedAuditLogger())
   sharedWorldResolver().setBindings(bindings)
   void registerNodeRoutes(ctx, registry)
   void registerSshConfigRoutes(ctx, knownHosts)

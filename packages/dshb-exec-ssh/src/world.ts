@@ -26,6 +26,7 @@ export class SshExecutionWorld implements ExecutionWorldProvider {
     readonly nodeId: string,
     private readonly config: SshNodeConfig,
     pool: SshConnectionPool,
+    audit?: (nodeId: string, op: string, target: string, result: string) => void,
   ) {
     const target = {
       host: config.host,
@@ -35,19 +36,19 @@ export class SshExecutionWorld implements ExecutionWorldProvider {
       jump: config.jump,
     }
     const connection = pool.acquire(target, config.secrets)
-    this.executor = new SshExecutor(connection as never)
+    this.executor = new SshExecutor(connection, nodeId, audit ? (op, t, r) => audit(nodeId, op, t, r) : undefined)
     this.fs = new SshFileSystem(this.executor)
     this.subprocess = new SshSubprocessRuntime(this.executor)
     this.shell = new SshShellExecutor(this.executor)
   }
 
   async ensureDir(remotePath: string): Promise<void> {
-    await this.executor.exec(['mkdir', '-p', remotePath], '~')
+    await this.executor.exec(['mkdir', '-p', remotePath], '/')
   }
 
   async testConnection(): Promise<NodeTestReport> {
     try {
-      const result = await this.executor.exec(['echo', 'ok'], '~')
+      const result = await this.executor.exec(['echo', 'ok'], '/')
       return { ok: result.stdout.trim() === 'ok', reachable: true }
     } catch (err) {
       return { ok: false, reachable: false, error: err instanceof Error ? err.message : String(err) }
@@ -66,10 +67,11 @@ export class SshWorldRegistry {
   constructor(
     private readonly pool: SshConnectionPool,
     private readonly nodeRegistry?: NodeRegistryLike,
+    private readonly audit?: (nodeId: string, op: string, target: string, result: string) => void,
   ) {}
 
   register(config: SshNodeConfig): SshExecutionWorld {
-    const world = new SshExecutionWorld(config.nodeId, config, this.pool)
+    const world = new SshExecutionWorld(config.nodeId, config, this.pool, this.audit)
     this.worlds.set(config.nodeId, world)
     return world
   }

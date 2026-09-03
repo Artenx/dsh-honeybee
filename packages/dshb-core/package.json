@@ -9,6 +9,8 @@
     "./node-registry": "./lib/node-registry.js",
     "./ssh-config": "./lib/ssh-config.js",
     "./known-hosts": "./lib/known-hosts.js",
+    "./workspace-bindings": "./lib/workspace-bindings.js",
+    "./audit": "./lib/audit.js",
     "./package.json": "./package.json"
   },
   "files": ["lib", "cordis.patch.yml"],

@@ -14,7 +14,11 @@ export interface ExecResult {
 export class SshExecutor {
   private sftpCache: Promise<import('ssh2').SFTPWrapper> | null = null
 
-  constructor(private readonly connection: SshConnection) {}
+  constructor(
+    private readonly connection: SshConnection,
+    private readonly nodeId = 'unknown',
+    private readonly audit?: (op: string, target: string, result: string) => void,
+  ) {}
 
   async exec(argv: string[], cwd: string, env: Record<string, string> = {}, stdinData?: Buffer): Promise<ExecResult> {
     const client = await this.connection.getClient()
@@ -32,6 +36,7 @@ export class SshExecutor {
         channel.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
         channel.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
         channel.on('close', (code: number, signal: string) => {
+          this.audit?.('exec', argv.join(' '), `code=${code ?? 0}`)
           resolve({
             code: code ?? 0,
             signal,
@@ -75,7 +80,10 @@ export class SshExecutor {
         }
         sftp.ext_openssh_rename(tmp, path, (renameErr) => {
           if (renameErr) reject(renameErr)
-          else resolve()
+          else {
+            this.audit?.('write', path, 'ok')
+            resolve()
+          }
         })
       })
     })
@@ -126,28 +134,40 @@ export class SshExecutor {
   async remove(path: string): Promise<void> {
     const sftp = await this.sftp()
     return new Promise((resolve, reject) => {
-      sftp.unlink(path, (err) => (err ? reject(err) : resolve()))
+      sftp.unlink(path, (err) => {
+        if (err) reject(err)
+        else {
+          this.audit?.('remove', path, 'ok')
+          resolve()
+        }
+      })
     })
   }
 
   async rename(src: string, dest: string): Promise<void> {
     const sftp = await this.sftp()
     return new Promise((resolve, reject) => {
-      sftp.ext_openssh_rename(src, dest, (err) => (err ? reject(err) : resolve()))
+      sftp.ext_openssh_rename(src, dest, (err) => {
+        if (err) reject(err)
+        else {
+          this.audit?.('move', `${src} -> ${dest}`, 'ok')
+          resolve()
+        }
+      })
     })
   }
 
   async ensureRg(): Promise<void> {
-    const result = await this.exec(['sh', '-c', 'command -v rg || echo "__DShB_RG_MISSING__"'], '~')
+    const result = await this.exec(['sh', '-c', 'command -v rg || echo "__DShB_RG_MISSING__"'], '/')
     if (result.stdout.includes('__DShB_RG_MISSING__')) {
       const localRg = process.env.DSHB_LOCAL_RG ?? findLocalRg()
       if (!localRg) return
       const remoteRgDir = '~/.dshb/bin'
-      await this.exec(['mkdir', '-p', remoteRgDir], '~')
+      await this.exec(['mkdir', '-p', remoteRgDir], '/')
       const remoteRg = `${remoteRgDir}/rg`
       const content = readFileSync(localRg)
       await this.writeFile(remoteRg, content)
-      await this.exec(['chmod', '+x', remoteRg], '~')
+      await this.exec(['chmod', '+x', remoteRg], '/')
     }
   }
 

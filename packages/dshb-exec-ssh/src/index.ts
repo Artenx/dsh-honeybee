@@ -8,7 +8,8 @@ export const name = 'dshb-exec-ssh'
 export function apply(ctx: Context): void {
   const pool = new SshConnectionPool(ctx)
   const nodeRegistry = ctx.get('nodeRegistry') as ConstructorParameters<typeof SshWorldRegistry>[1]
-  const worlds = new SshWorldRegistry(pool, nodeRegistry)
+  const audit = ctx.get('dshbAudit') as { log(nodeId: string, op: string, target: string, result: string): void } | undefined
+  const worlds = new SshWorldRegistry(pool, nodeRegistry, audit ? (id, op, t, r) => audit.log(id, op, t, r) : undefined)
   ctx.provide('dshbSshPool', pool)
   ctx.provide('dshbSshWorlds', worlds)
   ctx.provide('dshbWorlds', {

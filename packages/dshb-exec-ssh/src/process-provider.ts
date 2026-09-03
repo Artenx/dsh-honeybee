@@ -8,7 +8,7 @@ export class SshShellExecutor {
   resolve(request: ShellExecRequest): ShellExecSpec {
     return {
       command: request.command,
-      workdir: request.workdir ?? '~',
+      workdir: request.workdir ?? '/',
       timeoutMs: request.timeoutMs ?? 60_000,
       stdoutMaxBytes: request.stdoutMaxBytes ?? 1024 * 1024,
       signal: request.signal,

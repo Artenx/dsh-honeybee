@@ -66,7 +66,7 @@
   - 接管 directoryFlow slot：第一步节点选择，第二步节点内目录浏览（list/createDirectory 动词转发到目标节点）
   - 创建本地镜像目录 `mirrors/<nodeId>/<slug>`，调用上游 workspace 注册，落盘工作区绑定（镜像路径 → 节点 + 远端路径）
   - 侧栏工作区标题含节点归属标识
-- [ ] 16. 实现会话路由集成与审计（对应需求 6.1/6.5/7.1/7.2/8.3）
+- [x] 16. 实现会话路由集成与审计（对应需求 6.1/6.5/7.1/7.2/8.3）
   - 工作区绑定查询服务接入路由器；会话 cwd 命中镜像根即绑定该会话执行世界
   - 审计日志 `$DSH_HOME/dshb/audit.log`：exec/write/remove/move 操作追加记录
   - 模型视角路径翻译：displayPath 与 pwd 呈现节点侧真实路径
