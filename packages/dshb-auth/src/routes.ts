@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { sanitizeUsername, type CredentialStore } from './credentials.js'
+import { isLoopbackRequest } from './loopback.js'
 import { clearCookieHeader, issueSession, readCookie, SESSION_COOKIE, sessionCookieHeader, verifySession } from './session.js'
 import type { LoginRateLimiter } from './ratelimit.js'
 import { loginPageHtml } from './login-page.js'
@@ -66,7 +67,21 @@ export function registerAuthRoutes(ctx: Context, store: CredentialStore, limiter
         const path = new URL(req.url ?? '/', 'http://x').pathname
 
         if (path === '/api/auth/status' && req.method === 'GET') {
-          sendJson(res, 200, { ok: true, initialized: store.isInitialized() })
+          const loopback = isLoopbackRequest(req.socket.remoteAddress, req.headers.host)
+          let authenticated = loopback
+          let username: string | undefined
+          if (!loopback) {
+            const secret = store.sessionSecret
+            const currentName = store.username
+            if (secret && currentName) {
+              const cookie = readCookie(req.headers.cookie, SESSION_COOKIE)
+              if (verifySession(cookie, secret, currentName)) {
+                authenticated = true
+                username = currentName
+              }
+            }
+          }
+          sendJson(res, 200, { ok: true, authenticated, initialized: store.isInitialized(), username })
           return
         }
 

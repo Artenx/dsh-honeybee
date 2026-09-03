@@ -25,7 +25,7 @@
   - scrypt（随机盐，64 字节）密码散列 + HMAC-SHA256 签名 Cookie（HttpOnly，14 天），凭据文件 0600
   - 认证中间件保护 `/api/*`、第三方 RPC 路由与 WebSocket 握手；同 IP 5 次失败锁 30 秒
   - 认证通过后 Host/Origin 改写为回环放行特权 API；`auth-reset` CLI 轮换密钥作废全部会话
-- [ ] 6. 实现 dshb-auth 前端（对应需求 1.1，需求 2 兼容）
+- [x] 6. 实现 dshb-auth 前端（对应需求 1.1，需求 2 兼容）
   - 登录/注册页 client 插件 + 设置面板"认证"页（退出/改名/改密）
   - `webServer.tapIndex` 注入脚本覆盖 `connection.isLoopback`，修复远程浏览器下 settings mirror
 - [ ]* 6.1 为认证编写单元测试（scrypt/Cookie 签名/限速/回环判定）
