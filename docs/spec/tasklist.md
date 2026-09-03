@@ -40,7 +40,7 @@
 
 **P2 SSH 执行世界（一期）**
 
-- [ ] 10. 实现 dshb-router 路由器（对应需求 6.1/6.2/6.4）
+- [x] 10. 实现 dshb-router 路由器（对应需求 6.1/6.2/6.4）
   - 纯函数 `resolveWorld(path)`：命中镜像根返回节点世界，否则透传上游本地实现
   - `RouterFileSystem extends SandboxedFileSystem`、`RouterSubprocess extends LocalSubprocessRuntime`、`RouterShell extends SandboxBashExecutor`；patch 禁用 dsh-base 三行并插入路由器
   - `ExecutionWorldProvider` 接口定义（fs/subprocess/shell/terminal/ensureDir/testConnection）

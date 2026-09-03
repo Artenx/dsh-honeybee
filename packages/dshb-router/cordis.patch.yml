@@ -1,1 +1,24 @@
-[]
+- insert:
+    - id: dshb-router
+      name: dshb-router
+- id: fs-sandbox
+  name: '@deepseek-ai/dsh-fs-sandbox'
+  disabled: true
+- insert:
+    - id: dshb-fs
+      name: dshb-router/fs
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+  disabled: true
+- insert:
+    - id: dshb-subprocess
+      name: dshb-router/subprocess
+- id: bash-sandbox
+  name: '@deepseek-ai/dsh-bash-sandbox'
+  disabled: true
+- insert:
+    - id: dshb-bash-sandbox
+      name: dshb-router/shell
+      disabled: !!js process.platform === 'win32'
+      config:
+        timeoutMs: 60000

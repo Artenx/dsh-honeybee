@@ -1,3 +1,11 @@
-export interface DshbPluginConfig {}
+import type { Context } from '@deepseek-ai/cordis'
+import { sharedWorldResolver } from './resolve.js'
 
-export function apply(_ctx: unknown, _config: DshbPluginConfig = {}): void {}
+export const name = 'dshb-router'
+
+export function apply(ctx: Context): void {
+  ctx.provide('dshbRouter', sharedWorldResolver())
+}
+
+export { sharedWorldResolver } from './resolve.js'
+export type { ExecutionWorldProvider, WorkspaceBindings, WorldRegistry, WorldRef, NodeTestReport } from './types.js'
