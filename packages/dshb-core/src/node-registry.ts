@@ -139,11 +139,19 @@ export class NodeRegistry {
   }
 
   private ensureLocalHost(): void {
-    if (this.profiles.some((p) => p.type === 'local-host')) return
+    const existing = this.profiles.find((p) => p.type === 'local-host')
+    if (existing) {
+      if (existing.name !== '默认环境') {
+        existing.name = '默认环境'
+        existing.updatedAt = new Date().toISOString()
+        this.save()
+      }
+      return
+    }
     const now = new Date().toISOString()
     this.profiles.unshift({
       id: LOCAL_NODE_ID,
-      name: '本地环境',
+      name: '默认环境',
       type: 'local-host',
       createdAt: now,
       updatedAt: now,
@@ -235,7 +243,7 @@ export class NodeRegistry {
   }
 
   async remove(id: string): Promise<void> {
-    if (id === LOCAL_NODE_ID) throw new Error('本地环境节点不可删除')
+    if (id === LOCAL_NODE_ID) throw new Error('默认环境节点不可删除')
     this.load()
     const idx = this.profiles.findIndex((p) => p.id === id)
     if (idx < 0) return

@@ -206,7 +206,7 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
           <option value="">选择节点…</option>
           {nodes.map((n) => (
             <option key={n.id} value={n.id}>
-              {n.name}（{n.type === 'local-host' ? '本地环境' : n.type === 'remote-ssh' ? '远程 SSH' : n.type}）
+              {n.name}（{n.type === 'local-host' ? '默认环境（本地）' : n.type === 'remote-ssh' ? '远程 SSH' : n.type}）
             </option>
           ))}
         </select>
