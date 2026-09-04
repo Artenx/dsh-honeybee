@@ -1,6 +1,10 @@
 # DSH-HoneyBee（DSHB）
 
 <p align="center">
+  <a href="README.en.md">English</a> | <a href="README.md">简体中文</a>
+</p>
+
+<p align="center">
   <strong>基于 deepseek-harness 的云端 Agent 工作台，随时随地开始实现你的想法</strong>
 </p>
 
