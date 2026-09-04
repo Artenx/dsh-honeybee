@@ -98,6 +98,22 @@ dsh plugin --profile web add dshb
 
 The `dshb` aggregate depends on all sub-packages and merges each package's patch rows into a single `cordis.patch.yml` (union), completing the composition in one command; once the sub-packages are published, dependencies resolve automatically from the registry.
 
+### Containerizing DSH itself (optional)
+
+The DSH management side can itself run inside a Docker container. If you also need **local-docker nodes to drive containers on the host**, mount the host's Docker socket when starting the DSH container:
+
+```sh
+docker run -d \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -p 3000:3000 \
+  -v "$HOME/.dsh:/root/.dsh" \
+  <dsh-image> dsh web
+```
+
+- local-docker nodes talk to the host Docker Engine API over `docker.sock` — **no docker CLI needed inside the DSH container**; remote-docker / remote-ssh nodes go over SSH and are unaffected
+- If the host daemon listens on TCP, inject it via the `DOCKER_HOST` env (e.g. `tcp://host:2375`); both the runner and the execution world honor it
+- **local-host nodes always point to the environment the DSH process runs in**: containerized, that is the container itself; to run files/commands on the host, use remote-ssh to the host or local-docker into a container
+
 ## Usage
 
 1. Start the management side with `dsh web`, open the console in a browser, and complete first login
