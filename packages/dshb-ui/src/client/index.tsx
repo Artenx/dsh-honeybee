@@ -408,7 +408,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
                   background: n.status?.reachable === true ? 'var(--dsw-alias-state-success-primary)' : n.status?.reachable === false ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-label-dimmed)',
                 }}
               />
-              {n.type === 'local-host' ? '本地环境' : n.type === 'remote-ssh' ? '远程 SSH' : n.type === 'local-docker' ? '本地 Docker' : n.type === 'remote-docker' ? '远程 Docker' : n.type}
+              {n.type === 'local-host' ? '默认环境（本地）' : n.type === 'remote-ssh' ? '远程 SSH' : n.type === 'local-docker' ? '本地 Docker' : n.type === 'remote-docker' ? '远程 Docker' : n.type}
               <span style={{ marginLeft: 4, color: n.status?.reachable === true ? 'var(--dsw-alias-state-success-primary)' : n.status?.reachable === false ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-label-dimmed)' }}>
                 {n.status?.reachable === true ? '在线' : n.status?.reachable === false ? '离线' : '未知'}
               </span>
@@ -456,7 +456,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
             <select style={inputStyle} value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as FormState['type'] }))}>
               <option value="remote-ssh">远程 SSH 宿主机</option>
               <option value="remote-docker">远程 Docker（SSH 通道）</option>
-              <option value="local-host">本地环境</option>
+              <option value="local-host">默认环境（本地）</option>
               <option value="local-docker">本地 Docker 容器</option>
             </select>
           </label>

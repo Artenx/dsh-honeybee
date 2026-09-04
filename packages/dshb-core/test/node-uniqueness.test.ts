@@ -36,9 +36,9 @@ describe('节点唯一性不变量（设计正确性属性 1）', () => {
   it('本地环境节点自动创建且不可删除', async () => {
     const reg = new NodeRegistry({ credentials: mockCredentials } as never)
     const nodes = reg.list()
-    expect(nodes.some((n) => n.type === 'local-host' && n.name === '本地环境')).toBe(true)
+    expect(nodes.some((n) => n.type === 'local-host' && n.name === '默认环境')).toBe(true)
     const local = nodes.find((n) => n.type === 'local-host')!
-    await expect(reg.remove(local.id)).rejects.toThrow('本地环境节点不可删除')
+    await expect(reg.remove(local.id)).rejects.toThrow('默认环境节点不可删除')
   })
 
   it('不同名可共存', async () => {
