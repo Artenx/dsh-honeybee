@@ -6,7 +6,7 @@ import { RemoteDockerCli } from './remote-docker-cli.js'
 import { DockerClient } from './docker-client.js'
 import { registerDockerRoutes } from './docker-routes.js'
 import { listContainers, provisionContainer } from './provision.js'
-import { resolveHostRunner } from './host-runner.js'
+import { resolveHostRunner, type DockerNodeLike } from './host-runner.js'
 
 interface NodeRegistryLike {
   get(id: string): { id: string; type: string; ssh?: { host: string; port: number; username: string }; docker?: { containerId?: string; image?: string; mode?: 'existing' | 'managed'; resources?: { cpus?: number; memoryMB?: number } } } | undefined
@@ -80,6 +80,25 @@ export function apply(ctx: Context): void {
       }
     },
     status: (nodeId: string) => provisionStatuses.get(nodeId),
+  })
+  ctx.provide('dshbDockerTester', {
+    test: async (node: DockerNodeLike) => {
+      try {
+        const runner = await resolveHostRunner(ctx, node)
+        if (!runner) return { ok: false, reachable: false, error: '执行通道未就绪', category: 'network' }
+        const info = await runner.run(['docker', 'info', '--format', '{{.ServerVersion}}'])
+        if (info.code !== 0) return { ok: false, reachable: false, error: `Docker 守护进程不可用: ${(info.stderr || info.stdout).trim()}`, category: 'unknown' }
+        const containerId = node.docker?.containerId
+        if (containerId) {
+          const inspect = await runner.run(['docker', 'inspect', '--format', '{{.State.Running}}', containerId])
+          if (inspect.code !== 0) return { ok: false, reachable: false, error: '容器不存在或已删除' }
+          if (inspect.stdout.trim() !== 'true') return { ok: false, reachable: false, error: '容器已停止' }
+        }
+        return { ok: true, reachable: true }
+      } catch (err) {
+        return { ok: false, reachable: false, error: err instanceof Error ? err.message : String(err), category: 'unknown' }
+      }
+    },
   })
   registerDockerRoutes(ctx)
 }

@@ -7,6 +7,7 @@ interface NodeProfileView {
   id: string
   name: string
   type: 'local-host' | 'local-docker' | 'remote-ssh' | 'remote-docker'
+  status?: { reachable?: boolean }
 }
 
 interface DirEntry {
@@ -107,7 +108,7 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
         const res = await fetch('/api/dshb/nodes')
         if (!res.ok) return
         const data = (await res.json()) as { nodes?: NodeProfileView[] }
-        setNodes(data.nodes ?? [])
+        setNodes((data.nodes ?? []).filter((n) => n.type === 'local-host' || n.status?.reachable === true))
       } catch {}
     })()
   }, [props.open])

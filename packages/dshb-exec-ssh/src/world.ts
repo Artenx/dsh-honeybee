@@ -85,7 +85,7 @@ export class SshWorldRegistry {
     if (existing) return existing
     if (!this.nodeRegistry) return undefined
     const node = this.nodeRegistry.get(nodeId)
-    if (!node || node.type !== 'remote-ssh' || !node.ssh) return undefined
+    if (!node || (node.type !== 'remote-ssh' && node.type !== 'remote-docker') || !node.ssh) return undefined
     const secrets = (await this.nodeRegistry.getSecrets(nodeId)) ?? {}
     return this.register({
       nodeId,
