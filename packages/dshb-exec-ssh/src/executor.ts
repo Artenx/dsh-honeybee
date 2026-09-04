@@ -171,19 +171,20 @@ export class SshExecutor {
     }
   }
 
-  async pty(argv: string[], cwd: string, env: Record<string, string>, cols: number, rows: number): Promise<{ channel: import('ssh2').ClientChannel; onData: (cb: (chunk: Buffer) => void) => void; resize: (cols: number, rows: number) => void; kill: () => void }> {
+  async pty(argv: string[], cwd: string, _env: Record<string, string>, cols: number, rows: number): Promise<{ channel: import('ssh2').ClientChannel; onData: (cb: (chunk: Buffer) => void) => void; resize: (cols: number, rows: number) => void; kill: () => void }> {
     const client = await this.connection.getClient()
-    const payload = encodeRunnerPayload({ argv, cwd, env })
+    const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`
+    const cmdParts = argv.map(q)
+    const command = `bash -c 'cd "$0" && exec env -i HOME="$HOME" PATH="\${PATH:-/usr/local/bin:/usr/bin:/bin}" "$@"' ${q(cwd)} ${cmdParts.join(' ')}`
     return new Promise((resolve, reject) => {
       client.exec(
-        REMOTE_RUNNER_COMMAND,
+        command,
         { pty: { cols, rows, term: 'xterm-256color' } },
         (err, channel) => {
           if (err) {
             reject(err)
             return
           }
-          channel.end(payload)
           resolve({
             channel,
             onData: (cb) => channel.on('data', cb),

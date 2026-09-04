@@ -11,11 +11,7 @@ export default class RouterShell extends SandboxBashExecutor {
   }
 
   override resolve(request: ShellExecRequest): ShellExecSpec {
-    const spec = super.resolve(request)
-    const ref = this.resolver.resolve(spec.workdir ?? '')
-    if (ref.kind === 'local') return spec
-    if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
-    return { ...spec, workdir: ref.remotePath }
+    return super.resolve(request)
   }
 
   override async run(spec: ShellExecSpec): Promise<ShellRunResult> {
