@@ -60,6 +60,7 @@ export interface NodeTestReport {
   ok: boolean
   reachable?: boolean
   error?: string
+  category?: string
 }
 
 export interface NodeCreateInput {
