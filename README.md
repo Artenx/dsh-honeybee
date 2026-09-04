@@ -27,6 +27,36 @@ DSHB 划分为管理端与执行端：
 
 规格阶段。代码实现按实施计划推进。
 
+## 安装
+
+### 一条命令安装（开发模式）
+
+```bash
+./scripts/install.sh
+```
+
+自动安装全部 DSHB 插件（dshb-auth / dshb-core / dshb-router / dshb-exec-ssh / dshb-ui）+ dsh-web-mobile 到当前 `web` profile，重启 `dsh web` 即可。
+
+### 聚合包（npm 发布后）
+
+```bash
+dsh plugin --profile web add dshb
+```
+
+聚合包 `dshb` 依赖全部子包，其 `cordis.patch.yml` 包含全部 patch 行（union），一条命令完成组合。子包发布到 npm 后依赖自动从 registry 解析。
+
+## 上游版本
+
+已验证上游版本：`@deepseek-ai/dsh@0.1.1-rc.2`
+
+升级流程：`./scripts/upgrade.sh [新版本号]`（默认拉 latest dist-tag），自动 bump 全部 package.json → install → build → typecheck → test。
+
+## 构建环境
+
+- Node.js >= 22.13
+- pnpm >= 11
+- 构建工具：tsdown（node ESM + client CJS 浏览器 bundle）
+
 ## License
 
 MIT

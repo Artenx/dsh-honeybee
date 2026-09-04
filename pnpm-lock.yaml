@@ -21,6 +21,27 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.4.1)(vite@8.2.2(@types/node@26.4.1)(yaml@2.9.0))
 
+  packages/dshb:
+    dependencies:
+      dsh-web-mobile:
+        specifier: 2.3.0
+        version: 2.3.0(dfa42f2b06a9e7463b8a463d0c0b4826)
+      dshb-auth:
+        specifier: file:../dshb-auth
+        version: link:../dshb-auth
+      dshb-core:
+        specifier: file:../dshb-core
+        version: link:../dshb-core
+      dshb-exec-ssh:
+        specifier: file:../dshb-exec-ssh
+        version: link:../dshb-exec-ssh
+      dshb-router:
+        specifier: file:../dshb-router
+        version: link:../dshb-router
+      dshb-ui:
+        specifier: file:../dshb-ui
+        version: link:../dshb-ui
+
   packages/dshb-auth:
     dependencies:
       '@deepseek-ai/dsh-cmdline':

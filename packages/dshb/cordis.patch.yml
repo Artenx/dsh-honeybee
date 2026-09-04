@@ -1,0 +1,59 @@
+- insert:
+    - id: dshb-auth
+      name: dshb-auth
+- id: web-startup
+  name: '@deepseek-ai/dsh-web-app/startup'
+  disabled: true
+- insert:
+    - id: dshb-web-startup
+      name: dshb-auth/startup
+- id: webserver
+  name: '@deepseek-ai/dsh-host-webserver'
+  disabled: true
+- insert:
+    - id: dshb-webserver
+      name: dshb-auth/webserver
+      inject:
+        - webStartup
+      config:
+        host: !!js ctx.webStartup.host ?? '127.0.0.1'
+        port: !!js ctx.webStartup.port ?? 3080
+- insert:
+    - id: dshb-core
+      name: dshb-core
+- insert:
+    - id: dshb-router
+      name: dshb-router
+- id: fs-sandbox
+  name: '@deepseek-ai/dsh-fs-sandbox'
+  disabled: true
+- insert:
+    - id: dshb-fs
+      name: dshb-router/fs
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+  disabled: true
+- insert:
+    - id: dshb-subprocess
+      name: dshb-router/subprocess
+- id: bash-sandbox
+  name: '@deepseek-ai/dsh-bash-sandbox'
+  disabled: true
+- insert:
+    - id: dshb-bash-sandbox
+      name: dshb-router/shell
+      disabled: !!js process.platform === 'win32'
+      config:
+        timeoutMs: 60000
+- insert:
+    - id: dshb-exec-ssh
+      name: dshb-exec-ssh
+- id: directory-picker
+  name: '@deepseek-ai/dsh-host-directory-picker-auto'
+  disabled: true
+- insert:
+    - id: dshb-directory-picker
+      name: dshb-ui/picker
+- insert:
+    - id: dshb-ui
+      name: dshb-ui
