@@ -72,6 +72,23 @@ The core mechanism is "mirror directory + router": remote file operations are ro
 - pnpm >= 11
 - A runnable DSH environment (verified against upstream `@deepseek-ai/dsh@0.1.1-rc.2`)
 
+### One-command install (curl)
+
+Installs standard DSH and all DSHB plugins into the `web` profile in a single command; if a `dsh` binary is already on PATH it skips the DSH install and only installs DSHB:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Artenx/dsh-honeybee/main/scripts/bootstrap.sh | bash
+```
+
+The script detects `dsh` (skips DSH if present, otherwise pins `@deepseek-ai/dsh@0.1.1-rc.2`), clones this repo, runs `pnpm build`, then installs every DSHB plugin plus `dsh-web-mobile`. Start the management web with the command printed at the end.
+
+Useful overrides: `DSH_HOME` (default `~/.dsh`), `PROFILE` (default `web`), `DSH_VERSION` (default `0.1.1-rc.2`):
+
+```sh
+DSH_HOME="$HOME/.dsh-prod" PROFILE=prod \
+  curl -fsSL https://raw.githubusercontent.com/Artenx/dsh-honeybee/main/scripts/bootstrap.sh | bash
+```
+
 ### Install from source (development)
 
 ```sh

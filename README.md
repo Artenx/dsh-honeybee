@@ -72,6 +72,23 @@ DSHB 分管理端与执行端：
 - pnpm >= 11
 - 一份可运行的 DSH 环境（已验证上游 `@deepseek-ai/dsh@0.1.1-rc.2`）
 
+### 一键部署（curl）
+
+一条命令同时安装标准 DSH 与全部 DSHB 插件到 `web` profile；若检测到环境里已有 `dsh`，会跳过 DSH 安装、只装 DSHB：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Artenx/dsh-honeybee/main/scripts/bootstrap.sh | bash
+```
+
+脚本会：检测 `dsh`（已存在则跳过，不存在则用锁定的 `@deepseek-ai/dsh@0.1.1-rc.2`）→ 克隆本仓库 → `pnpm build` → 逐个安装 DSHB 插件 + `dsh-web-mobile`。安装完成后按脚本提示启动 `dsh web`。
+
+常用覆盖项：`DSH_HOME`（默认 `~/.dsh`）、`PROFILE`（默认 `web`）、`DSH_VERSION`（默认 `0.1.1-rc.2`）：
+
+```sh
+DSH_HOME="$HOME/.dsh-prod" PROFILE=prod \
+  curl -fsSL https://raw.githubusercontent.com/Artenx/dsh-honeybee/main/scripts/bootstrap.sh | bash
+```
+
 ### 从源码安装（开发模式）
 
 ```sh
