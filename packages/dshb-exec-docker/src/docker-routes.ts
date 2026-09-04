@@ -99,6 +99,8 @@ export function registerDockerRoutes(ctx: Context): void {
           return
         }
 
+        const runner = await resolveHostRunner(ctx, node)
+
         if (!runner) {
           sendJson(res, 503, { ok: false, error: '节点执行世界未就绪' })
           return
