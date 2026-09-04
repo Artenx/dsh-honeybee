@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs'
+import { basename, extname } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
@@ -132,6 +133,100 @@ export function registerWorkspaceRoutes(ctx: Context, registry: NodeRegistry, bi
         }
 
         sendJson(res, 404, { ok: false, error: 'not found' })
+      },
+    }),
+  )
+}
+
+interface RemoteWorldLike {
+  ensure(nodeId: string): Promise<{
+    fs: {
+      stat(path: string): Promise<{ isFile?: boolean; isDirectory?: boolean } | undefined>
+      readBytes(path: string, signal?: AbortSignal, maxBytes?: number): Promise<Uint8Array>
+    }
+  } | undefined>
+}
+
+function resolveRemoteWorld(ctx: Context, node: { type: string }): RemoteWorldLike | undefined {
+  if (node.type === 'local-docker' || node.type === 'remote-docker') {
+    return ctx.get('dshbDockerWorldsGeneric') as RemoteWorldLike | undefined
+  }
+  if (node.type === 'remote-ssh') {
+    return ctx.get('dshbWorlds') as RemoteWorldLike | undefined
+  }
+  return undefined
+}
+
+const REMOTE_MAX_BYTES = 512 * 1024 * 1024
+
+export function registerRemoteDownloadRoutes(ctx: Context, registry: NodeRegistry, bindings: WorkspaceBindingsStore): void {
+  const webServer = ctx.webServer
+
+  ctx.effect(() =>
+    webServer.register({
+      kind: 'prefix',
+      path: '/api/dshb/remote',
+      handler: async (req, res) => {
+        const segs = pathSegments(req)
+        const action = segs[3]
+        if (req.method !== 'GET' || (action !== 'bound' && action !== 'file')) {
+          sendJson(res, 404, { ok: false, error: 'not found' })
+          return
+        }
+        const path = new URL(req.url ?? '/', 'http://x').searchParams.get('path') ?? ''
+        if (!path) {
+          sendJson(res, 400, { ok: false, error: '需要 path' })
+          return
+        }
+        const hit = bindings.resolve(path)
+        if (!hit) {
+          sendJson(res, action === 'bound' ? 200 : 404, { ok: true, bound: false })
+          return
+        }
+        const node = registry.get(hit.nodeId)
+        if (!node) {
+          sendJson(res, 502, { ok: false, bound: true, error: 'node not found' })
+          return
+        }
+        const worlds = resolveRemoteWorld(ctx, node)
+        if (!worlds) {
+          sendJson(res, 502, { ok: false, bound: true, error: '远程执行世界不可用' })
+          return
+        }
+        try {
+          const world = await worlds.ensure(node.id)
+          if (!world) {
+            sendJson(res, 502, { ok: false, bound: true, error: '节点执行世界未就绪' })
+            return
+          }
+          const info = await world.fs.stat(hit.remotePath)
+          const isFile = info?.isFile ?? false
+          if (action === 'bound') {
+            sendJson(res, 200, { ok: true, bound: true, nodeId: node.id, remotePath: hit.remotePath, kind: isFile ? 'file' : 'dir' })
+            return
+          }
+          if (!isFile) {
+            sendJson(res, 404, { ok: false, bound: true, error: '目标不是文件' })
+            return
+          }
+          const data = await world.fs.readBytes(hit.remotePath, undefined, REMOTE_MAX_BYTES)
+          const name = basename(hit.remotePath) || 'download'
+          const ext = extname(name).toLowerCase()
+          const mime: Record<string, string> = {
+            '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json', '.html': 'text/html', '.htm': 'text/html',
+            '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript', '.svg': 'image/svg+xml', '.png': 'image/png',
+            '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.pdf': 'application/pdf',
+            '.zip': 'application/zip', '.gz': 'application/gzip', '.tar': 'application/x-tar', '.csv': 'text/csv', '.yaml': 'text/yaml', '.yml': 'text/yaml',
+          }
+          res.writeHead(200, {
+            'content-type': mime[ext] ?? 'application/octet-stream',
+            'content-disposition': `attachment; filename="${encodeURIComponent(name).replace(/%20/g, ' ')}"`,
+            'cache-control': 'no-store',
+          })
+          res.end(Buffer.from(data))
+        } catch (err) {
+          sendJson(res, 502, { ok: false, bound: true, error: err instanceof Error ? err.message : String(err) })
+        }
       },
     }),
   )
