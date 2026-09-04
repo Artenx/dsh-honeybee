@@ -27,7 +27,12 @@ export function testReachability(host: string, port: number, timeoutMs = 5000): 
   })
 }
 
-export async function testNode(registry: NodeRegistry, id: string, sshTester?: SshHandshakeTester): Promise<NodeTestReport> {
+export interface NodeTestOverrides {
+  ssh?: NodeSsh
+  secrets?: { password?: string; privateKey?: string; passphrase?: string }
+}
+
+export async function testNode(registry: NodeRegistry, id: string, sshTester?: SshHandshakeTester, overrides?: NodeTestOverrides): Promise<NodeTestReport> {
   const node = registry.get(id)
   if (!node) return { ok: false, error: `node ${id} not found` }
   if (node.type === 'local-host') {
@@ -35,17 +40,25 @@ export async function testNode(registry: NodeRegistry, id: string, sshTester?: S
     return { ok: true, reachable: true }
   }
   if (node.type === 'remote-ssh' || node.type === 'remote-docker') {
-    if (!node.ssh) return { ok: false, error: 'node has no ssh config' }
+    const ssh = overrides?.ssh ?? node.ssh
+    if (!ssh) return { ok: false, error: 'node has no ssh config' }
     let report: NodeTestReport
     if (sshTester) {
-      const secrets = (await registry.getSecrets(id)) ?? {}
+      const savedSecrets = (await registry.getSecrets(id)) ?? {}
+      const secrets = overrides?.secrets
+        ? {
+            password: overrides.secrets.password || savedSecrets.password,
+            privateKey: overrides.secrets.privateKey || savedSecrets.privateKey,
+            passphrase: overrides.secrets.passphrase || savedSecrets.passphrase,
+          }
+        : savedSecrets
       const t = await sshTester.test(
-        { host: node.ssh.host, port: node.ssh.port, username: node.ssh.username, auth: node.ssh.auth, jump: node.ssh.jump },
+        { host: ssh.host, port: ssh.port, username: ssh.username, auth: ssh.auth, jump: ssh.jump },
         secrets,
       )
       report = { ok: t.ok, reachable: t.ok, error: t.error, ...(t.category ? { category: t.category } : {}) }
     } else {
-      report = await testReachability(node.ssh.host, node.ssh.port)
+      report = await testReachability(ssh.host, ssh.port)
     }
     registry.setStatus(id, {
       reachable: report.reachable,

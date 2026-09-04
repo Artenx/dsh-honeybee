@@ -22,6 +22,7 @@ interface NodeProfileView {
   }
   hasSecret: { hasPassword: boolean; hasKey: boolean; hasPassphrase: boolean }
   status?: { reachable?: boolean; lastCheckedAt?: string; error?: string }
+  provision?: { state: 'provisioning' | 'ready' | 'failed'; error?: string; containerId?: string; updatedAt: string }
 }
 
 interface SshConfigEntryView {
@@ -279,14 +280,37 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
   }, [selectedId, flash, reload])
 
   const test = useCallback(async () => {
-    if (selectedId === 'new') {
-      flash({ kind: 'error', text: '请先保存节点再测试连接' })
+    const isRemote = form.type === 'remote-ssh' || form.type === 'remote-docker'
+    if (!isRemote) {
+      flash({ kind: 'error', text: '本地节点无需测试连接' })
+      return
+    }
+    if (!form.host.trim()) {
+      flash({ kind: 'error', text: '请填写主机地址' })
       return
     }
     setTesting(true)
     setTestResult(undefined)
     try {
-      const res = await fetch(`/api/dshb/nodes/${selectedId}/test`, { method: 'POST' })
+      const payload = {
+        ssh: {
+          host: form.host.trim(),
+          port: Number(form.port) || 22,
+          username: form.username.trim(),
+          auth: { kind: form.authKind, ...(form.keyPath.trim() ? { keyPath: form.keyPath.trim() } : {}) },
+        },
+        secrets: {
+          ...(form.password ? { password: form.password } : {}),
+          ...(form.privateKey ? { privateKey: form.privateKey } : {}),
+          ...(form.passphrase ? { passphrase: form.passphrase } : {}),
+        },
+      }
+      const url = selectedId === 'new' ? '/api/dshb/nodes/test-unsaved' : `/api/dshb/nodes/${selectedId}/test`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
       const data = (await res.json()) as { ok?: boolean; report?: { ok?: boolean; reachable?: boolean; error?: string; category?: string } }
       const r = data.report
       if (r?.ok && r.reachable) {
@@ -303,7 +327,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
     } finally {
       setTesting(false)
     }
-  }, [selectedId, flash, reload])
+  }, [form, selectedId, flash, reload])
 
   const selectedNode = selectedId === 'new' ? undefined : nodes.find((n) => n.id === selectedId)
 
@@ -340,6 +364,11 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
               />
               {n.type === 'local-host' ? '本地环境' : n.type === 'remote-ssh' ? '远程 SSH' : n.type === 'local-docker' ? '本地 Docker' : n.type === 'remote-docker' ? '远程 Docker' : n.type}
             </div>
+            {n.provision && (
+              <div style={{ fontSize: 11, marginTop: 2, color: n.provision.state === 'ready' ? 'var(--dsw-alias-state-success-primary)' : n.provision.state === 'failed' ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-state-warn-label)' }}>
+                {n.provision.state === 'provisioning' ? '容器拉起中…' : n.provision.state === 'ready' ? '容器已就绪' : `容器拉起失败：${n.provision.error ?? '未知错误'}`}
+              </div>
+            )}
           </div>
         ))}
         {nodes.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>暂无节点</div>}
@@ -459,15 +488,15 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
             <button type="button" onClick={() => void save()} disabled={busy} style={primaryButtonStyle}>
               {selectedId === 'new' ? '创建节点' : '保存'}
             </button>
+            {(form.type === 'remote-ssh' || form.type === 'remote-docker') && (
+              <button type="button" onClick={() => void test()} disabled={busy || testing} style={secondaryButtonStyle}>
+                {testing ? '测试中…' : '测试连接'}
+              </button>
+            )}
             {selectedId !== 'new' && (
-              <>
-                <button type="button" onClick={() => void test()} disabled={busy || testing} style={secondaryButtonStyle}>
-                  {testing ? '测试中…' : '测试连接'}
-                </button>
-                <button type="button" onClick={() => void remove()} disabled={busy} style={dangerOutlineButtonStyle}>
-                  删除
-                </button>
-              </>
+              <button type="button" onClick={() => void remove()} disabled={busy} style={dangerOutlineButtonStyle}>
+                删除
+              </button>
             )}
             {notice && <span style={{ fontSize: 13, alignSelf: 'center', color: notice.kind === 'ok' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' }}>{notice.text}</span>}
           </div>

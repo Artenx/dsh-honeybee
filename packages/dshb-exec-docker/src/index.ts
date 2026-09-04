@@ -6,6 +6,7 @@ import { RemoteDockerCli } from './remote-docker-cli.js'
 import { DockerClient } from './docker-client.js'
 import { registerDockerRoutes } from './docker-routes.js'
 import { listContainers, provisionContainer } from './provision.js'
+import { resolveHostRunner } from './host-runner.js'
 
 interface NodeRegistryLike {
   get(id: string): { id: string; type: string; ssh?: { host: string; port: number; username: string }; docker?: { containerId?: string; image?: string; mode?: 'existing' | 'managed'; resources?: { cpus?: number; memoryMB?: number } } } | undefined
@@ -19,8 +20,16 @@ export const name = 'dshb-exec-docker'
 
 export const inject = ['nodeRegistry', 'webServer']
 
+export interface ProvisionStatus {
+  state: 'provisioning' | 'ready' | 'failed'
+  error?: string
+  containerId?: string
+  updatedAt: string
+}
+
 export function apply(ctx: Context): void {
   const worlds = new DockerWorldRegistry()
+  const provisionStatuses = new Map<string, ProvisionStatus>()
   ctx.provide('dshbDockerWorlds', worlds)
   ctx.provide('dshbDockerWorldsGeneric', {
     ensure: async (nodeId: string) => {
@@ -41,6 +50,36 @@ export function apply(ctx: Context): void {
       }
       return undefined
     },
+  })
+  ctx.provide('dshbDockerProvisioner', {
+    provision: async (nodeId: string) => {
+      const nodeRegistry = ctx.get('nodeRegistry') as NodeRegistryLike | undefined
+      const node = nodeRegistry?.get(nodeId)
+      if (!node) throw new Error(`node ${nodeId} not found`)
+      if (node.type !== 'local-docker' && node.type !== 'remote-docker') throw new Error('节点不是 Docker 类型')
+      const image = node.docker?.image
+      if (!image) throw new Error('节点未配置镜像')
+      const runner = await resolveHostRunner(ctx, node)
+      if (!runner) throw new Error('节点执行通道未就绪')
+      const name = `dshb-${nodeId}`
+      provisionStatuses.set(nodeId, { state: 'provisioning', updatedAt: new Date().toISOString() })
+      try {
+        const result = await provisionContainer(runner, {
+          image,
+          cpus: node.docker?.resources?.cpus,
+          memoryMB: node.docker?.resources?.memoryMB,
+          name,
+        })
+        const registry = ctx.get('nodeRegistry') as { update(id: string, input: { docker: Record<string, unknown> }): Promise<unknown> } | undefined
+        await registry?.update(nodeId, { docker: { ...node.docker, containerId: result.containerId, mode: 'managed' } })
+        provisionStatuses.set(nodeId, { state: 'ready', containerId: result.containerId, updatedAt: new Date().toISOString() })
+        return result
+      } catch (err) {
+        provisionStatuses.set(nodeId, { state: 'failed', error: err instanceof Error ? err.message : String(err), updatedAt: new Date().toISOString() })
+        throw err
+      }
+    },
+    status: (nodeId: string) => provisionStatuses.get(nodeId),
   })
   registerDockerRoutes(ctx)
 }

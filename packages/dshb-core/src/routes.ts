@@ -56,6 +56,20 @@ function pathSegments(req: IncomingMessage): string[] {
 
 const VALID_TYPES: NodeType[] = ['local-host', 'local-docker', 'remote-ssh', 'remote-docker']
 
+interface DockerProvisionerLike {
+  provision(nodeId: string): Promise<unknown>
+  status(nodeId: string): { state: string; error?: string; containerId?: string; updatedAt: string } | undefined
+}
+
+function maybeProvision(ctx: Context, node: NodeProfile): boolean {
+  if (node.type !== 'local-docker' && node.type !== 'remote-docker') return false
+  if (!node.docker?.image) return false
+  const provisioner = ctx.get('dshbDockerProvisioner') as DockerProvisionerLike | undefined
+  if (!provisioner) return false
+  void provisioner.provision(node.id).catch(() => {})
+  return true
+}
+
 export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): Promise<void> {
   const webServer = ctx.webServer
   ctx.effect(() =>
@@ -138,9 +152,15 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
         }
 
         if (req.method === 'GET' && resourceId === undefined) {
+          const provisioner = ctx.get('dshbDockerProvisioner') as DockerProvisionerLike | undefined
           const nodes = registry.list()
           const withFlags = await Promise.all(
-            nodes.map(async (n) => ({ ...n, hasSecret: await registry.hasSecret(n.id) })),
+            nodes.map(async (n) => ({
+              ...n,
+              hasSecret: await registry.hasSecret(n.id),
+              status: registry.status(n.id),
+              provision: provisioner?.status(n.id),
+            })),
           )
           sendJson(res, 200, { ok: true, nodes: withFlags })
           return
@@ -165,7 +185,8 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
               docker: body.docker as never,
               secrets: body.secrets as never,
             })
-            sendJson(res, 201, { ok: true, node: { ...node, hasSecret: await registry.hasSecret(node.id) } })
+            const provision = maybeProvision(ctx, node)
+            sendJson(res, 201, { ok: true, node: { ...node, hasSecret: await registry.hasSecret(node.id) }, provisioning: provision })
           } catch (err) {
             sendJson(res, 409, { ok: false, error: err instanceof Error ? err.message : String(err) })
           }
@@ -213,9 +234,34 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
           return
         }
 
-        if (req.method === 'POST' && segs[4] === 'test') {
+        if (req.method === 'POST' && resourceId === 'test-unsaved') {
+          const body = await readBody(req)
+          if (!body || !body.ssh) {
+            sendJson(res, 400, { ok: false, error: '需要 ssh 配置' })
+            return
+          }
           const sshTester = ctx.get('dshbSshPool') as SshHandshakeTester | undefined
-          const report = await testNode(registry, resourceId, sshTester)
+          if (!sshTester) {
+            sendJson(res, 503, { ok: false, error: 'SSH 执行通道不可用' })
+            return
+          }
+          const ssh = body.ssh as { host: string; port: number; username: string; auth: never; jump?: never }
+          const secrets = (body.secrets ?? {}) as { password?: string; privateKey?: string; passphrase?: string }
+          const t = await sshTester.test(
+            { host: ssh.host, port: Number(ssh.port) || 22, username: ssh.username, auth: ssh.auth, jump: ssh.jump },
+            secrets,
+          )
+          sendJson(res, 200, { ok: true, report: { ok: t.ok, reachable: t.ok, error: t.error, ...(t.category ? { category: t.category } : {}) } })
+          return
+        }
+
+        if (req.method === 'POST' && segs[4] === 'test') {
+          const body = await readBody(req)
+          const sshTester = ctx.get('dshbSshPool') as SshHandshakeTester | undefined
+          const overrides = body && (body.ssh || body.secrets)
+            ? { ssh: body.ssh as never, secrets: body.secrets as never }
+            : undefined
+          const report = await testNode(registry, resourceId, sshTester, overrides)
           sendJson(res, 200, { ok: true, report })
           return
         }
