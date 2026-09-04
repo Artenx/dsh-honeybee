@@ -371,8 +371,16 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
 
   return (
     <>
-    <style>{`@media (max-width:767px){.dshb-node-section{flex-direction:column!important}.dshb-node-section>div:first-child{width:100%!important;border-right:none!important;border-bottom:1px solid var(--dsw-alias-border-l2);padding-right:0!important;padding-bottom:12px;margin-bottom:12px}}`}</style>
-    <div className="dshb-node-section" style={{ display: 'flex', gap: 20, minHeight: 320 }}>
+    <style>{`
+      @media (max-width:767px){
+        .dshb-node-section{flex-direction:column!important}
+        .dshb-node-section>div:first-child{width:100%!important;border-right:none!important;border-bottom:1px solid var(--dsw-alias-border-l2);padding-right:0!important;padding-bottom:12px;margin-bottom:12px}
+        .dshb-node-section>div:last-child{max-width:100%!important}
+        .dshb-form-row{flex-direction:column!important;gap:8px!important}
+        .dshb-form-row>label{width:100%!important;flex:none!important}
+      }
+    `}</style>
+    <div className="dshb-node-section" style={{ display: 'flex', gap: 20, minHeight: 320, overflow: 'hidden' }}>
       <div style={{ width: 200, flexShrink: 0, borderRight: '1px solid var(--dsw-alias-border-l2)', paddingRight: 16 }}>
         <button type="button" onClick={() => selectNode('new')} style={{ ...primaryButtonStyle, width: '100%', marginBottom: 10 }}>
           新建节点
@@ -455,8 +463,8 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
 
           {(form.type === 'remote-ssh' || form.type === 'remote-docker') && (
             <>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, flex: 1 }}>
+              <div className="dshb-form-row" style={{ display: 'flex', gap: 10 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, flex: 1, minWidth: 0 }}>
                   主机地址
                   <input style={inputStyle} value={form.host} onChange={(e) => setForm((f) => ({ ...f, host: e.target.value }))} placeholder="192.168.1.10" />
                 </label>
@@ -508,12 +516,12 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
                 镜像地址
                 <input style={inputStyle} value={form.dockerImage} onChange={(e) => setForm((f) => ({ ...f, dockerImage: e.target.value }))} placeholder="alpine:latest" />
               </label>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, flex: 1 }}>
+              <div className="dshb-form-row" style={{ display: 'flex', gap: 10 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, flex: 1, minWidth: 0 }}>
                   CPU 核数（可选）
                   <input style={inputStyle} value={form.dockerCpus} onChange={(e) => setForm((f) => ({ ...f, dockerCpus: e.target.value }))} placeholder="2" />
                 </label>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, flex: 1 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, flex: 1, minWidth: 0 }}>
                   内存 MB（可选）
                   <input style={inputStyle} value={form.dockerMemory} onChange={(e) => setForm((f) => ({ ...f, dockerMemory: e.target.value }))} placeholder="512" />
                 </label>
