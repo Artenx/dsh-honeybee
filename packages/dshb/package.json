@@ -2,7 +2,9 @@
   "name": "dshb",
   "version": "0.0.1",
   "description": "DSH-HoneyBee 聚合包——一条命令安装全部 DSHB 插件",
-  "private": true,
+  "files": [
+    "cordis.patch.yml"
+  ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -10,10 +12,11 @@
   },
   "dependencies": {
     "dsh-web-mobile": "2.3.0",
-    "dshb-auth": "file:../dshb-auth",
-    "dshb-core": "file:../dshb-core",
-    "dshb-router": "file:../dshb-router",
-    "dshb-exec-ssh": "file:../dshb-exec-ssh",
-    "dshb-ui": "file:../dshb-ui"
+    "dshb-auth": "workspace:*",
+    "dshb-core": "workspace:*",
+    "dshb-router": "workspace:*",
+    "dshb-exec-ssh": "workspace:*",
+    "dshb-exec-docker": "workspace:*",
+    "dshb-ui": "workspace:*"
   }
 }

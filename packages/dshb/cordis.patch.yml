@@ -57,3 +57,6 @@
 - insert:
     - id: dshb-ui
       name: dshb-ui
+- insert:
+    - id: dshb-exec-docker
+      name: dshb-exec-docker
