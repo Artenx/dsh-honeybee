@@ -66,12 +66,15 @@ const overlayStyle: CSSProperties = {
 }
 const dialogStyle: CSSProperties = {
   width: 'min(92vw, 560px)',
+  maxWidth: '100%',
   maxHeight: '80vh',
   overflow: 'auto',
+  overflowX: 'hidden',
   background: 'var(--dsw-alias-bg-layer-1)',
   border: '1px solid var(--dsw-alias-border-l2)',
   borderRadius: 12,
   padding: 20,
+  boxSizing: 'border-box',
   color: 'var(--dsw-alias-label-primary)',
 }
 
@@ -216,7 +219,7 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
                 上一级
               </button>
             </div>
-            <div style={{ ...inputStyle, marginBottom: 8, height: 'auto', minHeight: 32, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, cursor: 'pointer', lineHeight: '32px' }} onClick={() => void browse(nodeId, path)}>
+            <div style={{ ...inputStyle, marginBottom: 8, height: 'auto', minHeight: 32, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, cursor: 'pointer', lineHeight: '32px', overflow: 'hidden' }} onClick={() => void browse(nodeId, path)}>
               {path.split('/').filter(Boolean).length === 0 ? (
                 <span style={{ opacity: 0.5 }}>根目录</span>
               ) : (
@@ -236,8 +239,9 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
             </div>
             <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, marginBottom: 10 }}>
               {entries.map((e) => (
-                <div key={e.path} onClick={() => void browse(nodeId, e.path)} style={{ padding: '7px 10px', cursor: 'pointer', fontSize: 13, borderRadius: 6, color: 'var(--dsw-alias-label-primary)', display: 'flex', alignItems: 'center', gap: 6 }} onMouseEnter={(ev) => (ev.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)')} onMouseLeave={(ev) => (ev.currentTarget.style.background = 'transparent')}>
-                  📁 {e.name}
+                <div key={e.path} onClick={() => void browse(nodeId, e.path)} style={{ padding: '7px 10px', cursor: 'pointer', fontSize: 13, borderRadius: 6, color: 'var(--dsw-alias-label-primary)', display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }} onMouseEnter={(ev) => (ev.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)')} onMouseLeave={(ev) => (ev.currentTarget.style.background = 'transparent')}>
+                  <span style={{ flexShrink: 0 }}>📁</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
                 </div>
               ))}
               {entries.length === 0 && <div style={{ padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }}>无子目录</div>}
