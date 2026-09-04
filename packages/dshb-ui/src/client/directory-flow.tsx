@@ -237,7 +237,7 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
             <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, marginBottom: 10 }}>
               {entries.map((e) => (
                 <div key={e.path} onClick={() => void browse(nodeId, e.path)} style={{ padding: '7px 10px', cursor: 'pointer', fontSize: 13, borderRadius: 6, color: 'var(--dsw-alias-label-primary)', display: 'flex', alignItems: 'center', gap: 6 }} onMouseEnter={(ev) => (ev.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)')} onMouseLeave={(ev) => (ev.currentTarget.style.background = 'transparent')}>
-                  <span style={{ fontSize: 14 }}>{'>_'} {e.name}</span>
+                  📁 {e.name}
                 </div>
               ))}
               {entries.length === 0 && <div style={{ padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }}>无子目录</div>}
