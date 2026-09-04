@@ -8,12 +8,12 @@
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
         "dsh-web-mobile",
-    "dshb-auth",
-    "dshb-core",
-    "dshb-router",
-    "dshb-exec-ssh",
-    "dshb-exec-docker",
-    "dshb-ui"
+        "dshb-auth",
+        "dshb-core",
+        "dshb-router",
+        "dshb-exec-ssh",
+        "dshb-exec-docker",
+        "dshb-ui"
       ]
     }
   },
@@ -23,9 +23,9 @@
     "dsh-web-mobile": "2.3.0",
     "dshb-auth": "workspace:*",
     "dshb-core": "workspace:*",
-  "dshb-router": "workspace:*",
-  "dshb-exec-ssh": "workspace:*",
-  "dshb-exec-docker": "workspace:*",
-  "dshb-ui": "workspace:*"
+    "dshb-router": "workspace:*",
+    "dshb-exec-ssh": "workspace:*",
+    "dshb-exec-docker": "workspace:*",
+    "dshb-ui": "workspace:*"
   }
 }
