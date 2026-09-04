@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/status-developing-orange?style=flat-square" alt="status" />
 </p>
 
-DSHB 让一套 DSH 管理端同时驱动多台机器与多个 Docker 容器的执行环境：agent loop、LLM 调用、会话与持久化集中在管理端；文件、命令、终端等工具层任务被透明地分发到本地宿主、远程 SSH 宿主机、本地或远程 Docker 容器上执行，管理端与执行端均无需修改上游源码。
+DSHB 支持一个 web 入口同时驱动多台云主机或 Docker 容器的执行环境：agent loop、LLM 调用、会话与持久化集中在统一 web 入口；文件、命令、终端等工具层任务被透明地分发到本地或云端节点（或容器）上执行。插件交付，无修改上游源码。同时适配手机浏览器，移动操作随手可及。
 
 > 面向 DSH 生态的纯插件交付：全部能力以 DSH 插件包（bundle）实现，经 profile + `cordis.patch.yml` 组合装配，可跟随上游版本升级。
 
