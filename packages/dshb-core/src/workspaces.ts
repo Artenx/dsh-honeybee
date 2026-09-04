@@ -218,12 +218,21 @@ export function registerRemoteDownloadRoutes(ctx: Context, registry: NodeRegistr
             '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.pdf': 'application/pdf',
             '.zip': 'application/zip', '.gz': 'application/gzip', '.tar': 'application/x-tar', '.csv': 'text/csv', '.yaml': 'text/yaml', '.yml': 'text/yaml',
           }
+          let contentType = mime[ext] ?? 'application/octet-stream'
+          let body = Buffer.from(data)
+          const isTextual = contentType.startsWith('text/') || contentType === 'application/json' || contentType === 'application/javascript'
+          if (isTextual) {
+            contentType += '; charset=utf-8'
+            const bom = Buffer.from([0xef, 0xbb, 0xbf])
+            if (!body.subarray(0, 3).equals(bom)) body = Buffer.concat([bom, body])
+          }
+          const asciiFallback = name.replace(/[^\x20-\x7e]/g, '_')
           res.writeHead(200, {
-            'content-type': mime[ext] ?? 'application/octet-stream',
-            'content-disposition': `attachment; filename="${encodeURIComponent(name).replace(/%20/g, ' ')}"`,
+            'content-type': contentType,
+            'content-disposition': `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
             'cache-control': 'no-store',
           })
-          res.end(Buffer.from(data))
+          res.end(body)
         } catch (err) {
           sendJson(res, 502, { ok: false, bound: true, error: err instanceof Error ? err.message : String(err) })
         }
