@@ -122,12 +122,9 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
       setPath('')
       setEntries([])
       setError(undefined)
-      const node = nodes.find((n) => n.id === id)
-      if (node) {
-        void browse(id, node.type === 'local-host' ? '/' : '~')
-      }
+      void browse(id, '/')
     },
-    [nodes, browse],
+    [browse],
   )
 
   const mkdir = useCallback(async () => {
@@ -147,7 +144,7 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
         return
       }
       setNewDirName('')
-      void browse(nodeId, path)
+      void browse(nodeId, target)
     } catch {
       setError('网络错误')
     } finally {
@@ -214,22 +211,39 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
         {nodeId !== '' && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <label style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>目录（{node?.type === 'local-host' ? '本机' : '远端'}）</label>
+              <label style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>当前目录（{node?.type === 'local-host' ? '本机' : '远端'}）</label>
               <button type="button" onClick={() => void browse(nodeId, dirnameOf(path))} disabled={busy} style={secondaryButtonStyle}>
                 上一级
               </button>
             </div>
-            <input style={{ ...inputStyle, marginBottom: 8 }} value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/workspace" />
-            <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, marginBottom: 10 }}>
+            <div style={{ ...inputStyle, marginBottom: 8, height: 'auto', minHeight: 32, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, cursor: 'pointer', lineHeight: '32px' }} onClick={() => void browse(nodeId, path)}>
+              {path.split('/').filter(Boolean).length === 0 ? (
+                <span style={{ opacity: 0.5 }}>根目录</span>
+              ) : (
+                <>
+                  <span onClick={(ev) => { ev.stopPropagation(); void browse(nodeId, '/') }} style={{ cursor: 'pointer', color: 'var(--dsw-alias-label-secondary)' }}>/</span>
+                  {path.split('/').filter(Boolean).map((seg, i, arr) => {
+                    const dir = '/' + arr.slice(0, i + 1).join('/')
+                    return (
+                      <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                        <span onClick={(ev) => { ev.stopPropagation(); void browse(nodeId, dir) }} style={{ cursor: 'pointer' }}>{seg}</span>
+                        {i < arr.length - 1 && <span style={{ opacity: 0.4 }}>/</span>}
+                      </span>
+                    )
+                  })}
+                </>
+              )}
+            </div>
+            <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, marginBottom: 10 }}>
               {entries.map((e) => (
-                <div key={e.path} onClick={() => void browse(nodeId, e.path)} style={{ padding: '7px 10px', cursor: 'pointer', fontSize: 13, borderRadius: 6, color: 'var(--dsw-alias-label-primary)' }} onMouseEnter={(ev) => (ev.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)')} onMouseLeave={(ev) => (ev.currentTarget.style.background = 'transparent')}>
-                  📁 {e.name}
+                <div key={e.path} onClick={() => void browse(nodeId, e.path)} style={{ padding: '7px 10px', cursor: 'pointer', fontSize: 13, borderRadius: 6, color: 'var(--dsw-alias-label-primary)', display: 'flex', alignItems: 'center', gap: 6 }} onMouseEnter={(ev) => (ev.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)')} onMouseLeave={(ev) => (ev.currentTarget.style.background = 'transparent')}>
+                  <span style={{ fontSize: 14 }}>{'>_'} {e.name}</span>
                 </div>
               ))}
               {entries.length === 0 && <div style={{ padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }}>无子目录</div>}
             </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <input style={inputStyle} value={newDirName} onChange={(e) => setNewDirName(e.target.value)} placeholder="新建目录名（可选）" />
+              <input style={inputStyle} value={newDirName} onChange={(e) => setNewDirName(e.target.value)} placeholder="在当前目录下新建子目录…" onKeyDown={(e) => { if (e.key === 'Enter') void mkdir() }} />
               <button type="button" onClick={() => void mkdir()} disabled={busy || !newDirName.trim()} style={secondaryButtonStyle}>
                 新建
               </button>
