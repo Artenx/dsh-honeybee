@@ -59,16 +59,38 @@ export class DockerFileSystem {
     }))
   }
 
-  async writeText(target: string, content: string, _expected?: unknown, _signal?: AbortSignal, _policy?: unknown): Promise<{ ok: true }> {
+  async writeText(target: string, content: string, _expected?: unknown, _signal?: AbortSignal, _policy?: unknown): Promise<{ operation: 'create' | 'update'; version: string; before: string | null; after: string }> {
+    const normalizeLf = (s: string) => s.replace(/\r\n/g, '\n')
+    const beforeInfo = await this.client.stat(target)
+    let before: string | null = null
+    if (beforeInfo?.isFile) {
+      try {
+        before = normalizeLf((await this.client.readFile(target)).toString('utf8'))
+      } catch {
+        before = null
+      }
+    }
+    const after = normalizeLf(content)
     await this.client.writeFile(target, content)
-    return { ok: true }
+    const afterInfo = await this.client.stat(target)
+    const version = `${afterInfo?.size ?? content.length}:${afterInfo?.mtime ?? Date.now()}`
+    return { operation: before === null ? 'create' : 'update', version, before, after }
   }
 
-  async editText(target: string, edit: unknown, _expected?: unknown, _signal?: AbortSignal, _policy?: unknown): Promise<{ ok: true }> {
-    const current = await this.client.readFile(target).then((d) => d.toString('utf8'))
-    const req = edit as { search?: string; replace?: string }
-    const next = current.replace(String(req.search ?? ''), String(req.replace ?? ''))
-    await this.client.writeFile(target, next)
-    return { ok: true }
+  async editText(target: string, edit: unknown, _expected?: unknown, _signal?: AbortSignal, _policy?: unknown): Promise<{ version: string; before: string; after: string }> {
+    const normalizeLf = (s: string) => s.replace(/\r\n/g, '\n')
+    const before = normalizeLf((await this.client.readFile(target)).toString('utf8'))
+    const req = edit as { oldString: string; newString: string; replaceAll: boolean }
+    const oldString = normalizeLf(String(req.oldString ?? ''))
+    if (oldString.length === 0) throw new Error('edit oldString must be non-empty')
+    const newString = normalizeLf(String(req.newString ?? ''))
+    const matches = before.split(oldString).length - 1
+    if (matches === 0) throw new Error('edit oldString not found in file')
+    if (!req.replaceAll && matches !== 1) throw new Error(`edit oldString matched ${matches} times; expected exactly one`)
+    const after = req.replaceAll ? before.split(oldString).join(newString) : before.replace(oldString, newString)
+    await this.client.writeFile(target, after)
+    const afterInfo = await this.client.stat(target)
+    const version = `${afterInfo?.size ?? after.length}:${afterInfo?.mtime ?? Date.now()}`
+    return { version, before, after }
   }
 }
