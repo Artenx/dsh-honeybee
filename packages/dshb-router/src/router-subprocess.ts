@@ -14,6 +14,7 @@ export default class RouterSubprocess extends LocalSubprocessRuntime {
     const ref = this.resolver.resolve(spec.cwd ?? '')
     if (ref.kind === 'local') return super.spawn(spec)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
+    void ref.provider.ensureDir(ref.remotePath).catch(() => {})
     return ref.provider.subprocess.spawn({ ...spec, cwd: ref.remotePath })
   }
 
@@ -21,6 +22,7 @@ export default class RouterSubprocess extends LocalSubprocessRuntime {
     const ref = this.resolver.resolve(spec.cwd ?? '')
     if (ref.kind === 'local') return super.spawnTerminal(spec)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
+    await ref.provider.ensureDir(ref.remotePath).catch(() => {})
     return ref.provider.subprocess.spawnTerminal({ ...spec, cwd: ref.remotePath })
   }
 }

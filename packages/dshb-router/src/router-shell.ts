@@ -18,6 +18,7 @@ export default class RouterShell extends SandboxBashExecutor {
     const ref = this.resolver.resolve(spec.workdir ?? '')
     if (ref.kind === 'local') return super.run(spec)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
+    await ref.provider.ensureDir(ref.remotePath).catch(() => {})
     return ref.provider.shell.run({ ...spec, workdir: ref.remotePath })
   }
 
@@ -25,6 +26,7 @@ export default class RouterShell extends SandboxBashExecutor {
     const ref = this.resolver.resolve(spec.workdir ?? '')
     if (ref.kind === 'local') return super.start(spec)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
+    void ref.provider.ensureDir(ref.remotePath).catch(() => {})
     return ref.provider.shell.start({ ...spec, workdir: ref.remotePath })
   }
 }
