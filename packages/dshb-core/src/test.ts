@@ -84,7 +84,7 @@ export async function testNode(
     } else {
       report = await testReachability(ssh.host, ssh.port)
     }
-    if (report.ok && node.type === 'remote-docker' && node.docker?.containerId && dockerTester) {
+    if (report.ok && node.type === 'remote-docker' && dockerTester) {
       report = await dockerTester.test({ id: node.id, type: node.type, ssh, docker: node.docker })
     }
     registry.setStatus(id, {

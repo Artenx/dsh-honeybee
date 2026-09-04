@@ -89,11 +89,10 @@ export function apply(ctx: Context): void {
         const info = await runner.run(['docker', 'info', '--format', '{{.ServerVersion}}'])
         if (info.code !== 0) return { ok: false, reachable: false, error: `Docker 守护进程不可用: ${(info.stderr || info.stdout).trim()}`, category: 'unknown' }
         const containerId = node.docker?.containerId
-        if (containerId) {
-          const inspect = await runner.run(['docker', 'inspect', '--format', '{{.State.Running}}', containerId])
-          if (inspect.code !== 0) return { ok: false, reachable: false, error: '容器不存在或已删除' }
-          if (inspect.stdout.trim() !== 'true') return { ok: false, reachable: false, error: '容器已停止' }
-        }
+        if (!containerId) return { ok: false, reachable: false, error: '未关联容器，请先创建并启动容器', category: 'unknown' }
+        const inspect = await runner.run(['docker', 'inspect', '--format', '{{.State.Running}}', containerId])
+        if (inspect.code !== 0) return { ok: false, reachable: false, error: '容器不存在或已删除' }
+        if (inspect.stdout.trim() !== 'true') return { ok: false, reachable: false, error: '容器已停止' }
         return { ok: true, reachable: true }
       } catch (err) {
         return { ok: false, reachable: false, error: err instanceof Error ? err.message : String(err), category: 'unknown' }
