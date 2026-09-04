@@ -14,6 +14,13 @@ interface WorldsLike {
   } | undefined>
 }
 
+function resolveWorlds(ctx: Context, nodeType: string): WorldsLike | undefined {
+  if (nodeType === 'local-docker' || nodeType === 'remote-docker') {
+    return ctx.get('dshbDockerWorldsGeneric') as WorldsLike | undefined
+  }
+  return ctx.get('dshbWorlds') as WorldsLike | undefined
+}
+
 const MAX_BODY = 64 * 1024
 
 function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
@@ -79,7 +86,6 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
       handler: async (req, res) => {
         const segs = pathSegments(req)
         const resourceId = segs[3]
-        const worlds = ctx.get('dshbWorlds') as WorldsLike | undefined
 
         if (req.method === 'GET' && segs[4] === 'browse' && resourceId) {
           const node = registry.get(resourceId)
@@ -87,7 +93,7 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
             sendJson(res, 404, { ok: false, error: 'node not found' })
             return
           }
-          const path = new URL(req.url ?? '/', 'http://x').searchParams.get('path') ?? (node.type === 'local-host' ? process.env.HOME ?? '/' : '~')
+          const path = new URL(req.url ?? '/', 'http://x').searchParams.get('path') ?? (node.type === 'local-host' ? process.env.HOME ?? '/' : '/')
           try {
             if (node.type === 'local-host') {
               const entries = readdirSync(path, { withFileTypes: true }).map((e) => ({
@@ -99,6 +105,7 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
               sendJson(res, 200, { ok: true, path, entries })
               return
             }
+            const worlds = resolveWorlds(ctx, node.type)
             if (!worlds) {
               sendJson(res, 503, { ok: false, error: '远程执行世界不可用' })
               return
@@ -134,6 +141,7 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
               sendJson(res, 200, { ok: true, path })
               return
             }
+            const worlds = resolveWorlds(ctx, node.type)
             if (!worlds) {
               sendJson(res, 503, { ok: false, error: '远程执行世界不可用' })
               return
