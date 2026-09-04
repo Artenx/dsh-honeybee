@@ -115,21 +115,52 @@ export function AuthSection(_props: PropsRuntime<'settings.section'>): ReactElem
   const inputStyle: CSSProperties = {
     width: '100%',
     boxSizing: 'border-box',
-    padding: '8px 10px',
-    border: '1px solid var(--dsw-border, #3a4050)',
-    borderRadius: 6,
+    padding: '0 10px',
+    height: 32,
+    border: '1px solid var(--dsw-alias-border-l2)',
+    borderRadius: 8,
     fontSize: 14,
     fontFamily: 'inherit',
-    background: 'var(--dsw-input-bg, transparent)',
-    color: 'inherit',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    color: 'var(--dsw-alias-label-primary)',
+    outline: 'none',
   }
   const buttonStyle: CSSProperties = {
-    padding: '8px 16px',
-    borderRadius: 6,
+    boxSizing: 'border-box',
+    height: 36,
+    padding: '0 14px',
+    borderRadius: 18,
     fontSize: 14,
+    lineHeight: '22px',
     fontFamily: 'inherit',
     cursor: 'pointer',
-    border: '1px solid transparent',
+    border: 'none',
+    display: 'inline-flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 4,
+  }
+  const primaryButtonStyle: CSSProperties = {
+    ...buttonStyle,
+    background: 'var(--dsw-alias-button-primary-fill)',
+    color: 'var(--dsw-alias-label-primary-foreground)',
+  }
+  const secondaryButtonStyle: CSSProperties = {
+    ...buttonStyle,
+    border: '1px solid var(--dsw-alias-border-l2)',
+    color: 'var(--dsw-alias-label-primary)',
+    background: 'transparent',
+  }
+  const dangerButtonStyle: CSSProperties = {
+    ...buttonStyle,
+    color: 'var(--dsw-alias-state-error-primary)',
+    background: 'transparent',
+  }
+  const dangerOutlineButtonStyle: CSSProperties = {
+    ...buttonStyle,
+    border: '1px solid var(--dsw-alias-state-error-primary)',
+    color: 'var(--dsw-alias-state-error-primary)',
+    background: 'transparent',
   }
 
   return (
@@ -143,25 +174,25 @@ export function AuthSection(_props: PropsRuntime<'settings.section'>): ReactElem
           type="button"
           onClick={() => setConfirmingSignOut(true)}
           disabled={busy}
-          style={{ ...buttonStyle, background: 'none', borderColor: 'var(--dsw-danger, #d4380d)', color: 'var(--dsw-danger, #d4380d)' }}
+          style={dangerOutlineButtonStyle}
         >
           退出登录
         </button>
         {confirmingSignOut && (
-          <div role="alertdialog" aria-label="确认退出登录" style={{ marginTop: 10, padding: '12px 14px', border: '1px solid var(--dsw-border, #3a4050)', borderRadius: 8, maxWidth: 320 }}>
-            <div style={{ fontSize: 13, marginBottom: 10 }}>退出登录将回到登录页</div>
+          <div role="alertdialog" aria-label="确认退出登录" style={{ marginTop: 10, padding: '12px 14px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, maxWidth: 320 }}>
+            <div style={{ fontSize: 13, marginBottom: 10, color: 'var(--dsw-alias-label-primary)' }}>退出登录将回到登录页</div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button type="button" onClick={() => setConfirmingSignOut(false)} disabled={busy} style={{ ...buttonStyle, padding: '4px 12px', background: 'none', borderColor: 'var(--dsw-border, #3a4050)' }}>
+              <button type="button" onClick={() => setConfirmingSignOut(false)} disabled={busy} style={{ ...secondaryButtonStyle, height: 32, padding: '0 12px', borderRadius: 16 }}>
                 取消
               </button>
-              <button type="button" onClick={() => void signOut()} disabled={busy} style={{ ...buttonStyle, padding: '4px 12px', background: 'var(--dsw-danger, #d4380d)', color: '#fff' }}>
+              <button type="button" onClick={() => void signOut()} disabled={busy} style={{ ...dangerOutlineButtonStyle, height: 32, padding: '0 12px', borderRadius: 16, background: 'var(--dsw-alias-interactive-bg-hover-danger)' }}>
                 确认退出
               </button>
             </div>
           </div>
         )}
         {notice?.owner === 'account' && (
-          <p style={{ fontSize: 13, color: notice.kind === 'ok' ? 'var(--dsw-ok, #237804)' : 'var(--dsw-danger, #d4380d)', margin: '8px 0 0' }}>{notice.text}</p>
+          <p style={{ fontSize: 13, color: notice.kind === 'ok' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)', margin: '8px 0 0' }}>{notice.text}</p>
         )}
       </section>
 
@@ -177,8 +208,8 @@ export function AuthSection(_props: PropsRuntime<'settings.section'>): ReactElem
             <input type="password" value={usernamePassword} onChange={(e) => setUsernamePassword(e.target.value)} autoComplete="current-password" style={inputStyle} />
           </label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button type="submit" disabled={busy} style={{ ...buttonStyle, background: 'var(--dsw-accent, #3b82f6)', color: '#fff' }}>修改用户名</button>
-            {notice?.owner === 'username' && <span style={{ fontSize: 13, color: notice.kind === 'ok' ? 'var(--dsw-ok, #237804)' : 'var(--dsw-danger, #d4380d)' }}>{notice.text}</span>}
+            <button type="submit" disabled={busy} style={primaryButtonStyle}>修改用户名</button>
+            {notice?.owner === 'username' && <span style={{ fontSize: 13, color: notice.kind === 'ok' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' }}>{notice.text}</span>}
           </div>
         </form>
       </section>
@@ -199,8 +230,8 @@ export function AuthSection(_props: PropsRuntime<'settings.section'>): ReactElem
             <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" style={inputStyle} />
           </label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button type="submit" disabled={busy} style={{ ...buttonStyle, background: 'var(--dsw-accent, #3b82f6)', color: '#fff' }}>修改密码</button>
-            {notice?.owner === 'password' && <span style={{ fontSize: 13, color: notice.kind === 'ok' ? 'var(--dsw-ok, #237804)' : 'var(--dsw-danger, #d4380d)' }}>{notice.text}</span>}
+            <button type="submit" disabled={busy} style={primaryButtonStyle}>修改密码</button>
+            {notice?.owner === 'password' && <span style={{ fontSize: 13, color: notice.kind === 'ok' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' }}>{notice.text}</span>}
           </div>
         </form>
       </section>

@@ -109,6 +109,8 @@ function join(...parts: string[]): string {
   return parts.join('/')
 }
 
+const LOCAL_NODE_ID = 'local'
+
 export class NodeRegistry {
   private profiles: NodeProfile[] = []
   private loaded = false
@@ -132,6 +134,20 @@ export class NodeRegistry {
     } catch {
       this.profiles = []
     }
+    this.ensureLocalHost()
+  }
+
+  private ensureLocalHost(): void {
+    if (this.profiles.some((p) => p.type === 'local-host')) return
+    const now = new Date().toISOString()
+    this.profiles.unshift({
+      id: LOCAL_NODE_ID,
+      name: '本地环境',
+      type: 'local-host',
+      createdAt: now,
+      updatedAt: now,
+    })
+    this.save()
   }
 
   private save(): void {
@@ -218,6 +234,7 @@ export class NodeRegistry {
   }
 
   async remove(id: string): Promise<void> {
+    if (id === LOCAL_NODE_ID) throw new Error('本地环境节点不可删除')
     this.load()
     const idx = this.profiles.findIndex((p) => p.id === id)
     if (idx < 0) return

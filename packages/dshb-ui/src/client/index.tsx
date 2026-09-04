@@ -35,7 +35,7 @@ interface SshConfigEntryView {
 
 interface FormState {
   name: string
-  type: 'local-host' | 'remote-ssh'
+  type: 'local-host' | 'local-docker' | 'remote-ssh' | 'remote-docker'
   host: string
   port: string
   username: string
@@ -44,6 +44,9 @@ interface FormState {
   privateKey: string
   passphrase: string
   keyPath: string
+  dockerImage: string
+  dockerCpus: string
+  dockerMemory: string
 }
 
 const EMPTY_FORM: FormState = {
@@ -57,6 +60,9 @@ const EMPTY_FORM: FormState = {
   privateKey: '',
   passphrase: '',
   keyPath: '',
+  dockerImage: '',
+  dockerCpus: '',
+  dockerMemory: '',
 }
 
 type Notice = { kind: 'ok' | 'error'; text: string } | undefined
@@ -64,21 +70,47 @@ type Notice = { kind: 'ok' | 'error'; text: string } | undefined
 const inputStyle: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
-  padding: '8px 10px',
-  border: '1px solid var(--dsw-border, #3a4050)',
-  borderRadius: 6,
+  padding: '0 10px',
+  height: 32,
+  border: '1px solid var(--dsw-alias-border-l2)',
+  borderRadius: 8,
   fontSize: 14,
   fontFamily: 'inherit',
-  background: 'var(--dsw-input-bg, transparent)',
-  color: 'inherit',
+  background: 'var(--dsw-alias-bg-layer-1)',
+  color: 'var(--dsw-alias-label-primary)',
+  outline: 'none',
 }
 const buttonStyle: CSSProperties = {
-  padding: '7px 14px',
-  borderRadius: 6,
-  fontSize: 13,
+  boxSizing: 'border-box',
+  height: 36,
+  padding: '0 14px',
+  borderRadius: 18,
+  fontSize: 14,
+  lineHeight: '22px',
   fontFamily: 'inherit',
   cursor: 'pointer',
-  border: '1px solid transparent',
+  border: 'none',
+  display: 'inline-flex',
+  justifyContent: 'center',
+  alignItems: 'center',
+  gap: 4,
+}
+const primaryButtonStyle: CSSProperties = {
+  ...buttonStyle,
+  background: 'var(--dsw-alias-button-primary-fill)',
+  color: 'var(--dsw-alias-label-primary-foreground)',
+}
+const secondaryButtonStyle: CSSProperties = {
+  ...buttonStyle,
+  border: '1px solid var(--dsw-alias-border-l2)',
+  color: 'var(--dsw-alias-label-primary)',
+  background: 'transparent',
+}
+const dangerOutlineButtonStyle: CSSProperties = {
+  ...buttonStyle,
+  border: '1px solid var(--dsw-alias-state-error-primary)',
+  color: 'var(--dsw-alias-state-error-primary)',
+  background: 'transparent',
 }
 
 function useNodes(reloadKey: number): NodeProfileView[] {
@@ -141,7 +173,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
       if (!node) return
       setForm({
         name: node.name,
-        type: node.type === 'local-host' ? 'local-host' : 'remote-ssh',
+        type: node.type,
         host: node.ssh?.host ?? '',
         port: String(node.ssh?.port ?? 22),
         username: node.ssh?.username ?? '',
@@ -177,7 +209,8 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
     }
     setBusy(true)
     try {
-      const isRemote = form.type === 'remote-ssh'
+      const isRemote = form.type === 'remote-ssh' || form.type === 'remote-docker'
+      const isDocker = form.type === 'local-docker' || form.type === 'remote-docker'
       const payload: Record<string, unknown> = {
         name: form.name.trim(),
         type: form.type,
@@ -194,6 +227,15 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
               ...(form.password ? { password: form.password } : {}),
               ...(form.privateKey ? { privateKey: form.privateKey } : {}),
               ...(form.passphrase ? { passphrase: form.passphrase } : {}),
+            }
+          : undefined,
+        docker: isDocker
+          ? {
+              mode: 'managed' as const,
+              ...(form.dockerImage.trim() ? { image: form.dockerImage.trim() } : {}),
+              ...(form.dockerCpus ? { resources: { cpus: Number(form.dockerCpus) || undefined } } : {}),
+              ...(form.dockerMemory ? { resources: { memoryMB: Number(form.dockerMemory) || undefined } } : {}),
+              ...(form.dockerCpus && form.dockerMemory ? { resources: { cpus: Number(form.dockerCpus) || undefined, memoryMB: Number(form.dockerMemory) || undefined } } : {}),
             }
           : undefined,
       }
@@ -267,10 +309,10 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
 
   return (
     <>
-    <style>{`@media (max-width:767px){.dshb-node-section{flex-direction:column!important}.dshb-node-section>div:first-child{width:100%!important;border-right:none!important;border-bottom:1px solid var(--dsw-border,#3a4050);padding-right:0!important;padding-bottom:12px;margin-bottom:12px}}`}</style>
+    <style>{`@media (max-width:767px){.dshb-node-section{flex-direction:column!important}.dshb-node-section>div:first-child{width:100%!important;border-right:none!important;border-bottom:1px solid var(--dsw-alias-border-l2);padding-right:0!important;padding-bottom:12px;margin-bottom:12px}}`}</style>
     <div className="dshb-node-section" style={{ display: 'flex', gap: 20, minHeight: 320 }}>
-      <div style={{ width: 200, flexShrink: 0, borderRight: '1px solid var(--dsw-border, #3a4050)', paddingRight: 16 }}>
-        <button type="button" onClick={() => selectNode('new')} style={{ ...buttonStyle, width: '100%', background: 'var(--dsw-accent, #3b82f6)', color: '#fff', marginBottom: 10 }}>
+      <div style={{ width: 200, flexShrink: 0, borderRight: '1px solid var(--dsw-alias-border-l2)', paddingRight: 16 }}>
+        <button type="button" onClick={() => selectNode('new')} style={{ ...primaryButtonStyle, width: '100%', marginBottom: 10 }}>
           新建节点
         </button>
         {nodes.map((n) => (
@@ -282,7 +324,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
               borderRadius: 6,
               cursor: 'pointer',
               marginBottom: 4,
-              background: selectedId === n.id ? 'var(--dsw-hover, #2a3040)' : 'transparent',
+              background: selectedId === n.id ? 'var(--dsw-alias-interactive-bg-active, var(--dsw-alias-interactive-bg-hover))' : 'transparent',
               fontSize: 13,
             }}
           >
@@ -293,10 +335,10 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
                   width: 6,
                   height: 6,
                   borderRadius: '50%',
-                  background: n.status?.reachable === true ? 'var(--dsw-ok, #237804)' : n.status?.reachable === false ? 'var(--dsw-danger, #d4380d)' : 'var(--dsw-muted, #666)',
+                  background: n.status?.reachable === true ? 'var(--dsw-alias-state-success-primary)' : n.status?.reachable === false ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-label-dimmed)',
                 }}
               />
-              {n.type === 'local-host' ? '本地宿主' : n.type === 'remote-ssh' ? '远程 SSH' : n.type}
+              {n.type === 'local-host' ? '本地环境' : n.type === 'remote-ssh' ? '远程 SSH' : n.type === 'local-docker' ? '本地 Docker' : n.type === 'remote-docker' ? '远程 Docker' : n.type}
             </div>
           </div>
         ))}
@@ -335,11 +377,13 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
             节点类型
             <select style={inputStyle} value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as FormState['type'] }))}>
               <option value="remote-ssh">远程 SSH 宿主机</option>
-              <option value="local-host">本地宿主（管理端所在环境）</option>
+              <option value="remote-docker">远程 Docker（SSH 通道）</option>
+              <option value="local-host">本地环境</option>
+              <option value="local-docker">本地 Docker 容器</option>
             </select>
           </label>
 
-          {form.type === 'remote-ssh' && (
+          {(form.type === 'remote-ssh' || form.type === 'remote-docker') && (
             <>
               <div style={{ display: 'flex', gap: 10 }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, flex: 1 }}>
@@ -388,25 +432,44 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
             </>
           )}
 
+          {(form.type === 'local-docker' || form.type === 'remote-docker') && (
+            <>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                镜像地址
+                <input style={inputStyle} value={form.dockerImage} onChange={(e) => setForm((f) => ({ ...f, dockerImage: e.target.value }))} placeholder="alpine:latest" />
+              </label>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, flex: 1 }}>
+                  CPU 核数（可选）
+                  <input style={inputStyle} value={form.dockerCpus} onChange={(e) => setForm((f) => ({ ...f, dockerCpus: e.target.value }))} placeholder="2" />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, flex: 1 }}>
+                  内存 MB（可选）
+                  <input style={inputStyle} value={form.dockerMemory} onChange={(e) => setForm((f) => ({ ...f, dockerMemory: e.target.value }))} placeholder="512" />
+                </label>
+              </div>
+            </>
+          )}
+
           {testResult !== undefined && (
-            <div style={{ fontSize: 13, color: testResult === '连接成功' ? 'var(--dsw-ok, #237804)' : 'var(--dsw-danger, #d4380d)' }}>{testResult}</div>
+            <div style={{ fontSize: 13, color: testResult === '连接成功' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' }}>{testResult}</div>
           )}
 
           <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button type="button" onClick={() => void save()} disabled={busy} style={{ ...buttonStyle, background: 'var(--dsw-accent, #3b82f6)', color: '#fff' }}>
+            <button type="button" onClick={() => void save()} disabled={busy} style={primaryButtonStyle}>
               {selectedId === 'new' ? '创建节点' : '保存'}
             </button>
             {selectedId !== 'new' && (
               <>
-                <button type="button" onClick={() => void test()} disabled={busy || testing} style={{ ...buttonStyle, background: 'none', borderColor: 'var(--dsw-border, #3a4050)' }}>
+                <button type="button" onClick={() => void test()} disabled={busy || testing} style={secondaryButtonStyle}>
                   {testing ? '测试中…' : '测试连接'}
                 </button>
-                <button type="button" onClick={() => void remove()} disabled={busy} style={{ ...buttonStyle, background: 'none', borderColor: 'var(--dsw-danger, #d4380d)', color: 'var(--dsw-danger, #d4380d)' }}>
+                <button type="button" onClick={() => void remove()} disabled={busy} style={dangerOutlineButtonStyle}>
                   删除
                 </button>
               </>
             )}
-            {notice && <span style={{ fontSize: 13, alignSelf: 'center', color: notice.kind === 'ok' ? 'var(--dsw-ok, #237804)' : 'var(--dsw-danger, #d4380d)' }}>{notice.text}</span>}
+            {notice && <span style={{ fontSize: 13, alignSelf: 'center', color: notice.kind === 'ok' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' }}>{notice.text}</span>}
           </div>
         </div>
       </div>
@@ -430,4 +493,27 @@ export function apply(ctx: ClientContext): void {
       )
     },
   })
+
+  const ICON_SVG: Record<string, string> = {
+    auth: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7C9.3807 7 10.5 5.8807 10.5 4.5C10.5 3.1193 9.3807 2 8 2C6.6193 2 5.5 3.1193 5.5 4.5C5.5 5.8807 6.6193 7 8 7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 14C3 11.2386 5.2386 9 8 9C10.7614 9 13 11.2386 13 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    'dshb-nodes': `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="3.5" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="12.5" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="12" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M3.5 6V8C3.5 9.1 4.4 10 5.5 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12.5 6V8C12.5 9.1 11.6 10 10.5 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+  }
+  const ICON_LABELS: Record<string, string> = { '认证': 'auth', '工作节点': 'dshb-nodes' }
+
+  const observer = new MutationObserver(() => {
+    const cells = document.querySelectorAll('button[class*="navCell"]')
+    for (const cell of Array.from(cells)) {
+      const label = cell.querySelector('span[class*="navLabel"]')
+      if (!label) continue
+      const text = label.textContent ?? ''
+      const iconKey = ICON_LABELS[text]
+      if (!iconKey) continue
+      const iconSlot = cell.querySelector('[class*="navIcon"]')
+      if (!iconSlot) continue
+      if (iconSlot.getAttribute('data-dshb-icon') === iconKey) continue
+      iconSlot.innerHTML = ICON_SVG[iconKey] ?? ''
+      iconSlot.setAttribute('data-dshb-icon', iconKey)
+    }
+  })
+  observer.observe(document.body, { childList: true, subtree: true })
 }
