@@ -71,6 +71,7 @@ The core mechanism is "mirror directory + router": remote file operations are ro
 - Node.js >= 22.13
 - pnpm >= 11
 - A runnable DSH environment (verified against upstream `@deepseek-ai/dsh@0.1.1-rc.2`)
+- If you use Docker containers in the cloud (local-docker / remote-docker nodes), make sure a Docker foundation (Docker Engine + daemon) is already installed on the target host yourself — this tool does not install it for you
 
 ### One-command install (curl)
 

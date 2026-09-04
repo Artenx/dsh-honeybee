@@ -71,6 +71,7 @@ DSHB 分管理端与执行端：
 - Node.js >= 22.13
 - pnpm >= 11
 - 一份可运行的 DSH 环境（已验证上游 `@deepseek-ai/dsh@0.1.1-rc.2`）
+- 若在云端使用 Docker 容器（local-docker / remote-docker 节点），需要目标宿主机上的 Docker 基础环境（Docker Engine + daemon）由你提前安装好，本工具不会代为安装
 
 ### 一键部署（curl）
 
