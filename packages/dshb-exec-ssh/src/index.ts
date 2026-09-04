@@ -18,7 +18,11 @@ export function apply(ctx: Context): void {
     ensure: (nodeId: string) => worlds.ensure(nodeId),
   })
   sharedWorldResolver().setRegistry({
-    get: (nodeId: string) => worlds.get(nodeId),
+    get: (nodeId: string) => {
+      const node = nodeRegistry.get(nodeId)
+      if (node && (node.type === 'remote-docker' || node.type === 'local-docker')) return undefined
+      return worlds.get(nodeId)
+    },
   })
 }
 
