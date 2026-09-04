@@ -16,13 +16,6 @@ interface DirEntry {
   isDirectory: boolean
 }
 
-interface ContainerInfo {
-  id: string
-  name: string
-  status: string
-  image: string
-}
-
 const inputStyle: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
@@ -94,12 +87,6 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
   const [error, setError] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [newDirName, setNewDirName] = useState('')
-  const [containers, setContainers] = useState<ContainerInfo[]>([])
-  const [containerMode, setContainerMode] = useState<'existing' | 'new'>('existing')
-  const [containerId, setContainerId] = useState('')
-  const [newImage, setNewImage] = useState('')
-  const [newCpus, setNewCpus] = useState('')
-  const [newMemory, setNewMemory] = useState('')
 
   useEffect(() => {
     if (!props.open) return
@@ -135,19 +122,8 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
       setPath('')
       setEntries([])
       setError(undefined)
-      setContainers([])
-      setContainerId('')
       const node = nodes.find((n) => n.id === id)
       if (node) {
-        if (node.type === 'local-docker' || node.type === 'remote-docker') {
-          void (async () => {
-            try {
-              const res = await fetch(`/api/dshb/docker/${id}/containers`)
-              const data = (await res.json()) as { ok?: boolean; containers?: ContainerInfo[] }
-              if (data.ok) setContainers(data.containers ?? [])
-            } catch {}
-          })()
-        }
         void browse(id, node.type === 'local-host' ? '/' : '~')
       }
     },
@@ -193,34 +169,10 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
         props.onPicked(path)
         return
       }
-      let targetNodeId = nodeId
-      if (node.type === 'local-docker' || node.type === 'remote-docker') {
-        if (containerMode === 'new') {
-          if (!newImage.trim()) {
-            setError('请填写自定义镜像')
-            return
-          }
-          setError(undefined)
-          const provRes = await fetch(`/api/dshb/docker/${nodeId}/provision`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              image: newImage.trim(),
-              cpus: newCpus ? Number(newCpus) : undefined,
-              memoryMB: newMemory ? Number(newMemory) : undefined,
-            }),
-          })
-          const provData = (await provRes.json()) as { ok?: boolean; containerId?: string; error?: string }
-          if (!provRes.ok || !provData.ok) {
-            setError(provData.error ?? '容器创建失败')
-            return
-          }
-        }
-      }
       const res = await fetch('/api/dshb/workspaces/bind', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ nodeId: targetNodeId, remotePath: path }),
+        body: JSON.stringify({ nodeId, remotePath: path }),
       })
       const data = (await res.json()) as { ok?: boolean; mirrorPath?: string; error?: string }
       if (!res.ok || !data.ok || !data.mirrorPath) {
@@ -233,7 +185,7 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
     } finally {
       setBusy(false)
     }
-  }, [nodeId, path, nodes, props, containerMode, newImage, newCpus, newMemory])
+  }, [nodeId, path, nodes, props])
 
   if (!props.open) return null
 
@@ -258,39 +210,6 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
             </option>
           ))}
         </select>
-
-        {node && (node.type === 'local-docker' || node.type === 'remote-docker') && (
-          <div style={{ marginBottom: 14 }}>
-            <label style={{ display: 'block', fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 }}>容器</label>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <button type="button" onClick={() => setContainerMode('existing')} style={containerMode === 'existing' ? primaryButtonStyle : secondaryButtonStyle}>
-                已存在容器
-              </button>
-              <button type="button" onClick={() => setContainerMode('new')} style={containerMode === 'new' ? primaryButtonStyle : secondaryButtonStyle}>
-                新建容器
-              </button>
-            </div>
-            {containerMode === 'existing' && (
-              <select style={inputStyle} value={containerId} onChange={(e) => setContainerId(e.target.value)}>
-                <option value="">选择容器…</option>
-                {containers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}（{c.image}，{c.status}）
-                  </option>
-                ))}
-              </select>
-            )}
-            {containerMode === 'new' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <input style={inputStyle} value={newImage} onChange={(e) => setNewImage(e.target.value)} placeholder="自定义镜像（如 alpine:latest）" />
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input style={inputStyle} value={newCpus} onChange={(e) => setNewCpus(e.target.value)} placeholder="CPU 核数（可选）" />
-                  <input style={inputStyle} value={newMemory} onChange={(e) => setNewMemory(e.target.value)} placeholder="内存 MB（可选）" />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {nodeId !== '' && (
           <>
