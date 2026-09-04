@@ -69,24 +69,23 @@ function reprovisionDockerNodes(ctx: Context, registry: NodeRegistry): void {
 }
 
 interface WarmupWorldsLike {
-  ensure(nodeId: string): Promise<unknown>
+  ensure(nodeId: string): Promise<{ ensureDir(path: string): Promise<void> } | undefined>
 }
 
 function warmupWorlds(ctx: Context, registry: NodeRegistry, bindings: WorkspaceBindingsStore): void {
   setImmediate(() => {
     void (async () => {
-      const seen = new Set<string>()
       for (const b of bindings.list()) {
-        if (seen.has(b.nodeId)) continue
         const node = registry.get(b.nodeId)
         if (!node || node.type === 'local-host') continue
-        seen.add(b.nodeId)
         try {
           const isDocker = node.type === 'local-docker' || node.type === 'remote-docker'
           const worlds = isDocker
             ? (ctx.get('dshbDockerWorldsGeneric') as WarmupWorldsLike | undefined)
             : (ctx.get('dshbWorlds') as WarmupWorldsLike | undefined)
-          if (worlds) await worlds.ensure(b.nodeId)
+          if (!worlds) continue
+          const world = await worlds.ensure(b.nodeId)
+          if (world) await world.ensureDir(b.remotePath)
         } catch {
           // 预热失败不应阻塞启动；运行时可再次 ensure
         }
