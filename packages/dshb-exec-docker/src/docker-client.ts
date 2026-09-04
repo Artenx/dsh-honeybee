@@ -1,5 +1,5 @@
 import { request } from 'node:http'
-import { createHash } from 'node:crypto'
+import type { DockerBackend } from './docker-backend.js'
 
 const SOCKET = process.env.DOCKER_HOST?.replace(/^unix:\/\//, '') ?? '/var/run/docker.sock'
 
@@ -58,7 +58,7 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`
 }
 
-export class DockerClient {
+export class DockerClient implements DockerBackend {
   private readonly containerId: string
 
   constructor(containerId: string) {

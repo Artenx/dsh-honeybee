@@ -89,7 +89,7 @@
 - [x] 22. 实现 dshb-exec-docker 本地容器世界（对应需求 4.1 二期项、5.5）
   - Docker Engine API client（`node:http` 直连 socket）；fs/subprocess/shell/terminal 提供方（`docker exec` / `docker cp` / exec+tar 流）
   - 镜像基线检查：缺 bash/ps/base64 时自动 apk/apt 补齐，失败明确报错
-- [ ] 23. 实现远程容器世界与供给流水线（对应需求 5.5/5.6）
+- [x] 23. 实现远程容器世界与供给流水线（对应需求 5.5/5.6）
   - SSH 通道转发远端 Docker API
   - 供给流水线：拉镜像 → 创建容器 → 等待就绪 → 容器内建工作区路径 → 注册；失败报告阶段并清理半成品
   - occupant 容器选项：已存在容器 / 新建容器（自定义镜像、cpus/memory 资源参数）

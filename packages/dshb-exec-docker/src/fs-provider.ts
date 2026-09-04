@@ -1,7 +1,7 @@
-import type { DockerClient } from './docker-client.js'
+import type { DockerBackend } from './docker-backend.js'
 
 export class DockerFileSystem {
-  constructor(private readonly client: DockerClient) {}
+  constructor(private readonly client: DockerBackend) {}
 
   async resolve(path: string): Promise<string> {
     return path

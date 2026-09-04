@@ -1,9 +1,9 @@
-import type { DockerClient } from './docker-client.js'
+import type { DockerBackend } from './docker-backend.js'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import type { SubprocessHandle, SubprocessSpawnSpec, SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 
 export class DockerShellExecutor {
-  constructor(private readonly client: DockerClient) {}
+  constructor(private readonly client: DockerBackend) {}
 
   resolve(request: ShellExecRequest): ShellExecSpec {
     return {
@@ -42,7 +42,7 @@ export class DockerShellExecutor {
 }
 
 export class DockerSubprocessRuntime {
-  constructor(private readonly client: DockerClient) {}
+  constructor(private readonly client: DockerBackend) {}
 
   spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
     const promise = this.client.exec(spec.argv as string[], spec.cwd, (spec.env ?? {}) as Record<string, string>)

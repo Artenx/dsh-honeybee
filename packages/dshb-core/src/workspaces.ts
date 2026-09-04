@@ -48,6 +48,10 @@ interface WorldsLike {
   ensure(nodeId: string): Promise<{ ensureDir(path: string): Promise<void> } | undefined>
 }
 
+interface DockerProvisionLike {
+  provision(nodeId: string): Promise<{ containerId: string } | undefined>
+}
+
 function slugify(name: string): string {
   return name
     .trim()
@@ -88,9 +92,20 @@ export function registerWorkspaceRoutes(ctx: Context, registry: NodeRegistry, bi
           const slug = slugify(String(body.name ?? remotePath.split('/').filter(Boolean).pop() ?? 'workspace'))
           const mirrorPath = bindings.mirrorRoot(node.id, slug)
           try {
-            if (worlds) {
-              const world = await worlds.ensure(node.id)
+            const isDocker = node.type === 'local-docker' || node.type === 'remote-docker'
+            if (isDocker) {
+              const dockerWorlds = ctx.get('dshbDockerWorldsGeneric') as WorldsLike | undefined
+              if (!dockerWorlds) {
+                sendJson(res, 503, { ok: false, error: 'Docker 执行世界不可用（dshb-exec-docker 未加载）' })
+                return
+              }
+              const world = await dockerWorlds.ensure(node.id)
               if (world) await world.ensureDir(remotePath)
+            } else {
+              if (worlds) {
+                const world = await worlds.ensure(node.id)
+                if (world) await world.ensureDir(remotePath)
+              }
             }
             mkdirSync(mirrorPath, { recursive: true })
             bindings.add({ mirrorPath, nodeId: node.id, remotePath })
