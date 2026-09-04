@@ -35,7 +35,7 @@ DSHB 划分为管理端与执行端：
 ./scripts/install.sh
 ```
 
-自动安装全部 DSHB 插件（dshb-auth / dshb-core / dshb-router / dshb-exec-ssh / dshb-ui）+ dsh-web-mobile 到当前 `web` profile，重启 `dsh web` 即可。
+自动安装全部 DSHB 插件（dshb-auth / dshb-core / dshb-router / dshb-exec-ssh / dshb-exec-docker / dshb-ui）+ dsh-web-mobile 到当前 `web` profile，重启 `dsh web` 即可。
 
 ### 聚合包（npm 发布后）
 
