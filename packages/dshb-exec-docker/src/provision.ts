@@ -18,6 +18,7 @@ export async function provisionContainer(
   runner: HostCommandRunner,
   config: ProvisionConfig,
   onStage?: (stage: ProvisionStage, detail?: string) => void,
+  timeoutMs = 60_000,
 ): Promise<ProvisionResult> {
   onStage?.('pull', `拉取镜像 ${config.image}`)
   const pull = await runner.run(['docker', 'pull', config.image])
@@ -35,7 +36,7 @@ export async function provisionContainer(
   if (!containerId) throw new Error('容器创建失败：无容器 ID')
 
   onStage?.('wait', `等待容器就绪`)
-  const deadline = Date.now() + 60_000
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const inspect = await runner.run(['docker', 'inspect', '--format', '{{.State.Running}}', containerId])
     if (inspect.stdout.trim() === 'true') {
@@ -44,7 +45,7 @@ export async function provisionContainer(
     }
     await new Promise((r) => setTimeout(r, 1000))
   }
-  throw new Error('容器启动超时（60 秒）')
+  throw new Error(`容器启动超时（${Math.round(timeoutMs / 1000)} 秒）`)
 }
 
 export async function listContainers(runner: HostCommandRunner): Promise<Array<{ id: string; name: string; status: string; image: string }>> {
