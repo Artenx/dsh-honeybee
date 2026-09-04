@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { NodeRegistry, type NodeProfile, type NodeType } from './node-registry.js'
 import { readSshConfig, resolveSshConfigEntry } from './ssh-config.js'
 import type { KnownHostsStore } from './known-hosts.js'
-import { testNode } from './test.js'
+import { testNode, type SshHandshakeTester } from './test.js'
 
 interface WorldsLike {
   ensure(nodeId: string): Promise<{
@@ -214,7 +214,8 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
         }
 
         if (req.method === 'POST' && segs[4] === 'test') {
-          const report = await testNode(registry, resourceId)
+          const sshTester = ctx.get('dshbSshPool') as SshHandshakeTester | undefined
+          const report = await testNode(registry, resourceId, sshTester)
           sendJson(res, 200, { ok: true, report })
           return
         }
