@@ -1,23 +1,6 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type { HostCommandRunner } from './docker-backend.js'
-
-const execFileAsync = promisify(execFile)
-
-export function localRunner(): HostCommandRunner {
-  return {
-    run: async (argv) => {
-      try {
-        const { stdout, stderr } = await execFileAsync(argv[0], argv.slice(1), { maxBuffer: 10 * 1024 * 1024 })
-        return { code: 0, stdout, stderr }
-      } catch (err) {
-        const e = err as { code?: number; stdout?: string; stderr?: string }
-        return { code: e.code ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? (err instanceof Error ? err.message : String(err)) }
-      }
-    },
-  }
-}
+import { dockerDaemonRunner } from './daemon-runner.js'
 
 interface SshExecutorLike {
   exec(argv: string[], cwd: string, env?: Record<string, string>, stdinData?: Buffer): Promise<{ code: number; stdout: string; stderr: string }>
@@ -43,5 +26,5 @@ export async function resolveHostRunner(ctx: Context, node: DockerNodeLike): Pro
     if (!sshWorld) return undefined
     return sshRunner(sshWorld.executor)
   }
-  return localRunner()
+  return dockerDaemonRunner()
 }
