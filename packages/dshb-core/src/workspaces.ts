@@ -100,12 +100,22 @@ export function registerWorkspaceRoutes(ctx: Context, registry: NodeRegistry, bi
                 return
               }
               const world = await dockerWorlds.ensure(node.id)
-              if (world) await world.ensureDir(remotePath)
-            } else {
-              if (worlds) {
-                const world = await worlds.ensure(node.id)
-                if (world) await world.ensureDir(remotePath)
+              if (!world) {
+                sendJson(res, 503, { ok: false, error: '容器未就绪，请先拉起容器' })
+                return
               }
+              await world.ensureDir(remotePath)
+            } else {
+              if (!worlds) {
+                sendJson(res, 503, { ok: false, error: '远程执行世界不可用' })
+                return
+              }
+              const world = await worlds.ensure(node.id)
+              if (!world) {
+                sendJson(res, 503, { ok: false, error: '节点执行世界未就绪' })
+                return
+              }
+              await world.ensureDir(remotePath)
             }
             mkdirSync(mirrorPath, { recursive: true })
             bindings.add({ mirrorPath, nodeId: node.id, remotePath })
