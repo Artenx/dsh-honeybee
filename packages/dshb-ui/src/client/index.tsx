@@ -380,7 +380,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
         .dshb-form-row>label{width:100%!important;flex:none!important}
       }
     `}</style>
-    <div className="dshb-node-section" style={{ display: 'flex', gap: 20, minHeight: 320, overflow: 'hidden' }}>
+    <div className="dshb-node-section" style={{ display: 'flex', gap: 20, minHeight: 320, overflow: 'hidden', maxWidth: '100%', width: '100%', boxSizing: 'border-box' }}>
       <div style={{ width: 200, flexShrink: 0, borderRight: '1px solid var(--dsw-alias-border-l2)', paddingRight: 16 }}>
         <button type="button" onClick={() => selectNode('new')} style={{ ...primaryButtonStyle, width: '100%', marginBottom: 10 }}>
           新建节点
@@ -423,7 +423,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
         {nodes.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>暂无节点</div>}
       </div>
 
-      <div style={{ flex: 1, maxWidth: 480 }}>
+      <div style={{ flex: 1, maxWidth: 480, minWidth: 0, overflow: 'hidden' }}>
         {sshConfigEntries.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <label style={{ fontSize: 12, opacity: 0.75, display: 'block', marginBottom: 4 }}>从 ~/.ssh/config 导入</label>
@@ -579,6 +579,8 @@ export function apply(ctx: ClientContext): void {
     pre, code { white-space: pre-wrap !important; word-break: break-all !important }
     input, select, textarea { max-width: 100% !important; }
     [class*="content"], [class*="main"], [class*="panel"], [class*="page"], [class*="wrapper"], [class*="container"] { max-width: 100% !important; overflow-x: hidden !important }
+    body > div { max-width: 100vw !important; overflow-x: hidden !important; }
+    body > div > div { max-width: 100vw !important; overflow-x: hidden !important; }
   `
   document.head.appendChild(globalStyle)
 
@@ -586,8 +588,7 @@ export function apply(ctx: ClientContext): void {
     const vw = document.documentElement.clientWidth
     const walk = (el: Element) => {
       if (!(el instanceof HTMLElement)) return
-      const sw = el.scrollWidth
-      if (sw > vw && el.scrollWidth > el.clientWidth && el !== document.documentElement && el !== document.body) {
+      if (el.scrollWidth > vw && el !== document.documentElement && el !== document.body) {
         el.style.maxWidth = '100vw'
         el.style.overflowX = 'hidden'
       }
@@ -596,7 +597,7 @@ export function apply(ctx: ClientContext): void {
     walk(document.documentElement)
   }
   fixOverflow()
-  new MutationObserver(() => fixOverflow()).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] })
+  new MutationObserver(() => requestAnimationFrame(fixOverflow)).observe(document.body, { childList: true, subtree: true })
 
   ctx.plugin({
     inject: ['slots', 'settingsScope'],
