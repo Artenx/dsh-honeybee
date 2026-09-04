@@ -582,6 +582,22 @@ export function apply(ctx: ClientContext): void {
   `
   document.head.appendChild(globalStyle)
 
+  const fixOverflow = () => {
+    const vw = document.documentElement.clientWidth
+    const walk = (el: Element) => {
+      if (!(el instanceof HTMLElement)) return
+      const sw = el.scrollWidth
+      if (sw > vw && el.scrollWidth > el.clientWidth && el !== document.documentElement && el !== document.body) {
+        el.style.maxWidth = '100vw'
+        el.style.overflowX = 'hidden'
+      }
+      for (const child of el.children) walk(child)
+    }
+    walk(document.documentElement)
+  }
+  fixOverflow()
+  new MutationObserver(() => fixOverflow()).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] })
+
   ctx.plugin({
     inject: ['slots', 'settingsScope'],
     apply: (sub: ClientContext): void => {
