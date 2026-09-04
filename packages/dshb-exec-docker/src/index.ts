@@ -7,6 +7,7 @@ import { DockerClient } from './docker-client.js'
 import { registerDockerRoutes } from './docker-routes.js'
 import { listContainers, provisionContainer } from './provision.js'
 import { resolveHostRunner, type DockerNodeLike } from './host-runner.js'
+import { sharedWorldResolver } from 'dshb-router/resolve'
 
 interface NodeRegistryLike {
   get(id: string): { id: string; type: string; ssh?: { host: string; port: number; username: string }; docker?: { containerId?: string; image?: string; mode?: 'existing' | 'managed'; resources?: { cpus?: number; memoryMB?: number } } } | undefined
@@ -31,6 +32,9 @@ export function apply(ctx: Context): void {
   const worlds = new DockerWorldRegistry()
   const provisionStatuses = new Map<string, ProvisionStatus>()
   ctx.provide('dshbDockerWorlds', worlds)
+  sharedWorldResolver().setRegistry({
+    get: (nodeId: string) => worlds.get(nodeId),
+  })
   ctx.provide('dshbDockerWorldsGeneric', {
     ensure: async (nodeId: string) => {
       const nodeRegistry = ctx.get('nodeRegistry') as NodeRegistryLike | undefined
