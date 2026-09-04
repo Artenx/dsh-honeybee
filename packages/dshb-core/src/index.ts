@@ -27,6 +27,7 @@ export function apply(ctx: Context): void {
   void registerWorkspaceRoutes(ctx, registry, bindings)
   warmupWorlds(ctx, registry, bindings)
   startHeartbeat(ctx, registry)
+  reprovisionDockerNodes(ctx, registry)
 }
 
 const HEARTBEAT_MS = 5 * 60 * 1000
@@ -46,6 +47,25 @@ function startHeartbeat(ctx: Context, registry: NodeRegistry): void {
   const timer = setInterval(() => void tick(), HEARTBEAT_MS)
   ctx.effect(() => () => clearInterval(timer))
   setImmediate(() => void tick())
+}
+
+function reprovisionDockerNodes(ctx: Context, registry: NodeRegistry): void {
+  setImmediate(() => {
+    void (async () => {
+      const provisioner = ctx.get('dshbDockerProvisioner') as { provision(nodeId: string): Promise<unknown> } | undefined
+      if (!provisioner) return
+      for (const node of registry.list()) {
+        if (node.type !== 'local-docker' && node.type !== 'remote-docker') continue
+        if (!node.docker?.image) continue
+        if (node.docker?.containerId) continue
+        try {
+          await provisioner.provision(node.id)
+        } catch {
+          // 失败已记录到 provisionStatuses
+        }
+      }
+    })()
+  })
 }
 
 interface WarmupWorldsLike {
