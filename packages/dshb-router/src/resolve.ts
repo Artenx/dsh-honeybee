@@ -14,22 +14,24 @@ export function resolveWorld(absPath: string, bindings?: WorkspaceBindings): { k
 
 export class WorldResolver {
   private bindings?: WorkspaceBindings
-  private registry?: WorldRegistry
+  private registries: WorldRegistry[] = []
 
   setBindings(bindings: WorkspaceBindings): void {
     this.bindings = bindings
   }
 
   setRegistry(registry: WorldRegistry): void {
-    this.registry = registry
+    this.registries.push(registry)
   }
 
   resolve(absPath: string): WorldRef {
     const r = resolveWorld(absPath, this.bindings)
     if (r.kind === 'local') return { kind: 'local' }
-    const provider = this.registry?.get(r.nodeId)
-    if (!provider) return { kind: 'unrouted', nodeId: r.nodeId }
-    return { kind: 'remote', provider, remotePath: r.remotePath }
+    for (const reg of this.registries) {
+      const provider = reg.get(r.nodeId)
+      if (provider) return { kind: 'remote', provider, remotePath: r.remotePath }
+    }
+    return { kind: 'unrouted', nodeId: r.nodeId }
   }
 }
 
