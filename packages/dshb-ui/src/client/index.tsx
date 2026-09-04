@@ -6,7 +6,7 @@ import type { CSSProperties, ReactElement } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { DirectoryFlowOccupant } from './directory-flow.js'
 
-export const inject = ['connection']
+export const inject = ['connection', 'workspaces']
 
 const SECTION_ID = 'dshb-nodes'
 
