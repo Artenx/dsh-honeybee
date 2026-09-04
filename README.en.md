@@ -1,6 +1,10 @@
 # DSH-HoneyBee (DSHB)
 
 <p align="center">
+  <img src="assets/dshb-logo.jpg" alt="DSHB" />
+</p>
+
+<p align="center">
   <a href="README.md">简体中文</a> | <a href="README.en.md">English</a>
 </p>
 
