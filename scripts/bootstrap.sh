@@ -68,7 +68,10 @@ fi
 say "Building DSHB packages (pnpm install + build)..."
 (
   cd "$SRC"
-  pnpm install --frozen-lockfile=false
+  if ! pnpm install --frozen-lockfile 2>/dev/null; then
+    warn "frozen-lockfile install failed - falling back to a regular pnpm install"
+    pnpm install
+  fi
   pnpm build
 )
 
