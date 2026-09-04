@@ -570,6 +570,18 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
 }
 
 export function apply(ctx: ClientContext): void {
+  const globalStyle = document.createElement('style')
+  globalStyle.textContent = `
+    html, body { overflow-x: hidden !important; max-width: 100vw !important }
+    * { min-width: 0 !important; }
+    table { display: block !important; overflow-x: auto !important; }
+    img, video, canvas, svg { max-width: 100% !important; height: auto !important }
+    pre, code { white-space: pre-wrap !important; word-break: break-all !important }
+    input, select, textarea { max-width: 100% !important; }
+    [class*="content"], [class*="main"], [class*="panel"], [class*="page"], [class*="wrapper"], [class*="container"] { max-width: 100% !important; overflow-x: hidden !important }
+  `
+  document.head.appendChild(globalStyle)
+
   ctx.plugin({
     inject: ['slots', 'settingsScope'],
     apply: (sub: ClientContext): void => {
