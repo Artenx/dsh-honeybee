@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/status-developing-orange?style=flat-square" alt="status" />
 </p>
 
-DSHB lets a single DSH management instance drive execution environments across multiple machines and Docker containers: the agent loop, LLM calls, sessions, and persistence stay centralized on the management side, while file, command, and terminal operations are transparently dispatched to local hosts, remote SSH hosts, and local or remote Docker containers. Neither the management nor the execution side requires any change to upstream source code.
+DSHB lets a single web entry drive execution environments across multiple cloud hosts or Docker containers: the agent loop, LLM calls, sessions, and persistence stay centralized in that unified web entry, while file, command, and terminal operations are transparently dispatched to local or cloud nodes (or containers) for execution. Delivered as plugins with no changes to upstream source, and adapted for mobile browsers so operations are always at hand.
 
 > Pure-plugin delivery for the DSH ecosystem: every capability ships as a DSH plugin (bundle), composed via profile + `cordis.patch.yml`, so you can follow upstream releases.
 
