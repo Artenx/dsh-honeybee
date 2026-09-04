@@ -1,7 +1,10 @@
-import { request } from 'node:http'
+import type { IncomingMessage, ClientRequest } from 'node:http'
+import { request as httpRequest } from 'node:http'
+import { request as httpsRequest } from 'node:https'
 import type { DockerBackend } from './docker-backend.js'
+import { parseDaemonHost } from './daemon-runner.js'
 
-const SOCKET = process.env.DOCKER_HOST?.replace(/^unix:\/\//, '') ?? '/var/run/docker.sock'
+const DAEMON = parseDaemonHost()
 
 interface ExecResult {
   code: number
@@ -14,11 +17,21 @@ interface Demuxed {
   stderr: Buffer[]
 }
 
+function requestRaw(
+  opts: { method: string; path: string; headers: Record<string, string> },
+  onResponse: (res: IncomingMessage) => void,
+): ClientRequest {
+  const common = { ...opts }
+  if (DAEMON.socketPath) return httpRequest({ ...common, socketPath: DAEMON.socketPath } as never, onResponse)
+  const mod = DAEMON.tls ? httpsRequest : httpRequest
+  return mod({ ...common, hostname: DAEMON.host, port: DAEMON.port } as never, onResponse)
+}
+
 function dockerRequest(method: string, path: string, body?: unknown): Promise<{ statusCode: number; headers: Record<string, string>; body: Buffer }> {
-  return new Promise((resolve, reject) => {
-    const req = request(
-      { method, path, socketPath: SOCKET, headers: body ? { 'content-type': 'application/json' } : {} },
-      (res) => {
+  const headers = body ? { 'content-type': 'application/json' } : {}
+  if (DAEMON.socketPath) {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest({ method, path, socketPath: DAEMON.socketPath as string, headers }, (res) => {
         const chunks: Buffer[] = []
         res.on('data', (c: Buffer) => chunks.push(c))
         res.on('end', () => {
@@ -29,8 +42,26 @@ function dockerRequest(method: string, path: string, body?: unknown): Promise<{ 
           })
         })
         res.on('error', reject)
-      },
-    )
+      })
+      req.on('error', reject)
+      if (body) req.write(JSON.stringify(body))
+      req.end()
+    })
+  }
+  const mod = DAEMON.tls ? httpsRequest : httpRequest
+  return new Promise((resolve, reject) => {
+    const req = mod({ method, path, hostname: DAEMON.host, port: DAEMON.port, headers }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (c: Buffer) => chunks.push(c))
+      res.on('end', () => {
+        resolve({
+          statusCode: res.statusCode ?? 0,
+          headers: res.headers as Record<string, string>,
+          body: Buffer.concat(chunks),
+        })
+      })
+      res.on('error', reject)
+    })
     req.on('error', reject)
     if (body) req.write(JSON.stringify(body))
     req.end()
@@ -99,11 +130,10 @@ export class DockerClient implements DockerBackend {
     if (!execId) return { code: 126, stdout: '', stderr: 'docker exec: no Id returned' }
 
     return new Promise<ExecResult>((resolve, reject) => {
-      const req = request(
+      const req = requestRaw(
         {
           method: 'POST',
           path: `/exec/${execId}/start`,
-          socketPath: SOCKET,
           headers: { 'content-type': 'application/json', connection: 'upgrade' },
         },
         (res) => {
@@ -112,8 +142,8 @@ export class DockerClient implements DockerBackend {
           res.on('end', () => {
             const raw = Buffer.concat(chunks)
             const demuxed = demux(raw)
-            const inspectReq = request(
-              { method: 'GET', path: `/exec/${execId}/json`, socketPath: SOCKET },
+            const inspectReq = requestRaw(
+              { method: 'GET', path: `/exec/${execId}/json`, headers: {} },
               (inspectRes) => {
                 const ichunks: Buffer[] = []
                 inspectRes.on('data', (c: Buffer) => ichunks.push(c))
@@ -224,18 +254,17 @@ export class DockerClient implements DockerBackend {
     const execId = JSON.parse(createRes.body.toString('utf8')).Id
 
     return new Promise((resolve, reject) => {
-      const req = request(
+      const req = requestRaw(
         {
           method: 'POST',
           path: `/exec/${execId}/start`,
-          socketPath: SOCKET,
           headers: { 'content-type': 'application/json', connection: 'upgrade' },
         },
         (res) => {
           resolve({
             stream: res as unknown as NodeJS.ReadWriteStream,
             resize: (c: number, r: number) => {
-              const r2 = request({ method: 'POST', path: `/exec/${execId}/resize?h=${r}&w=${c}`, socketPath: SOCKET }, () => {})
+              const r2 = requestRaw({ method: 'POST', path: `/exec/${execId}/resize?h=${r}&w=${c}`, headers: {} }, () => {})
               r2.end()
             },
             kill: () => {
