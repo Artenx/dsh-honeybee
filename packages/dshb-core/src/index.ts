@@ -5,7 +5,7 @@ import { sharedAuditLogger } from './audit.js'
 import { KnownHostsStore } from './known-hosts.js'
 import { NodeRegistry } from './node-registry.js'
 import { registerNodeRoutes, registerSshConfigRoutes } from './routes.js'
-import { registerWorkspaceRoutes } from './workspaces.js'
+import { registerWorkspaceRoutes, registerRemoteDownloadRoutes } from './workspaces.js'
 import { testNode, type DockerNodeTester, type SshHandshakeTester } from './test.js'
 import { WorkspaceBindingsStore } from './workspace-bindings.js'
 
@@ -25,6 +25,7 @@ export function apply(ctx: Context): void {
   void registerNodeRoutes(ctx, registry)
   void registerSshConfigRoutes(ctx, knownHosts)
   void registerWorkspaceRoutes(ctx, registry, bindings)
+  void registerRemoteDownloadRoutes(ctx, registry, bindings)
   warmupWorlds(ctx, registry, bindings)
   startHeartbeat(ctx, registry)
   reprovisionDockerNodes(ctx, registry)

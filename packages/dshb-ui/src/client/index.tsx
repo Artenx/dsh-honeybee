@@ -614,6 +614,32 @@ export function apply(ctx: ClientContext): void {
     },
   })
 
+  const workspaces = (ctx as unknown as { workspaces?: { openPath(p: string): Promise<void> } }).workspaces
+  if (workspaces && typeof workspaces.openPath === 'function') {
+    const originalOpenPath = workspaces.openPath.bind(workspaces)
+    workspaces.openPath = async (path: string): Promise<void> => {
+      try {
+        const res = await fetch(`/api/dshb/remote/bound?path=${encodeURIComponent(path)}`)
+        if (res.ok) {
+          const data = (await res.json()) as { bound?: boolean; kind?: 'file' | 'dir'; error?: string }
+          if (data.bound) {
+            if (data.kind !== 'file') return originalOpenPath(path)
+            const a = document.createElement('a')
+            a.href = `/api/dshb/remote/file?path=${encodeURIComponent(path)}`
+            a.download = ''
+            document.body.appendChild(a)
+            a.click()
+            a.remove()
+            return
+          }
+        }
+      } catch {
+        // 探测失败则回退宿主原生打开
+      }
+      return originalOpenPath(path)
+    }
+  }
+
   const ICON_SVG: Record<string, string> = {
     auth: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7C9.3807 7 10.5 5.8807 10.5 4.5C10.5 3.1193 9.3807 2 8 2C6.6193 2 5.5 3.1193 5.5 4.5C5.5 5.8807 6.6193 7 8 7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 14C3 11.2386 5.2386 9 8 9C10.7614 9 13 11.2386 13 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
     'dshb-nodes': `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="3.5" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="12.5" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="12" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M3.5 6V8C3.5 9.1 4.4 10 5.5 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12.5 6V8C12.5 9.1 11.6 10 10.5 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
