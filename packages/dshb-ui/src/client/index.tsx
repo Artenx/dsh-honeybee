@@ -330,8 +330,26 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
     }
   }, [form, selectedId, flash, reload])
 
-  const dockerAction = useCallback(async (action: 'restart' | 'stop' | 'start') => {
+  const dockerAction = useCallback(async (action: 'restart' | 'stop' | 'start' | 'provision') => {
     if (selectedId === 'new') return
+    if (action === 'provision') {
+      setDockerBusy(true)
+      try {
+        const res = await fetch(`/api/dshb/docker/${selectedId}/provision`, { method: 'POST' })
+        const data = (await res.json()) as { ok?: boolean; error?: string; containerId?: string }
+        if (res.ok && data.ok) {
+          flash({ kind: 'ok', text: `容器已就绪：${data.containerId?.slice(0, 12) ?? ''}` })
+        } else {
+          flash({ kind: 'error', text: data.error ?? '拉起失败' })
+        }
+        reload()
+      } catch {
+        flash({ kind: 'error', text: '网络错误' })
+      } finally {
+        setDockerBusy(false)
+      }
+      return
+    }
     setDockerBusy(true)
     try {
       const res = await fetch(`/api/dshb/docker/${selectedId}/${action}`, { method: 'POST' })
@@ -518,6 +536,9 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
             )}
             {selectedId !== 'new' && (form.type === 'local-docker' || form.type === 'remote-docker') && (
               <>
+                <button type="button" onClick={() => void dockerAction('provision')} disabled={busy || dockerBusy} style={primaryButtonStyle}>
+                  {dockerBusy ? '操作中…' : '拉起容器'}
+                </button>
                 <button type="button" onClick={() => void dockerAction('restart')} disabled={busy || dockerBusy} style={secondaryButtonStyle}>
                   {dockerBusy ? '操作中…' : '重启容器'}
                 </button>

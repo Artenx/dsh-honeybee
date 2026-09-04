@@ -221,7 +221,8 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
               docker: body.docker as never,
               secrets: body.secrets as never,
             })
-            sendJson(res, 200, { ok: true, node: { ...node, hasSecret: await registry.hasSecret(node.id) } })
+            const provision = maybeProvision(ctx, node)
+            sendJson(res, 200, { ok: true, node: { ...node, hasSecret: await registry.hasSecret(node.id) }, provisioning: provision })
           } catch (err) {
             sendJson(res, 404, { ok: false, error: err instanceof Error ? err.message : String(err) })
           }

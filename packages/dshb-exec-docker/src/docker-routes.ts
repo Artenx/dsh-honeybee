@@ -63,7 +63,41 @@ export function registerDockerRoutes(ctx: Context): void {
           return
         }
 
-        const runner = await resolveHostRunner(ctx, node)
+        if (req.method === 'POST' && action === 'provision') {
+          const provisioner = ctx.get('dshbDockerProvisioner') as { provision(nodeId: string): Promise<{ containerId: string; name: string }> } | undefined
+          if (provisioner) {
+            try {
+              const result = await provisioner.provision(nodeId)
+              sendJson(res, 201, { ok: true, containerId: result.containerId, name: result.name })
+            } catch (err) {
+              sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) })
+            }
+            return
+          }
+          const body = await readBody(req)
+          const image = String(body?.image ?? '')
+          if (!image) {
+            sendJson(res, 400, { ok: false, error: '需要 image' })
+            return
+          }
+          const fallbackRunner = await resolveHostRunner(ctx, node)
+          if (!fallbackRunner) {
+            sendJson(res, 503, { ok: false, error: '节点执行世界未就绪' })
+            return
+          }
+          try {
+            const result = await provisionContainer(fallbackRunner, {
+              image,
+              cpus: body?.cpus ? Number(body.cpus) : undefined,
+              memoryMB: body?.memoryMB ? Number(body.memoryMB) : undefined,
+              name: body?.name ? String(body.name) : undefined,
+            })
+            sendJson(res, 201, { ok: true, containerId: result.containerId, name: result.name })
+          } catch (err) {
+            sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) })
+          }
+          return
+        }
 
         if (!runner) {
           sendJson(res, 503, { ok: false, error: '节点执行世界未就绪' })
@@ -102,27 +136,6 @@ export function registerDockerRoutes(ctx: Context): void {
             const r = await runner.run(['docker', cmd, containerId])
             if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || '重启失败')
             sendJson(res, 200, { ok: true, action: 'restart', was: running ? 'running' : 'stopped' })
-          } catch (err) {
-            sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) })
-          }
-          return
-        }
-
-        if (req.method === 'POST' && action === 'provision') {
-          const body = await readBody(req)
-          const image = String(body?.image ?? '')
-          if (!image) {
-            sendJson(res, 400, { ok: false, error: '需要 image' })
-            return
-          }
-          try {
-            const result = await provisionContainer(runner, {
-              image,
-              cpus: body?.cpus ? Number(body.cpus) : undefined,
-              memoryMB: body?.memoryMB ? Number(body.memoryMB) : undefined,
-              name: body?.name ? String(body.name) : undefined,
-            })
-            sendJson(res, 201, { ok: true, containerId: result.containerId, name: result.name })
           } catch (err) {
             sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) })
           }
