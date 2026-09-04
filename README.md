@@ -1,7 +1,7 @@
 # DSH-HoneyBee（DSHB）
 
 <p align="center">
-  <img src="assets/dshb-logo.jpg" alt="DSHB" width="120" />
+  <img src="assets/dshb-logo.jpg" alt="DSHB" width="80" />
 </p>
 
 <p align="center">
