@@ -98,6 +98,22 @@ dsh plugin --profile web add dshb
 
 聚合包 `dshb` 依赖全部子包，其 `cordis.patch.yml` 合并了各子包的 patch 行（union），一条命令完成组合；子包发布到 npm 后依赖自动从 registry 解析。
 
+### 将 DSH 自身容器化（可选）
+
+DSH 管理端本身也可以跑在 Docker 容器里。若同时需要 **local-docker 节点驱动宿主机上的容器**，启动 DSH 容器时必须挂载宿主机的 Docker socket：
+
+```bash
+docker run -d \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -p 3000:3000 \
+  -v "$HOME/.dsh:/root/.dsh" \
+  <dsh-image> dsh web
+```
+
+- local-docker 节点通过 `docker.sock` 直接调用宿主机 Docker Engine API，**DSH 容器内无需安装 docker CLI**；remote-docker / remote-ssh 节点走 SSH，与此无关
+- 若宿主机 daemon 暴露在 TCP 上，用 `DOCKER_HOST`（如 `tcp://host:2375`）注入环境变量，DSH 容器与执行通道都会遵循
+- **local-host 节点始终指向 DSH 进程所在的环境**：容器化部署时它指容器自身；要在宿主机执行文件/命令，请使用 remote-ssh 指向宿主机，或用 local-docker 进入容器
+
 ## 使用
 
 1. 启动管理端 `dsh web`，浏览器打开控制台，完成首次登录
