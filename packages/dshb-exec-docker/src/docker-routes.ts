@@ -1,12 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { HostCommandRunner } from './docker-backend.js'
 import { listContainers, provisionContainer } from './provision.js'
-
-const execFileAsync = promisify(execFile)
+import { resolveHostRunner } from './host-runner.js'
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' })
@@ -46,31 +42,7 @@ function pathSegments(req: IncomingMessage): string[] {
 }
 
 interface NodeRegistryLike {
-  get(id: string): { id: string; type: string; docker?: { containerId?: string; image?: string; mode?: string; resources?: { cpus?: number; memoryMB?: number } } } | undefined
-}
-
-interface SshExecutorLike {
-  exec(argv: string[], cwd: string, env?: Record<string, string>, stdinData?: Buffer): Promise<{ code: number; stdout: string; stderr: string }>
-}
-
-function localRunner(): HostCommandRunner {
-  return {
-    run: async (argv) => {
-      try {
-        const { stdout, stderr } = await execFileAsync(argv[0], argv.slice(1), { maxBuffer: 10 * 1024 * 1024 })
-        return { code: 0, stdout, stderr }
-      } catch (err) {
-        const e = err as { code?: number; stdout?: string; stderr?: string }
-        return { code: e.code ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? (err instanceof Error ? err.message : String(err)) }
-      }
-    },
-  }
-}
-
-function sshRunner(executor: SshExecutorLike): HostCommandRunner {
-  return {
-    run: async (argv, cwd) => executor.exec(argv, cwd ?? '/'),
-  }
+  get(id: string): { id: string; type: string; ssh?: unknown; docker?: { containerId?: string; image?: string; mode?: string; resources?: { cpus?: number; memoryMB?: number } } } | undefined
 }
 
 export function registerDockerRoutes(ctx: Context): void {
@@ -91,15 +63,7 @@ export function registerDockerRoutes(ctx: Context): void {
           return
         }
 
-        const isRemote = node.type === 'remote-docker'
-        const runner = isRemote
-          ? await (async () => {
-              const sshWorlds = ctx.get('dshbSshWorlds') as { ensure(nodeId: string): Promise<{ executor: SshExecutorLike } | undefined> } | undefined
-              const sshWorld = await sshWorlds?.ensure(nodeId)
-              if (!sshWorld) return undefined
-              return sshRunner(sshWorld.executor)
-            })()
-          : localRunner()
+        const runner = await resolveHostRunner(ctx, node)
 
         if (!runner) {
           sendJson(res, 503, { ok: false, error: '节点执行世界未就绪' })
@@ -109,6 +73,38 @@ export function registerDockerRoutes(ctx: Context): void {
         if (req.method === 'GET' && action === 'containers') {
           const containers = await listContainers(runner)
           sendJson(res, 200, { ok: true, containers })
+          return
+        }
+
+        if (req.method === 'POST' && (action === 'restart' || action === 'stop' || action === 'start')) {
+          const containerId = node.docker?.containerId
+          if (!containerId) {
+            sendJson(res, 400, { ok: false, error: '节点未关联容器' })
+            return
+          }
+          try {
+            if (action === 'stop') {
+              const r = await runner.run(['docker', 'stop', containerId])
+              if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || '停止失败')
+              sendJson(res, 200, { ok: true, action: 'stop' })
+              return
+            }
+            if (action === 'start') {
+              const r = await runner.run(['docker', 'start', containerId])
+              if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || '启动失败')
+              sendJson(res, 200, { ok: true, action: 'start' })
+              return
+            }
+            const inspect = await runner.run(['docker', 'inspect', '--format', '{{.State.Running}}', containerId])
+            if (inspect.code !== 0) throw new Error('容器不存在或已删除')
+            const running = inspect.stdout.trim() === 'true'
+            const cmd = running ? 'restart' : 'start'
+            const r = await runner.run(['docker', cmd, containerId])
+            if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || '重启失败')
+            sendJson(res, 200, { ok: true, action: 'restart', was: running ? 'running' : 'stopped' })
+          } catch (err) {
+            sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) })
+          }
           return
         }
 

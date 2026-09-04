@@ -32,12 +32,36 @@ export interface NodeTestOverrides {
   secrets?: { password?: string; privateKey?: string; passphrase?: string }
 }
 
-export async function testNode(registry: NodeRegistry, id: string, sshTester?: SshHandshakeTester, overrides?: NodeTestOverrides): Promise<NodeTestReport> {
+export interface DockerNodeTester {
+  test(node: { id: string; type: string; ssh?: NodeSsh; docker?: { containerId?: string; image?: string } }): Promise<NodeTestReport>
+}
+
+export async function testNode(
+  registry: NodeRegistry,
+  id: string,
+  sshTester?: SshHandshakeTester,
+  overrides?: NodeTestOverrides,
+  dockerTester?: DockerNodeTester,
+): Promise<NodeTestReport> {
   const node = registry.get(id)
   if (!node) return { ok: false, error: `node ${id} not found` }
   if (node.type === 'local-host') {
     registry.setStatus(id, { reachable: true, lastCheckedAt: new Date().toISOString() })
     return { ok: true, reachable: true }
+  }
+  if (node.type === 'local-docker') {
+    let report: NodeTestReport
+    if (dockerTester) {
+      report = await dockerTester.test({ id: node.id, type: node.type, docker: node.docker })
+    } else {
+      report = { ok: true, reachable: true }
+    }
+    registry.setStatus(id, {
+      reachable: report.reachable,
+      lastCheckedAt: new Date().toISOString(),
+      error: report.error,
+    })
+    return report
   }
   if (node.type === 'remote-ssh' || node.type === 'remote-docker') {
     const ssh = overrides?.ssh ?? node.ssh
@@ -60,16 +84,15 @@ export async function testNode(registry: NodeRegistry, id: string, sshTester?: S
     } else {
       report = await testReachability(ssh.host, ssh.port)
     }
+    if (report.ok && node.type === 'remote-docker' && node.docker?.containerId && dockerTester) {
+      report = await dockerTester.test({ id: node.id, type: node.type, ssh, docker: node.docker })
+    }
     registry.setStatus(id, {
       reachable: report.reachable,
       lastCheckedAt: new Date().toISOString(),
       error: report.error,
     })
     return report
-  }
-  if (node.type === 'local-docker') {
-    registry.setStatus(id, { reachable: true, lastCheckedAt: new Date().toISOString() })
-    return { ok: true, reachable: true }
   }
   return { ok: false, error: 'unsupported node type' }
 }

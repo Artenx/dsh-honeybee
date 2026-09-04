@@ -143,6 +143,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<string | undefined>(undefined)
   const [sshConfigEntries, setSshConfigEntries] = useState<SshConfigEntryView[]>([])
+  const [dockerBusy, setDockerBusy] = useState(false)
 
   const flash = useCallback((n: Notice) => {
     setNotice(n)
@@ -329,6 +330,25 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
     }
   }, [form, selectedId, flash, reload])
 
+  const dockerAction = useCallback(async (action: 'restart' | 'stop' | 'start') => {
+    if (selectedId === 'new') return
+    setDockerBusy(true)
+    try {
+      const res = await fetch(`/api/dshb/docker/${selectedId}/${action}`, { method: 'POST' })
+      const data = (await res.json()) as { ok?: boolean; error?: string }
+      if (res.ok && data.ok) {
+        flash({ kind: 'ok', text: action === 'restart' ? '容器已重启' : action === 'stop' ? '容器已停止' : '容器已启动' })
+      } else {
+        flash({ kind: 'error', text: data.error ?? '操作失败' })
+      }
+      reload()
+    } catch {
+      flash({ kind: 'error', text: '网络错误' })
+    } finally {
+      setDockerBusy(false)
+    }
+  }, [selectedId, flash, reload])
+
   const selectedNode = selectedId === 'new' ? undefined : nodes.find((n) => n.id === selectedId)
 
   return (
@@ -363,6 +383,9 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
                 }}
               />
               {n.type === 'local-host' ? '本地环境' : n.type === 'remote-ssh' ? '远程 SSH' : n.type === 'local-docker' ? '本地 Docker' : n.type === 'remote-docker' ? '远程 Docker' : n.type}
+              <span style={{ marginLeft: 4, color: n.status?.reachable === true ? 'var(--dsw-alias-state-success-primary)' : n.status?.reachable === false ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-label-dimmed)' }}>
+                {n.status?.reachable === true ? '在线' : n.status?.reachable === false ? '离线' : '未知'}
+              </span>
             </div>
             {n.provision && (
               <div style={{ fontSize: 11, marginTop: 2, color: n.provision.state === 'ready' ? 'var(--dsw-alias-state-success-primary)' : n.provision.state === 'failed' ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-state-warn-label)' }}>
@@ -484,7 +507,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
             <div style={{ fontSize: 13, color: testResult === '连接成功' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' }}>{testResult}</div>
           )}
 
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <div style={{ display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
             <button type="button" onClick={() => void save()} disabled={busy} style={primaryButtonStyle}>
               {selectedId === 'new' ? '创建节点' : '保存'}
             </button>
@@ -492,6 +515,16 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
               <button type="button" onClick={() => void test()} disabled={busy || testing} style={secondaryButtonStyle}>
                 {testing ? '测试中…' : '测试连接'}
               </button>
+            )}
+            {selectedId !== 'new' && (form.type === 'local-docker' || form.type === 'remote-docker') && (
+              <>
+                <button type="button" onClick={() => void dockerAction('restart')} disabled={busy || dockerBusy} style={secondaryButtonStyle}>
+                  {dockerBusy ? '操作中…' : '重启容器'}
+                </button>
+                <button type="button" onClick={() => void dockerAction('stop')} disabled={busy || dockerBusy} style={secondaryButtonStyle}>
+                  {dockerBusy ? '操作中…' : '停止容器'}
+                </button>
+              </>
             )}
             {selectedId !== 'new' && (
               <button type="button" onClick={() => void remove()} disabled={busy} style={dangerOutlineButtonStyle}>
