@@ -1,7 +1,7 @@
 # DSH-HoneyBee（DSHB）
 
 <p align="center">
-  <strong>基于 DeepSeek Harness（DSH）的多节点 Agent 工作台</strong>
+  <strong>基于 deepseek-harness 的云端 Agent 工作台，随时随地开始实现你的想法</strong>
 </p>
 
 <p align="center">
