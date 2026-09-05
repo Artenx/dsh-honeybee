@@ -260,35 +260,37 @@ function installDrawerInteractions(ctx: ClientContext, toggleSidebar: () => void
 function installStatsLine(ctx: ClientContext): void {
   ctx.effect(() => {
     const narrow = window.matchMedia(MOBILE_QUERY)
+    // 统计行文本特征（"3 轮 · 5 步 · LLM 2.1s · 缓存命中 80%" 等），hashed class 无法直接选，按文本识别
+    const STAT_RE = /(\d+\s*轮|\d+\s*步|tok\/s|缓存命中|首\s*token|工具调用|LLM\s*\d|\bturns\b|\bsteps\b)/
+    const isStatsText = (el: Element): boolean => {
+      const text = (el.textContent ?? '').trim()
+      if (text.length === 0 || text.length > 160) return false
+      if (!STAT_RE.test(text)) return false
+      if (el.querySelector('textarea, input, button, select, a') !== null) return false
+      return true
+    }
     const mark = (): void => {
       if (!narrow.matches) return
-      const existing = document.querySelector(`[${FRAME_ATTR}="stats"]`)
-      const alive = existing !== null && existing.isConnected && existing.closest('[data-phase]') !== null && existing.closest('[class*="_composerStack"]') !== null
-      if (!alive) {
-        existing?.removeAttribute(FRAME_ATTR)
-        for (const root of document.querySelectorAll('[data-phase] [class*="_root"]')) {
-          if (root.closest('[class*="_composerStack"]') === null) continue
-          if (root.matches('[data-testid="todo-panel"]')) continue
-          if (root.querySelector('button, textarea') !== null) continue
-          const text = root.textContent ?? ''
-          if (!/(turns|steps|\bLLM\b|轮|步)/.test(text)) continue
-          root.setAttribute(FRAME_ATTR, 'stats')
-          break
+      // 清除失效/不再匹配的标记
+      document.querySelectorAll(`[${FRAME_ATTR}="stats"]`).forEach((el) => {
+        if (!el.isConnected || !isStatsText(el)) el.removeAttribute(FRAME_ATTR)
+      })
+      // 候选：含统计特征的短文本元素，取最浅容器（统计行整行）标记
+      const cands = Array.from(document.querySelectorAll('[data-phase] *')).filter(isStatsText)
+      for (const el of cands) {
+        if (el.hasAttribute(FRAME_ATTR)) continue
+        let anc = el.parentElement
+        let hasOuterCand = false
+        while (anc && anc.closest('[data-phase]') !== null) {
+          if (cands.includes(anc)) { hasOuterCand = true; break }
+          anc = anc.parentElement
         }
-      }
-      // TPS readout（composer 下方独立行，无子元素的单行文本）
-      for (const stack of document.querySelectorAll('[class*="_composerStack"]')) {
-        for (const el of stack.querySelectorAll('div')) {
-          const text = (el.textContent ?? '').trim()
-          if (!/^TPS\s+\d/.test(text)) continue
-          if (el.children.length > 0) continue
-          if (!el.hasAttribute(FRAME_ATTR)) el.setAttribute(FRAME_ATTR, 'stats')
-        }
+        if (!hasOuterCand) el.setAttribute(FRAME_ATTR, 'stats')
       }
     }
     mark()
     const mo = new MutationObserver(() => { if (narrow.matches) mark() })
-    mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
+    mo.observe(document.documentElement, { childList: true, subtree: true })
     narrow.addEventListener('change', mark)
     return () => {
       mo.disconnect()
