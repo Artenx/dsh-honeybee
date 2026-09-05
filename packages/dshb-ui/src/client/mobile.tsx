@@ -66,7 +66,7 @@ const MOBILE_CSS = `
     display: flex !important;
     flex-wrap: nowrap !important;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     overflow-x: auto !important;
     max-width: 100% !important;
     scrollbar-width: none;
@@ -74,6 +74,22 @@ const MOBILE_CSS = `
   }
   [${FRAME_ATTR}="stats"]::-webkit-scrollbar { display: none; }
   [${FRAME_ATTR}="stats"] > * { flex-shrink: 0 !important; white-space: nowrap !important; }
+  [${FRAME_ATTR}="stats"] { gap: 6px !important; }
+  [class*="composerStack"] { gap: 4px !important; }
+  /* stats line 竖线分隔符(|)两边 margin 10px 太松，适度收紧 */
+  [data-phase] [class*="_sep"] { margin: 0 3px !important; }
+
+  /* 每轮回复下方的统计文字（footer）：收紧 actions 内部 gap 与气泡到 footer 间距，减少松散感 */
+  [data-phase] [class*="_actions"] { gap: 4px !important; }
+  [data-phase] [class*="_actions"] [class*="_timeEnd"] { gap: 4px !important; padding-left: 6px !important; }
+  [data-phase] [class*="userRow"], [data-phase] [class*="assistantRow"] { gap: 4px !important; }
+  /* 点号(·)左右 margin 10px 太松，收紧并抵消前后空格 */
+  [data-phase] [class*="_runTimeDot"] { margin: 0 -2px !important; }
+  /* footer 容器各项间距 16px 偏松 */
+  [data-phase] [class*="_root"][class*="osXY9a"] { gap: 8px !important; }
+  /* footer 统计行窄屏可横向滑动看全，不溢出页面 */
+  [data-phase] [class*="_actions"] { max-width: 100% !important; overflow-x: auto !important; scrollbar-width: none; touch-action: pan-x !important; }
+  [data-phase] [class*="_actions"]::-webkit-scrollbar { display: none; }
 
   /* 上下文用量弹窗（ContextMeter .JObwrW_panel）：上游 dsh-client-ui-trajectory 的
      [class*="panel"] 全局规则给它加了 max-width:100%!important，命中本弹窗，使宽度
@@ -265,32 +281,41 @@ function installDrawerInteractions(ctx: ClientContext, toggleSidebar: () => void
 function installStatsLine(ctx: ClientContext): void {
   ctx.effect(() => {
     const narrow = window.matchMedia(MOBILE_QUERY)
-    // 统计行文本特征（"3 轮 · 5 步 · LLM 2.1s · 缓存命中 80%" 等），hashed class 无法直接选，按文本识别
-    const STAT_RE = /(\d+\s*轮|\d+\s*步|tok\/s|缓存命中|首\s*token|工具调用|LLM\s*\d|\bturns\b|\bsteps\b)/
+    // 统计行文本特征（"3 轮 · 5 步 · LLM 2.1s · 缓存命中 80%" 等），hashed class 无法直接选，按文本识别。
+    // 含"轮/步/turns/steps"即可（footer 不含这些），无需额外排除 footer。
+    const STATS_LINE_RE = /(\d+\s*轮|\d+\s*步|\bturns\b|\bsteps\b)/
     const isStatsText = (el: Element): boolean => {
       const text = (el.textContent ?? '').trim()
       if (text.length === 0 || text.length > 160) return false
-      if (!STAT_RE.test(text)) return false
+      if (!STATS_LINE_RE.test(text)) return false
       if (el.querySelector('textarea, input, button, select, a') !== null) return false
       return true
     }
     const mark = (): void => {
       if (!narrow.matches) return
-      // 清除失效/不再匹配的标记
+      // 清除失效标记：行容器仍含统计特征（轮/步）才保留
       document.querySelectorAll(`[${FRAME_ATTR}="stats"]`).forEach((el) => {
-        if (!el.isConnected || !isStatsText(el)) el.removeAttribute(FRAME_ATTR)
+        if (!el.isConnected || !STATS_LINE_RE.test((el.textContent ?? '').trim())) el.removeAttribute(FRAME_ATTR)
       })
-      // 候选：含统计特征的短文本元素，取最浅容器（统计行整行）标记
-      const cands = Array.from(document.querySelectorAll('[data-phase] *')).filter(isStatsText)
+      // 候选：含统计特征的短文本元素（全文档搜索，含 composer 内的 stats line），取最浅容器标记
+      // 排除 display:contents（无 box，overflow 无效，会误占最浅候选）
+      const cands = Array.from(document.querySelectorAll('span, div')).filter((el) => {
+        if (!isStatsText(el)) return false
+        if (getComputedStyle(el).display === 'contents') return false
+        return true
+      })
       for (const el of cands) {
         if (el.hasAttribute(FRAME_ATTR)) continue
         let anc = el.parentElement
         let hasOuterCand = false
-        while (anc && anc.closest('[data-phase]') !== null) {
+        while (anc) {
           if (cands.includes(anc)) { hasOuterCand = true; break }
           anc = anc.parentElement
         }
-        if (!hasOuterCand) el.setAttribute(FRAME_ATTR, 'stats')
+        if (!hasOuterCand) {
+          // 标最浅含统计的容器本身（整行），使其可横向滚动
+          if (!el.hasAttribute(FRAME_ATTR)) el.setAttribute(FRAME_ATTR, 'stats')
+        }
       }
     }
     mark()
