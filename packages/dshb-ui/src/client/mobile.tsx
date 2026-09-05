@@ -147,11 +147,31 @@ const MOBILE_CSS = `
     padding: 0; border: none; background: none; cursor: pointer; color: inherit;
     -webkit-tap-highlight-color: transparent;
   }
+
+  /* 首页/hero（无活跃会话，session header 不存在）的抽屉切换 FAB：
+     浮在顶部相机带下方，避免与 hero 头部内容重叠 */
+  [${FRAME_ATTR}="fab"] {
+    position: absolute !important;
+    top: calc(env(safe-area-inset-top, 0px) + 72px) !important;
+    left: 10px !important;
+    z-index: 21 !important;
+    display: inline-flex !important;
+    align-items: center; justify-content: center;
+    width: 38px; height: 38px;
+    padding: 0;
+    border: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, .12)) !important;
+    border-radius: 50% !important;
+    background: var(--dsw-alias-button-floating-fill, #ffffff) !important;
+    color: var(--dsw-alias-label-primary, inherit) !important;
+    cursor: pointer !important;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, .18) !important;
+    -webkit-tap-highlight-color: transparent;
+  }
 }
 
 /* 宽屏 / 鼠标指针：隐藏切换按钮 */
 @media (min-width: 1024px), (pointer: fine) {
-  [${FRAME_ATTR}="toggle"] { display: none !important; }
+  [${FRAME_ATTR}="toggle"], [${FRAME_ATTR}="fab"] { display: none !important; }
 }
 `
 
@@ -347,6 +367,64 @@ function DrawerToggle({ toggleSidebar }: { toggleSidebar: () => void }) {
   )
 }
 
+const PANEL_ICON_SVG =
+  '<svg width="18" height="18" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+  '<rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.5"/>' +
+  '<path d="M6 2.5v11" stroke="currentColor" strokeWidth="1.5"/>' +
+  '</svg>'
+
+/**
+ * 首页 / hero（无活跃会话）没有 session header，header 上的切换按钮不渲染；
+ * 这里在 frame 上注入一个浮动切换按钮（FAB），仅 hero 且抽屉收起时显示。
+ */
+function installFab(ctx: ClientContext, toggleSidebar: () => void): void {
+  ctx.effect(() => {
+    const narrow = window.matchMedia(MOBILE_QUERY)
+    const FAB_ATTR = 'fab'
+    const heroPhase = (): boolean => document.querySelector('[data-phase="active"]') === null
+    const drawerOpen = (): boolean => {
+      const frame = getFrame()
+      return frame !== null && !frame.hasAttribute(COLLAPSED_ATTR)
+    }
+    let fab: HTMLButtonElement | null = null
+    const sync = (): void => {
+      if (!narrow.matches || !heroPhase() || drawerOpen()) {
+        if (fab !== null) {
+          fab.remove()
+          fab = null
+        }
+        return
+      }
+      const frame = getFrame()
+      if (frame === null) return
+      if (fab !== null && fab.parentElement === frame) return
+      fab?.remove()
+      fab = document.createElement('button')
+      fab.type = 'button'
+      fab.setAttribute(FRAME_ATTR, FAB_ATTR)
+      fab.setAttribute('aria-label', '打开目录')
+      fab.setAttribute('title', '打开目录')
+      fab.innerHTML = PANEL_ICON_SVG
+      fab.addEventListener('click', toggleSidebar)
+      frame.appendChild(fab)
+    }
+    sync()
+    const mo = new MutationObserver(sync)
+    mo.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-phase', 'data-sidebar-collapsed', 'class'],
+    })
+    narrow.addEventListener('change', sync)
+    return () => {
+      mo.disconnect()
+      narrow.removeEventListener('change', sync)
+      fab?.remove()
+    }
+  }, 'dshb-mobile: hero fab')
+}
+
 /** 安装移动端适配：样式 + viewport + 抽屉标记 + 抽屉交互 + 切换按钮。 */
 export function installMobile(ctx: ClientContext): void {
   installStyles(ctx)
@@ -356,7 +434,9 @@ export function installMobile(ctx: ClientContext): void {
   const layout = (ctx as unknown as { layout?: LayoutLike }).layout
   const slots = (ctx as unknown as { slots?: SlotsLike }).slots
   if (layout && typeof layout.toggleSidebar === 'function') {
-    installDrawerInteractions(ctx, () => layout.toggleSidebar())
+    const toggleSidebar = (): void => layout.toggleSidebar()
+    installDrawerInteractions(ctx, toggleSidebar)
+    installFab(ctx, toggleSidebar)
   }
   if (slots && layout) {
     slots.inject('conversation.session.header.actions', () =>
