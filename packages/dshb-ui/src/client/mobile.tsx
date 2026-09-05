@@ -61,6 +61,20 @@ const MOBILE_CSS = `
   [data-phase] [class*="_userStack"], [data-phase] [class*="_userStack"] [class*="_bubble"] { box-sizing: border-box; width: fit-content; max-width: 100%; }
   [data-phase] [class*="_actions"] { overflow: hidden; }
 
+  /* 统计行（turns/steps/LLM/TPS）：窄屏横向滚动，指标可滑动看全 */
+  [${FRAME_ATTR}="stats"] {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto !important;
+    max-width: 100% !important;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  [${FRAME_ATTR}="stats"]::-webkit-scrollbar { display: none; }
+  [${FRAME_ATTR}="stats"] > * { flex-shrink: 0 !important; white-space: nowrap !important; }
+
   /* 头部：标题省略，tab 条横向滚动 */
   [${FRAME_ATTR}="frame"] [data-phase] header { padding-left: 44px; padding-right: 8px; }
   [${FRAME_ATTR}="frame"] [data-phase] header [class*="_crumbs"] { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap !important; }
@@ -242,6 +256,47 @@ function installDrawerInteractions(ctx: ClientContext, toggleSidebar: () => void
   }, 'dshb-mobile: drawer interactions')
 }
 
+/** 对话/输入框下方的统计行（turns/steps/LLM/TPS）：hashed class 无法直接选，按文本特征标记后由 CSS 横向滚动，避免溢出。 */
+function installStatsLine(ctx: ClientContext): void {
+  ctx.effect(() => {
+    const narrow = window.matchMedia(MOBILE_QUERY)
+    const mark = (): void => {
+      if (!narrow.matches) return
+      const existing = document.querySelector(`[${FRAME_ATTR}="stats"]`)
+      const alive = existing !== null && existing.isConnected && existing.closest('[data-phase]') !== null && existing.closest('[class*="_composerStack"]') !== null
+      if (!alive) {
+        existing?.removeAttribute(FRAME_ATTR)
+        for (const root of document.querySelectorAll('[data-phase] [class*="_root"]')) {
+          if (root.closest('[class*="_composerStack"]') === null) continue
+          if (root.matches('[data-testid="todo-panel"]')) continue
+          if (root.querySelector('button, textarea') !== null) continue
+          const text = root.textContent ?? ''
+          if (!/(turns|steps|\bLLM\b|轮|步)/.test(text)) continue
+          root.setAttribute(FRAME_ATTR, 'stats')
+          break
+        }
+      }
+      // TPS readout（composer 下方独立行，无子元素的单行文本）
+      for (const stack of document.querySelectorAll('[class*="_composerStack"]')) {
+        for (const el of stack.querySelectorAll('div')) {
+          const text = (el.textContent ?? '').trim()
+          if (!/^TPS\s+\d/.test(text)) continue
+          if (el.children.length > 0) continue
+          if (!el.hasAttribute(FRAME_ATTR)) el.setAttribute(FRAME_ATTR, 'stats')
+        }
+      }
+    }
+    mark()
+    const mo = new MutationObserver(() => { if (narrow.matches) mark() })
+    mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
+    narrow.addEventListener('change', mark)
+    return () => {
+      mo.disconnect()
+      narrow.removeEventListener('change', mark)
+    }
+  }, 'dshb-mobile: stats line')
+}
+
 interface LayoutLike { toggleSidebar(): void }
 interface SlotsLike {
   inject(name: string, fn: () => unknown): unknown
@@ -265,6 +320,7 @@ export function installMobile(ctx: ClientContext): void {
   installStyles(ctx)
   installViewport(ctx)
   installFrameMarker(ctx)
+  installStatsLine(ctx)
   const layout = (ctx as unknown as { layout?: LayoutLike }).layout
   const slots = (ctx as unknown as { slots?: SlotsLike }).slots
   if (layout && typeof layout.toggleSidebar === 'function') {
