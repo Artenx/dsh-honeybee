@@ -290,19 +290,19 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
   }, [selectedId, flash, reload])
 
   const test = useCallback(async () => {
-    const isRemote = form.type === 'remote-ssh' || form.type === 'remote-docker'
-    if (!isRemote) {
+    if (form.type === 'local-host') {
       flash({ kind: 'error', text: '本地节点无需测试连接' })
       return
     }
-    if (!form.host.trim()) {
+    const isRemote = form.type === 'remote-ssh' || form.type === 'remote-docker'
+    if (isRemote && !form.host.trim()) {
       flash({ kind: 'error', text: '请填写主机地址' })
       return
     }
     setTesting(true)
     setTestResult(undefined)
     try {
-      const payload = {
+      const payload = isRemote ? {
         ssh: {
           host: form.host.trim(),
           port: Number(form.port) || 22,
@@ -314,7 +314,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
           ...(form.privateKey ? { privateKey: form.privateKey } : {}),
           ...(form.passphrase ? { passphrase: form.passphrase } : {}),
         },
-      }
+      } : {}
       const url = selectedId === 'new' ? '/api/dshb/nodes/test-unsaved' : `/api/dshb/nodes/${selectedId}/test`
       const res = await fetch(url, {
         method: 'POST',
@@ -546,7 +546,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
             <button type="button" onClick={() => void save()} disabled={busy} style={primaryButtonStyle}>
               {selectedId === 'new' ? '创建节点' : '保存'}
             </button>
-            {(form.type === 'remote-ssh' || form.type === 'remote-docker') && (
+            {(form.type === 'remote-ssh' || form.type === 'remote-docker' || (selectedId !== 'new' && form.type === 'local-docker')) && (
               <button type="button" onClick={() => void test()} disabled={busy || testing} style={secondaryButtonStyle}>
                 {testing ? '测试中…' : '测试连接'}
               </button>
