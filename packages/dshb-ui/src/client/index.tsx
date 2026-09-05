@@ -278,6 +278,15 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
     if (selectedId === 'new') return
     setBusy(true)
     try {
+      // 容器类型节点：先删除关联容器（失败不阻断节点删除）
+      const node = nodes.find((n) => n.id === selectedId)
+      if (node && (node.type === 'local-docker' || node.type === 'remote-docker') && node.docker?.containerId) {
+        try {
+          await fetch(`/api/dshb/docker/${selectedId}/delete`, { method: 'POST' })
+        } catch {
+          // 容器删除失败仍继续删节点配置
+        }
+      }
       const res = await fetch(`/api/dshb/nodes/${selectedId}`, { method: 'DELETE' })
       if (res.ok) {
         flash({ kind: 'ok', text: '节点已删除' })
@@ -290,7 +299,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
     } finally {
       setBusy(false)
     }
-  }, [selectedId, flash, reload])
+  }, [selectedId, nodes, flash, reload])
 
   const test = useCallback(async () => {
     if (form.type === 'local-host') {
