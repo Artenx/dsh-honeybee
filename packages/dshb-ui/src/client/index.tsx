@@ -20,6 +20,12 @@ interface NodeProfileView {
     username: string
     auth: { kind: 'password' | 'key' | 'agent'; keyPath?: string }
   }
+  docker?: {
+    image?: string
+    containerId?: string
+    mode?: string
+    resources?: { cpus?: number; memoryMB?: number }
+  }
   hasSecret: { hasPassword: boolean; hasKey: boolean; hasPassphrase: boolean }
   status?: { reachable?: boolean; lastCheckedAt?: string; error?: string }
   provision?: { state: 'provisioning' | 'ready' | 'failed'; error?: string; containerId?: string; updatedAt: string }
@@ -184,6 +190,9 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
         privateKey: '',
         passphrase: '',
         keyPath: node.ssh?.auth.keyPath ?? '',
+        dockerImage: node.docker?.image ?? '',
+        dockerCpus: node.docker?.resources?.cpus != null ? String(node.docker?.resources?.cpus) : '',
+        dockerMemory: node.docker?.resources?.memoryMB != null ? String(node.docker?.resources?.memoryMB) : '',
       })
     },
     [nodes],

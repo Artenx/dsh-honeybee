@@ -19,7 +19,7 @@ export function apply(ctx: Context): void {
   })
   sharedWorldResolver().setRegistry({
     get: (nodeId: string) => {
-      const node = nodeRegistry.get(nodeId)
+      const node = nodeRegistry?.get(nodeId)
       if (node && (node.type === 'remote-docker' || node.type === 'local-docker')) return undefined
       return worlds.get(nodeId)
     },
