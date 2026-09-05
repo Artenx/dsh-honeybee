@@ -174,6 +174,8 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
     (id: string | 'new') => {
       setSelectedId(id)
       setTestResult(undefined)
+      setTesting(false)
+      setDockerBusy(false)
       if (id === 'new') {
         setForm(EMPTY_FORM)
         return
