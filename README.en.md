@@ -33,7 +33,7 @@ DSHB lets a single web entry drive execution environments across multiple cloud 
 - **Container lifecycle management**: creating a Docker node with an image automatically provisions a container, with "pull up / restart / stop" controls; node online status is validated in three layers (SSH handshake + daemon + container running)
 - **On-demand artifact download**: clicking a produced file on a container / remote workspace streams it straight from the node — no need to write back to the local mirror, and Chinese content renders correctly as UTF-8
 - **Credential custody**: SSH passwords / private keys / passphrases are centrally managed; connection tests use the live form values
-- **Node management Web UI**: node CRUD, connection tests, Docker container controls, directory-tree workspace creation, plus mobile-browser adaptation (paired with dsh-web-mobile)
+- **Node management Web UI**: node CRUD, connection tests, Docker container controls, directory-tree workspace creation, plus built-in mobile-screen adaptation (narrow-viewport sidebar drawer, responsive settings/stats rows—no extra plugin needed)
 - **Single-admin authentication**: login page + session cookies to lock down the exposed network entry
 
 ## Architecture
@@ -85,7 +85,7 @@ Installs standard DSH and all DSHB plugins into the `web` profile in a single co
 curl -fsSL https://raw.githubusercontent.com/Artenx/dsh-honeybee/main/scripts/bootstrap.sh | bash
 ```
 
-The script detects `dsh` (skips DSH if present, otherwise pins `@deepseek-ai/dsh@0.1.1-rc.2`), clones this repo, runs `pnpm build`, then installs every DSHB plugin plus `dsh-web-mobile`. Start the management web with the command printed at the end.
+The script detects `dsh` (skips DSH if present, otherwise pins `@deepseek-ai/dsh@0.1.1-rc.2`), clones this repo, runs `pnpm build`, then installs every DSHB plugin. Start the management web with the command printed at the end.
 
 Useful overrides: `DSH_HOME` (default `~/.dsh`), `PROFILE` (default `web`), `DSH_VERSION` (default `0.1.1-rc.2`):
 
@@ -104,7 +104,6 @@ pnpm build
 # 2. Install into the web profile in one command
 ./scripts/install.sh
 # Equivalent to: dsh plugin --profile web add packages/dshb-{auth,core,router,exec-ssh,exec-docker,ui}
-#               plus dsh-web-mobile
 
 # 3. Restart the management side
 dsh web
