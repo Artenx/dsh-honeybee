@@ -33,7 +33,7 @@ DSHB 支持一个 web 入口同时驱动多台云主机或 Docker 容器的执�
 - **容器生命周期管理**：创建带镜像的 Docker 节点自动供给容器，支持「拉起 / 重启 / 停止」；节点在线状态由心跳（SSH 握手 + daemon + 容器 running）三层校验
 - **按需拉取产物**：容器 / 远端产生的文件点击即从节点实时读取下载，无需回写本地镜像，中文内容按 UTF-8 正确展示
 - **凭据托管**：SSH 密码 / 私钥 / passphrase 由管理端统一托管，测试连接使用表单中的即时值
-- **节点管理 Web UI**：节点增删改查、测试连接、Docker 容器控制、目录树式添加工作区，并适配手机浏览器（配合 dsh-web-mobile）
+- **节点管理 Web UI**：节点增删改查、测试连接、Docker 容器控制、目录树式添加工作区，并内置移动端屏幕适配（窄屏侧边栏抽屉、设置/统计行响应式，无需额外插件）
 - **单管理员认证**：登录页 + 会话 Cookie，限制网络暴露入口
 
 ## 架构
@@ -85,7 +85,7 @@ DSHB 分管理端与执行端：
 curl -fsSL https://raw.githubusercontent.com/Artenx/dsh-honeybee/main/scripts/bootstrap.sh | bash
 ```
 
-脚本会：检测 `dsh`（已存在则跳过，不存在则用锁定的 `@deepseek-ai/dsh@0.1.1-rc.2`）→ 克隆本仓库 → `pnpm build` → 逐个安装 DSHB 插件 + `dsh-web-mobile`。安装完成后按脚本提示启动 `dsh web`。
+脚本会：检测 `dsh`（已存在则跳过，不存在则用锁定的 `@deepseek-ai/dsh@0.1.1-rc.2`）→ 克隆本仓库 → `pnpm build` → 逐个安装 DSHB 插件。安装完成后按脚本提示启动 `dsh web`。
 
 常用覆盖项：`DSH_HOME`（默认 `~/.dsh`）、`PROFILE`（默认 `web`）、`DSH_VERSION`（默认 `0.1.1-rc.2`）：
 
@@ -104,7 +104,6 @@ pnpm build
 # 2. 一条命令装入 web profile
 ./scripts/install.sh
 # 等价于：逐个 dsh plugin --profile web add packages/dshb-{auth,core,router,exec-ssh,exec-docker,ui}
-#         再加 dsh-web-mobile
 
 # 3. 重启管理端
 dsh web

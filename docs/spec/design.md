@@ -77,7 +77,7 @@ graph TD
     subgraph Profile["DSHB profile（按序叠加）"]
         Base["dsh-base（上游）"]
         WebApp["dsh-web-app（上游）"]
-        Mobile["dsh-web-mobile（社区，MIT，直接依赖）"]
+        Mobile["dshb-ui 内置移动端适配（替代 dsh-web-mobile）"]
         DshbAuth["dshb-auth"]
         DshbCore["dshb-core"]
         DshbRouter["dshb-router"]
@@ -157,7 +157,7 @@ interface ExecutionWorldProvider {
 - 供给流水线（二期，新建容器）：拉取镜像 → 创建容器 → 等待就绪（healthcheck 或首次 exec 成功）→ 容器内创建工作区路径 → 注册工作区；任一阶段失败报告阶段与原因并清理半成品容器。
 - 节点管理设置页：节点 CRUD、连接测试、健康状态、`~/.ssh/config` 导入。
 - 侧栏工作区标题含节点归属标识。
-- 移动端样式遵循 dsh-web-mobile 范式（抽屉 / 底部浮层），DSHB 新增 UI 在 <768px 下可用。
+- 移动端样式由 dshb-ui 内置实现（抽屉 / 响应式布局），DSHB 新增 UI 在 <768px 下可用，不再依赖 dsh-web-mobile。
 
 ## Data Models
 
@@ -241,5 +241,5 @@ interface WorkspaceBinding {
 [^4]: (Website) - [frozo-ai/dsh-worlds：Docker 执行世界零依赖实现参照（MIT）](https://github.com/frozo-ai/dsh-worlds)
 [^5]: (Website) - [GHJIVHIDD/dsh-plugin-container：容器供给与治理模式参照（Apache-2.0）](https://github.com/GHJIVHIDD/dsh-plugin-container)
 [^6]: (Website) - [GDWhisper/dsh-web-startup-auth：认证与回环兼容层参照（MIT）](https://github.com/GDWhisper/dsh-web-startup-auth)
-[^7]: (Website) - [mexiaosqwq/dsh-web-mobile：移动端适配直接依赖（MIT）](https://github.com/mexiaosqwq/dsh-web-mobile)
+[^7]: (Website) - [mexiaosqwq/dsh-web-mobile：移动端适配实现参照（MIT）](https://github.com/mexiaosqwq/dsh-web-mobile)
 [^8]: (Website) - [tiphareth0/dsh-sshworkspaces：工作区↔节点绑定交互流程参照（BSD-3）](https://github.com/tiphareth0/dsh-sshworkspaces)

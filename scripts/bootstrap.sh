@@ -81,8 +81,6 @@ for p in $PLUGINS; do
   say "== installing $p =="
   DSH_HOME="$DSH_HOME" run_dsh plugin --profile "$PROFILE" add "$SRC/packages/$p"
 done
-say "== installing dsh-web-mobile =="
-DSH_HOME="$DSH_HOME" run_dsh plugin --profile "$PROFILE" add dsh-web-mobile
 
 say ""
 say "All done. Start the management web:"

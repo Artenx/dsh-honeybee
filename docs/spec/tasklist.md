@@ -7,7 +7,7 @@
 - [x] 1. 初始化 DSHB 独立仓库与构建骨架（对应需求 3.1/3.2/9.1）
   - 在 `/workspace/dsh-honeybee/` 创建独立 git 仓库：pnpm workspace、tsconfig.base、tsdown 构建、vitest 配置
   - `packages/` 下建立 dshb-auth / dshb-core / dshb-router / dshb-exec-ssh / dshb-ui 空包（各含 `dsh.bundle` 声明的 package.json 骨架）
-  - `profiles/dshb/` 下编写 profile 模板：按序叠加 dsh-base + dsh-web-app + dsh-web-mobile + dshb-*
+  - `profiles/dshb/` 下编写 profile 模板：按序叠加 dsh-base + dsh-web-app + dshb-*（dshb-ui 自带移动端适配）
   - package.json 锁定上游 `@deepseek-ai/dsh` 版本范围并记录已验证版本
 - [x] 2. 跑通上游组装与插件开发循环（对应需求 3.3/3.4）
   - `dsh --profile web --dump-config` 导出完整插件树，确认三处 patch 目标行 id（startup、fs-sandbox/subprocess/bash-sandbox、directory-picker-auto）
@@ -77,7 +77,7 @@
 **P4 移动端与分发收尾（一期）**
 
 - [x] 19. 移动端适配收尾（对应需求 2.1–2.5）
-  - 依赖 dsh-web-mobile；dshb-auth 登录页与 dshb-ui 新组件按抽屉/底部浮层范式补齐 <768px 样式
+  - dshb-ui 内置移动端适配（窄屏侧边栏抽屉、设置/统计行响应式），不再依赖 dsh-web-mobile；dshb-auth 登录页与 dshb-ui 新组件按抽屉/底部浮层范式补齐 <768px 样式
   - 双视口（1280px / 375px）Web 快照基线：登录页、节点选择、目录浏览、会话页
 - [x] 20. 聚合 bundle 与升级流程（对应需求 3.4/9.2/9.3/9.4）
   - `dshb` 聚合包：cordis.patch.yml 随包插入全部 DSHB 行，`dsh plugin --profile web add dshb` 一条命令安装
