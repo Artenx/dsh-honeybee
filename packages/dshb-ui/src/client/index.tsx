@@ -5,8 +5,9 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CSSProperties, ReactElement } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { DirectoryFlowOccupant } from './directory-flow.js'
+import { installMobile } from './mobile.js'
 
-export const inject = ['connection', 'workspaces']
+export const inject = ['connection', 'workspaces', 'slots', 'layout', 'conversation']
 
 const SECTION_ID = 'dshb-nodes'
 
@@ -607,6 +608,8 @@ export function apply(ctx: ClientContext): void {
   }
   fixOverflow()
   new MutationObserver(() => requestAnimationFrame(fixOverflow)).observe(document.body, { childList: true, subtree: true })
+
+  installMobile(ctx)
 
   ctx.plugin({
     inject: ['slots', 'settingsScope'],
