@@ -112,13 +112,19 @@ export function registerDockerRoutes(ctx: Context): void {
           return
         }
 
-        if (req.method === 'POST' && (action === 'restart' || action === 'stop' || action === 'start')) {
+        if (req.method === 'POST' && (action === 'restart' || action === 'stop' || action === 'start' || action === 'delete')) {
           const containerId = node.docker?.containerId
           if (!containerId) {
             sendJson(res, 400, { ok: false, error: '节点未关联容器' })
             return
           }
           try {
+            if (action === 'delete') {
+              const r = await runner.run(['docker', 'rm', '-f', containerId])
+              if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || '删除容器失败')
+              sendJson(res, 200, { ok: true, action: 'delete' })
+              return
+            }
             if (action === 'stop') {
               const r = await runner.run(['docker', 'stop', containerId])
               if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || '停止失败')
