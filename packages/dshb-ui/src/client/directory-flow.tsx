@@ -251,8 +251,8 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
               {entries.length === 0 && <div style={{ padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }}>无子目录</div>}
             </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <input style={inputStyle} value={newDirName} onChange={(e) => setNewDirName(e.target.value)} placeholder="在当前目录下新建子目录…" onKeyDown={(e) => { if (e.key === 'Enter') void mkdir() }} />
-              <button type="button" onClick={() => void mkdir()} disabled={busy || !newDirName.trim()} style={secondaryButtonStyle}>
+              <input style={{ ...inputStyle, flex: 1, minWidth: 0 }} value={newDirName} onChange={(e) => setNewDirName(e.target.value)} placeholder="在当前目录下新建子目录…" onKeyDown={(e) => { if (e.key === 'Enter') void mkdir() }} />
+              <button type="button" onClick={() => void mkdir()} disabled={busy || !newDirName.trim()} style={{ ...secondaryButtonStyle, flexShrink: 0, whiteSpace: 'nowrap' }}>
                 新建
               </button>
             </div>
