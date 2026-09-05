@@ -68,8 +68,37 @@ const MOBILE_CSS = `
   [${FRAME_ATTR}="frame"] [data-phase] header [role="tablist"]::-webkit-scrollbar { display: none; }
   [${FRAME_ATTR}="frame"] [data-phase] header [role="tablist"] > button { flex-shrink: 0; white-space: nowrap; }
 
-  /* 设置等模态框：窄屏近似全宽 sheet */
-  [aria-modal="true"] { max-width: calc(100vw - 16px) !important; }
+  /* 设置对话框：窄屏近全宽 sheet（排除导出等普通对话框与目录选择器） */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) {
+    position: absolute !important;
+    left: 8px !important;
+    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+    height: auto !important;
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px)) !important;
+    flex-direction: column !important;
+    border-radius: 14px !important;
+  }
+  [aria-modal="true"]:not(:has(> :first-child > :last-child > button)) { max-width: calc(100vw - 32px) !important; }
+  /* nav：横排换行（避免 CJK 标签竖排楼梯状），隐藏冗余 caption */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child {
+    width: 100%;
+    flex-direction: row !important;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px 8px;
+  }
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child > :first-child { display: none !important; }
+  [aria-modal="true"] [class*="_navList"] { flex: 1 1 auto; min-width: 0; flex-direction: row !important; flex-wrap: wrap; gap: 6px; overflow: visible; }
+  [aria-modal="true"] [class*="_navList"] > button { flex-shrink: 0; white-space: nowrap; }
+  /* 外观模式卡片横排 */
+  [aria-modal="true"] [class*="_cubeRow"] { gap: 6px; }
+  [aria-modal="true"] [class*="_cubeRow"] > * { flex: 1 1 0; flex-direction: row !important; align-items: center; justify-content: center; gap: 6px; padding: 10px 8px; min-height: 0; }
+  /* section 填充 sheet 宽度 */
+  [aria-modal="true"] [class*="_section"] { width: 100% !important; max-width: none !important; }
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child { flex: 1 1 auto; min-height: 0; }
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > :last-child { padding: 0 12px 24px; }
 
   /* 切换按钮：固定头部左侧 */
   [${FRAME_ATTR}="toggle"] {
