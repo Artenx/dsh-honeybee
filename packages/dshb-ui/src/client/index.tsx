@@ -328,11 +328,9 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
       const r = data.report
       if (r?.ok && r.reachable) {
         setTestResult('连接成功')
-        flash({ kind: 'ok', text: '连接成功' })
       } else {
         const cat = r?.category ? `（${r.category}）` : ''
         setTestResult(`${r?.error ?? '连接失败'}${cat}`)
-        flash({ kind: 'error', text: `连接失败${cat}` })
       }
       reload()
     } catch {
@@ -340,7 +338,7 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
     } finally {
       setTesting(false)
     }
-  }, [form, selectedId, flash, reload])
+  }, [form, selectedId, reload])
 
   const dockerAction = useCallback(async (action: 'restart' | 'stop' | 'start' | 'provision') => {
     if (selectedId === 'new') return
