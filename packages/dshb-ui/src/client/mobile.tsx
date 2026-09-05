@@ -75,6 +75,14 @@ const MOBILE_CSS = `
   [${FRAME_ATTR}="stats"]::-webkit-scrollbar { display: none; }
   [${FRAME_ATTR}="stats"] > * { flex-shrink: 0 !important; white-space: nowrap !important; }
 
+  /* 上下文用量详情弹窗（context meter：role=dialog 含 _segment 进度条）窄屏防 CJK 标签竖排 */
+  [role="dialog"]:has([class*="_segment"]) [class*="_header"] { flex-wrap: wrap !important; gap: 4px !important; }
+  [role="dialog"]:has([class*="_segment"]) [class*="_rows"] { display: flex !important; flex-direction: column !important; gap: 6px !important; }
+  [role="dialog"]:has([class*="_segment"]) [class*="_row"] { flex-wrap: wrap !important; align-items: center !important; gap: 2px 8px !important; }
+  [role="dialog"]:has([class*="_segment"]) [class*="_row"] > dt { min-width: 0; display: flex !important; align-items: center; gap: 6px; flex: 1 1 auto; }
+  [role="dialog"]:has([class*="_segment"]) [class*="_row"] > dd { white-space: nowrap !important; margin-left: auto !important; flex: 0 0 auto; }
+  [role="dialog"]:has([class*="_segment"]) [class*="_row"] dt span { white-space: nowrap !important; }
+
   /* 头部：标题省略，tab 条横向滚动 */
   [${FRAME_ATTR}="frame"] [data-phase] header { padding-left: 44px; padding-right: 8px; }
   [${FRAME_ATTR}="frame"] [data-phase] header [class*="_crumbs"] { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap !important; }
