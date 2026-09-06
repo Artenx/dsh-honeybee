@@ -600,6 +600,7 @@ export function apply(ctx: ClientContext): void {
     [class*="content"], [class*="main"], [class*="panel"], [class*="page"], [class*="wrapper"], [class*="container"] { max-width: 100% !important; overflow-x: hidden !important }
     body > div { max-width: 100vw !important; overflow-x: hidden !important; }
     body > div > div { max-width: 100vw !important; overflow-x: hidden !important; }
+    [class*="modelName"] { white-space: normal !important; text-overflow: clip !important; overflow: visible !important; word-break: break-word !important; }
   `
   document.head.appendChild(globalStyle)
 
