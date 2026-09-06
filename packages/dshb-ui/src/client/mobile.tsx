@@ -59,22 +59,19 @@ const MOBILE_CSS = `
   [data-phase] th, [data-phase] td { max-width: none; min-width: 0; }
   [data-phase] [class*="_scroll"]:not([class*="_scrollBody"]) img { width: auto !important; max-width: 100% !important; height: auto !important; max-height: 220px !important; }
   [data-phase] [class*="_userStack"], [data-phase] [class*="_userStack"] [class*="_bubble"] { box-sizing: border-box; width: fit-content; max-width: 100%; }
-  [data-phase] [class*="_actions"] { overflow: hidden; }
 
   /* 统计行（turns/steps/LLM/TPS）：窄屏横向滚动，指标可滑动看全 */
   [${FRAME_ATTR}="stats"] {
     display: flex !important;
     flex-wrap: nowrap !important;
     align-items: center;
-    gap: 6px;
+    gap: 6px !important;
     overflow-x: auto !important;
     max-width: 100% !important;
     scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
   }
   [${FRAME_ATTR}="stats"]::-webkit-scrollbar { display: none; }
   [${FRAME_ATTR}="stats"] > * { flex-shrink: 0 !important; white-space: nowrap !important; }
-  [${FRAME_ATTR}="stats"] { gap: 6px !important; }
   [class*="composerStack"] { gap: 4px !important; }
   /* stats line 竖线分隔符(|)两边 margin 10px 太松，适度收紧 */
   [data-phase] [class*="_sep"] { margin: 0 3px !important; }
@@ -88,8 +85,71 @@ const MOBILE_CSS = `
   /* footer 容器各项间距 16px 偏松 */
   [data-phase] [class*="_root"][class*="osXY9a"] { gap: 8px !important; }
   /* footer 统计行窄屏可横向滑动看全，不溢出页面 */
-  [data-phase] [class*="_actions"] { max-width: 100% !important; overflow-x: auto !important; scrollbar-width: none; touch-action: pan-x !important; }
+  [data-phase] [class*="_actions"] { max-width: 100% !important; overflow-x: auto !important; scrollbar-width: none; touch-action: pan-x pan-y !important; }
   [data-phase] [class*="_actions"]::-webkit-scrollbar { display: none; }
+
+  /* 工具调用执行结果/代码/JSON：窄屏可横向滑动。details 抽屉宽 min(92%,420px)
+     较窄，命令行输出/JSON 长行溢出被外层 overflow:hidden 裁剪看不到。命令行输出
+     改 white-space:pre（保持原格式不折行，像终端）+ overflow-x:auto 横向滑动；
+     min-width:0+max-width:100% 约束宽度触发滚动。 */
+  [data-phase] [class*="resultBlockText"],
+  [data-phase] [class*="payload"]:not([class*="errorPayload"]),
+  [data-phase] [class*="sourceBlockContent"] {
+    white-space: pre !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    scrollbar-width: none;
+    touch-action: pan-x pan-y !important;
+  }
+  [data-phase] [class*="resultBlockText"]::-webkit-scrollbar,
+  [data-phase] [class*="payload"]::-webkit-scrollbar,
+  [data-phase] [class*="sourceBlockContent"]::-webkit-scrollbar { display: none !important; }
+
+  /* 横向滑动容器：JSON 预览/代码块/promptDiff/工具卡片输出等，长行可横向滑动；
+     touch-action: pan-x pan-y 同时允许垂直页面滚动（不被横滑区域吃掉）。 */
+  [data-phase] [class*="jsonPayload"],
+  [data-phase] [class*="jsonPreview"],
+  [data-phase] [class*="promptDiff"],
+  [data-phase] [class*="overviewPreview"],
+  [data-phase] [class*="resultBlocks"],
+  [data-phase] pre,
+  [data-phase] [class*="bodyScroll"],
+  [data-phase] [class*="ioCard"],
+  [data-phase] [class*="ioSection"],
+  [data-phase] [class*="terminalBody"],
+  [data-phase] [class*="codeBody"] {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    scrollbar-width: none;
+    touch-action: pan-x pan-y !important;
+  }
+  [data-phase] [class*="jsonPayload"]::-webkit-scrollbar,
+  [data-phase] [class*="jsonPreview"]::-webkit-scrollbar,
+  [data-phase] [class*="promptDiff"]::-webkit-scrollbar,
+  [data-phase] [class*="overviewPreview"]::-webkit-scrollbar,
+  [data-phase] [class*="resultBlocks"]::-webkit-scrollbar,
+  [data-phase] pre::-webkit-scrollbar,
+  [data-phase] [class*="bodyScroll"]::-webkit-scrollbar,
+  [data-phase] [class*="ioCard"]::-webkit-scrollbar,
+  [data-phase] [class*="ioSection"]::-webkit-scrollbar,
+  [data-phase] [class*="terminalBody"]::-webkit-scrollbar,
+  [data-phase] [class*="codeBody"]::-webkit-scrollbar { display: none !important; }
+
+  /* 终端组件（dsh-web-frontend，CSS 模块前缀 10eou_）输出长行被裁剪：
+     上游 _output_10eou_162 已设 overflow-x:auto，但 JS 运行时内联样式将其覆盖成
+     hidden；_line_10eou_186（white-space:pre 不折行）也被设 hidden，672px 裁到
+     300px 无法滑动。用 !important 覆盖内联样式：_output 恢复 auto 可滑，
+     _line 改 visible 让行内容溢出到 _output 触发滚动。 */
+  [data-phase] [class*="terminal"] [class*="_output_"] {
+    overflow-x: auto !important;
+    scrollbar-width: none;
+  }
+  [data-phase] [class*="terminal"] [class*="_output_"]::-webkit-scrollbar { display: none !important; }
+  [data-phase] [class*="terminal"] [class*="_line_"] {
+    overflow-x: visible !important;
+  }
 
   /* 上下文用量弹窗（ContextMeter .JObwrW_panel）：上游 dsh-client-ui-trajectory 的
      [class*="panel"] 全局规则给它加了 max-width:100%!important，命中本弹窗，使宽度

@@ -605,6 +605,10 @@ export function apply(ctx: ClientContext): void {
        max-width:100%!important 误伤本弹窗，使其从 264px 塌缩成竖条；桌面端同样解除
        （移动端见 mobile.tsx）。JObwrW_ 为上游 CSS 模块 hash，上游升级需同步。 */
     .JObwrW_panel { max-width: none !important; overflow-x: visible !important; }
+    /* 子代理切换弹窗（dsh-client-ui-subagent）：menu 是 flex column + max-height + overflow:auto，
+       position:fixed 经 portal 渲染。子代理很多时 flex 压缩 node（flex-shrink:1 默认），
+       文字挤压且不触发滚动。给 node flex-shrink:0 让 menu 整体 overflow:auto 滚动。 */
+    [class*="_menu"] [class*="_node"] { flex-shrink: 0 !important; }
   `
   document.head.appendChild(globalStyle)
 
