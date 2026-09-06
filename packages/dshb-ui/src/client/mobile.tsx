@@ -278,7 +278,7 @@ function installDrawerInteractions(ctx: ClientContext, toggleSidebar: () => void
       if (!(target instanceof Element)) return
       const drawer = document.querySelector(`[${FRAME_ATTR}="frame"] > :first-child`)
       if (drawer === null || !drawer.contains(target)) return
-      if (target.closest('[class*="sessionRow"] button') !== null) return
+      if (target.closest('button, a, [role="button"]') !== null) return
       if (target.closest('[class*="newSession"], [class*="sessionRow"], [role="treeitem"], [class*="searchResult"]') !== null) toggleSidebar()
     }
     sync()
