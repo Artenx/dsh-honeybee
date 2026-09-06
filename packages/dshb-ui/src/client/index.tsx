@@ -601,6 +601,10 @@ export function apply(ctx: ClientContext): void {
     body > div { max-width: 100vw !important; overflow-x: hidden !important; }
     body > div > div { max-width: 100vw !important; overflow-x: hidden !important; }
     [class*="modelName"] { white-space: normal !important; text-overflow: clip !important; overflow: visible !important; word-break: break-word !important; }
+    /* 上下文用量弹窗 .JObwrW_panel（ContextMeter）：第 600 行 [class*="panel"] 全局
+       max-width:100%!important 误伤本弹窗，使其从 264px 塌缩成竖条；桌面端同样解除
+       （移动端见 mobile.tsx）。JObwrW_ 为上游 CSS 模块 hash，上游升级需同步。 */
+    .JObwrW_panel { max-width: none !important; overflow-x: visible !important; }
   `
   document.head.appendChild(globalStyle)
 
