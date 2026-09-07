@@ -1,3 +1,23 @@
+const MOBILE_CSS = `
+<style id="dshb-mobile-fix">
+@media (max-width:768px),(display-mode:standalone),(max-device-width:860px){
+._command_10eou_122{overflow-x:auto;white-space:pre;text-overflow:unset;-webkit-overflow-scrolling:touch}
+._output_10eou_162{overflow-x:auto;overflow-y:auto;-webkit-overflow-scrolling:touch}
+._root_4qrvp_1{width:100%;min-width:0;overflow-x:auto}
+._container_4qrvp_30{width:auto;min-width:100%;max-width:none}
+._expandedTopLevel_4qrvp_39{width:auto;min-width:100%;max-width:none}
+._body_biesw_72{overflow-x:auto;-webkit-overflow-scrolling:touch}
+._body_srovd_36{overflow-x:auto;-webkit-overflow-scrolling:touch}
+._body_s66q0_51{overflow-x:auto;-webkit-overflow-scrolling:touch}
+._line_10eou_186{min-width:max-content}
+._line_biesw_81{min-width:max-content}
+._line_srovd_44{min-width:max-content}
+._line_s66q0_60{min-width:max-content}
+._block_10eou_7{padding-left:0;overflow-x:auto}
+._header_10eou_38{margin-left:0;overflow-x:auto}
+}
+</style>`
+
 export function loopbackCompatScript(): string {
   return `<script>
 ;(function () {
@@ -64,5 +84,5 @@ export function loopbackCompatScript(): string {
 }
 
 export function installLoopbackCompat(html: string): string {
-  return html.replace('</head>', `${loopbackCompatScript()}</head>`)
+  return html.replace('</head>', `${MOBILE_CSS}${loopbackCompatScript()}</head>`)
 }
