@@ -227,6 +227,14 @@ const MOBILE_CSS = `
     box-shadow: 0 2px 12px rgba(0, 0, 0, .18) !important;
     -webkit-tap-highlight-color: transparent;
   }
+
+  /* 模型选择弹窗（dsh-client-ui-model-selection，Ra_ 前缀为上游 CSS 模块 hash）：
+     移动端窄屏，模型名含连字符（如 deepseek-v3.2），上游 nowrap+ellipsis 会截断。
+     仅设 white-space:normal 允许在连字符/空格处换行完整显示；不设 width/
+     overflow-wrap/定位属性，避免 max-content 收缩或覆盖 popper 的 inline 定位。
+     菜单宽度由上游 min-width:240px 托底 + max-content 自适应，popper 正常定位。 */
+  [class*="modelName"] { white-space: normal !important; }
+}
 }
 
 /* 宽屏 / 鼠标指针：隐藏切换按钮 */

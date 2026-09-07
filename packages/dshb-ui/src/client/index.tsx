@@ -600,7 +600,6 @@ export function apply(ctx: ClientContext): void {
     [class*="content"], [class*="main"], [class*="panel"], [class*="page"], [class*="wrapper"], [class*="container"] { max-width: 100% !important; overflow-x: hidden !important }
     body > div { max-width: 100vw !important; overflow-x: hidden !important; }
     body > div > div { max-width: 100vw !important; overflow-x: hidden !important; }
-    [class*="modelName"] { white-space: normal !important; text-overflow: clip !important; overflow: visible !important; word-break: break-word !important; }
     /* 上下文用量弹窗 .JObwrW_panel（ContextMeter）：第 600 行 [class*="panel"] 全局
        max-width:100%!important 误伤本弹窗，使其从 264px 塌缩成竖条；桌面端同样解除
        （移动端见 mobile.tsx）。JObwrW_ 为上游 CSS 模块 hash，上游升级需同步。 */
@@ -609,6 +608,11 @@ export function apply(ctx: ClientContext): void {
        position:fixed 经 portal 渲染。子代理很多时 flex 压缩 node（flex-shrink:1 默认），
        文字挤压且不触发滚动。给 node flex-shrink:0 让 menu 整体 overflow:auto 滚动。 */
     [class*="_menu"] [class*="_node"] { flex-shrink: 0 !important; }
+    /* 模型选择弹窗（dsh-client-ui-model-selection）：Ra_menu 上游 max-width 420px，
+       长模型名单行放不下被 ellipsis 截断。放宽到 720px（受视口约束）让模型名
+       单行完整显示。:has 精确匹配含 modelName 的菜单，避免误伤其他菜单（如
+       子代理 ZKlsPq_menu、通用 _list_19372_）。移动端窄屏仍由 mobile.tsx 换行。 */
+    [class*="menu"]:has([class*="modelName"]) { max-width: min(720px, 100vw - 32px) !important; }
   `
   document.head.appendChild(globalStyle)
 
