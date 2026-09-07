@@ -1,5 +1,5 @@
 {
-  "name": "dshb",
+  "name": "@artenx/dshb",
   "version": "0.0.1",
   "description": "DSH-HoneyBee 聚合包——一条命令安装全部 DSHB 插件",
   "files": [

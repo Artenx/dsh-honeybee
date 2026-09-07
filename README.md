@@ -68,7 +68,7 @@ dsh web
 ### 聚合包安装（npm 发布后）
 
 ```sh
-dsh plugin --profile web add dshb
+dsh plugin --profile web add @artenx/dshb
 ```
 
 ## 使用

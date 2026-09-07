@@ -68,7 +68,7 @@ dsh web
 ### Aggregate package (after npm publish)
 
 ```sh
-dsh plugin --profile web add dshb
+dsh plugin --profile web add @artenx/dshb
 ```
 
 ## Usage
