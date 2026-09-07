@@ -1,6 +1,6 @@
 {
   "name": "dshb-exec-ssh",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "DSHB 远程 SSH 执行世界（exec 行协议 / SFTP / PTY over ssh2）",
   "type": "module",
   "main": "lib/index.js",

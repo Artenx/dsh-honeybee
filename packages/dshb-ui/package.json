@@ -1,6 +1,6 @@
 {
   "name": "dshb-ui",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "DSHB 节点感知添加工作区 occupant 与节点管理设置页",
   "type": "module",
   "main": "lib/index.js",

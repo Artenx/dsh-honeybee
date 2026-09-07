@@ -1,6 +1,6 @@
 {
   "name": "@artenx/dshb",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "DSH-HoneyBee 聚合包——一条命令安装全部 DSHB 插件",
   "files": [
     "cordis.patch.yml"
