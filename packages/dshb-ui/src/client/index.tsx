@@ -611,7 +611,7 @@ export function apply(ctx: ClientContext): void {
     /* 模型选择弹窗（dsh-client-ui-model-selection）：Ra_menu 上游 max-width 420px，
        长模型名单行放不下被 ellipsis 截断。放宽到 720px 让模型名单行完整显示。
        [class*="Ra_menu"] 精确匹配模型弹窗，避免误伤其他菜单。Ra_ 为 hash，上游升级需同步。 */
-    [class*="Ra_menu"] { max-width: 720px !important; width: auto !important; }
+    [class*="Ra_menu"] { max-width: 720px !important; width: 720px !important; min-width: 240px !important; }
   `
    document.head.appendChild(globalStyle)
 
