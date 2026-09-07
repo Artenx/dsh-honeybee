@@ -1,6 +1,6 @@
 {
   "name": "dshb-core",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "DSHB 节点注册表（ctx.nodeRegistry）与凭据托管",
   "type": "module",
   "main": "lib/index.js",

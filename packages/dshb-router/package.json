@@ -1,6 +1,6 @@
 {
   "name": "dshb-router",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "DSHB 执行世界路由器（ctx.fs / ctx.subprocess / ctx.shell 按镜像路径分流）",
   "type": "module",
   "main": "lib/index.js",

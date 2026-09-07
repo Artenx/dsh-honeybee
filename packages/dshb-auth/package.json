@@ -1,6 +1,6 @@
 {
   "name": "dshb-auth",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "DSHB 管理端认证与网络暴露（登录页 / 会话 Cookie / startup 替换）",
   "type": "module",
   "main": "lib/index.js",

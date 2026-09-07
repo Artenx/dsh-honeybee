@@ -1,6 +1,6 @@
 {
   "name": "dshb-exec-docker",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "DSHB 本地 Docker 容器执行世界（Docker Engine API + exec/SFTP/PTY）",
   "type": "module",
   "main": "lib/index.js",
