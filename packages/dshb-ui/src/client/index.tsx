@@ -610,11 +610,43 @@ export function apply(ctx: ClientContext): void {
     [class*="_menu"] [class*="_node"] { flex-shrink: 0 !important; }
     /* 模型选择弹窗（dsh-client-ui-model-selection）：Ra_menu 上游 max-width 420px，
        长模型名单行放不下被 ellipsis 截断。放宽到 720px（受视口约束）让模型名
-       单行完整显示。:has 精确匹配含 modelName 的菜单，避免误伤其他菜单（如
-       子代理 ZKlsPq_menu、通用 _list_19372_）。移动端窄屏仍由 mobile.tsx 换行。 */
-    [class*="menu"]:has([class*="modelName"]) { max-width: min(720px, 100vw - 32px) !important; }
+       单行完整显示。用 [class*="Ra_menu"] 精确匹配模型弹窗，避免通用
+       [class*="menu"]:has(...) 误伤页面大 menu 容器。Ra_ 为 hash，上游升级需同步。 */
+    [class*="Ra_menu"] { max-width: min(720px, 100vw - 32px) !important; }
   `
   document.head.appendChild(globalStyle)
+
+  const installModelMenuDiag = () => {
+    if (!matchMedia('(max-width: 1023px) and (pointer: coarse)').matches) return
+    const report = () => {
+      const modelName = document.querySelector<HTMLElement>('[class*="modelName"]')
+      if (!modelName) return
+      const menu = modelName.closest<HTMLElement>('[class*="menu"]')
+      const copy = modelName.parentElement as HTMLElement | null
+      if (!menu || !copy) return
+
+      const details = [
+        `menu: ${Math.round(menu.getBoundingClientRect().width)}px`,
+        `copy: ${Math.round(copy.getBoundingClientRect().width)}px`,
+        `name: ${Math.round(modelName.getBoundingClientRect().width)}px / ${modelName.scrollWidth}px`,
+        `style: ${getComputedStyle(modelName).whiteSpace}, ${getComputedStyle(modelName).wordBreak}`,
+      ].join('\n')
+      let panel = document.getElementById('dshb-model-menu-diag')
+      if (!panel) {
+        panel = document.createElement('pre')
+        panel.id = 'dshb-model-menu-diag'
+        Object.assign(panel.style, {
+          position: 'fixed', top: '88px', left: '8px', zIndex: '99999', margin: '0',
+          padding: '6px 8px', borderRadius: '6px', color: '#fff', background: '#111d',
+          font: '11px/1.35 monospace', pointerEvents: 'none',
+        })
+        document.body.appendChild(panel)
+      }
+      panel.textContent = details
+    }
+    new MutationObserver(() => requestAnimationFrame(report)).observe(document.body, { childList: true, subtree: true })
+  }
+  installModelMenuDiag()
 
   const fixOverflow = () => {
     const vw = document.documentElement.clientWidth
@@ -630,6 +662,37 @@ export function apply(ctx: ClientContext): void {
   }
   fixOverflow()
   new MutationObserver(() => requestAnimationFrame(fixOverflow)).observe(document.body, { childList: true, subtree: true })
+
+  // Temporary mobile model-menu layout diagnostic. Remove after collecting a screenshot.
+  document.addEventListener('click', () => {
+    window.setTimeout(() => {
+      const modelName = [...document.querySelectorAll<HTMLElement>('[class*="modelName"]')]
+        .find((element) => element.getBoundingClientRect().width > 0)
+      if (!modelName) return
+
+      const menu = modelName.closest<HTMLElement>('[class*="menu"]')
+      const option = modelName.closest<HTMLElement>('[class*="option"]')
+      const describe = (element: HTMLElement | null) => {
+        if (!element) return 'missing'
+        const rect = element.getBoundingClientRect()
+        const style = getComputedStyle(element)
+        return `${element.tagName}.${element.className} x=${Math.round(rect.x)} w=${Math.round(rect.width)} sw=${element.scrollWidth} ws=${style.whiteSpace} ow=${style.overflowWrap} ov=${style.overflow} flex=${style.flex}`
+      }
+
+      const panel = document.getElementById('dshb-model-menu-diag') ?? document.createElement('pre')
+      panel.id = 'dshb-model-menu-diag'
+      panel.style.cssText = 'position:fixed;z-index:99999;left:8px;right:8px;bottom:8px;max-height:38vh;margin:0;padding:8px;background:#111;color:#fff;font:11px/1.35 monospace;white-space:pre-wrap;overflow:auto;pointer-events:none'
+      panel.textContent = [
+        `viewport=${innerWidth}x${innerHeight}`,
+        `menu: ${describe(menu)}`,
+        `option: ${describe(option)}`,
+        `copy: ${describe(modelName.parentElement)}`,
+        `name: ${describe(modelName)}`,
+        `siblings: ${option ? [...option.children].map((child) => describe(child as HTMLElement)).join('\n') : 'missing'}`,
+      ].join('\n')
+      document.body.appendChild(panel)
+    }, 150)
+  }, true)
 
   installMobile(ctx)
 

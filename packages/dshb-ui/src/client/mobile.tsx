@@ -229,12 +229,13 @@ const MOBILE_CSS = `
   }
 
   /* 模型选择弹窗（dsh-client-ui-model-selection，Ra_ 前缀为上游 CSS 模块 hash）：
-     移动端窄屏，模型名含连字符（如 deepseek-v3.2），上游 nowrap+ellipsis 会截断。
-     仅设 white-space:normal 允许在连字符/空格处换行完整显示；不设 width/
-     overflow-wrap/定位属性，避免 max-content 收缩或覆盖 popper 的 inline 定位。
-     菜单宽度由上游 min-width:240px 托底 + max-content 自适应，popper 正常定位。 */
-  [class*="modelName"] { white-space: normal !important; }
-}
+     移动端保持上游默认定位。模型名 nowrap 单行显示，overflow:visible 允许超长名
+     向右溢出菜单边缘可见（不换行不截断）。菜单宽度由上游 max-content 自适应，
+     短名单行完整、长名单撑宽（受 max-width:343px 约束）。 */
+  [class*="modelName"] {
+    white-space: nowrap !important;
+    overflow: visible !important;
+  }
 }
 
 /* 宽屏 / 鼠标指针：隐藏切换按钮 */
