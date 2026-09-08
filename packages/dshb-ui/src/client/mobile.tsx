@@ -109,6 +109,14 @@ const MOBILE_CSS = `
     overflow: visible !important;
   }
 
+  /* 模型选择器弹窗：上游 width:max-content + 换行后内容变窄塌到 min-width(240px)，
+     移动端撑到近全宽（100vw-48px）给长名留出空间；菜单 right:0 贴根右缘，
+     移动端 composer 近全宽，左缘余 48px 不会溢出屏幕。 */
+  [class*="7KE1Ra_menu"] {
+    min-width: calc(100vw - 48px) !important;
+    max-width: calc(100vw - 48px) !important;
+  }
+
   /* 工具调用执行结果/代码/JSON：窄屏可横向滑动。details 抽屉宽 min(92%,420px)
      较窄，命令行输出/JSON 长行溢出被外层 overflow:hidden 裁剪看不到。命令行输出
      改 white-space:pre（保持原格式不折行，像终端）+ overflow-x:auto 横向滑动；
