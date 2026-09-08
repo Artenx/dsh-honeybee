@@ -676,6 +676,7 @@ function installModelMenuPosition(ctx: ClientContext): void {
     }
     let fittedVw = 0
     let fittedSig = -1
+    let fittedMenus: HTMLElement[] = []
     const sync = (): void => {
       const menus = findMenus()
       if (!narrow.matches) {
@@ -685,10 +686,12 @@ function installModelMenuPosition(ctx: ClientContext): void {
         }
         fittedVw = 0
         fittedSig = -1
+        fittedMenus = []
         return
       }
       let vw = 0
       let sig = 0
+      const modelMenus: HTMLElement[] = []
       for (const menu of menus) {
         const root = menu.parentElement
         if (root === null) continue
@@ -699,6 +702,7 @@ function installModelMenuPosition(ctx: ClientContext): void {
         if (menu.querySelector('[class*="modelName"]')) {
           positionFixedSheet(menu, rootRect, Number.POSITIVE_INFINITY, 0.45)
           applyNonBreakingHyphens(menu)
+          modelMenus.push(menu)
           vw = window.innerWidth
           for (const n of menu.querySelectorAll<HTMLElement>('[class*="modelName"]')) {
             sig += n.textContent?.length ?? 0
@@ -707,13 +711,15 @@ function installModelMenuPosition(ctx: ClientContext): void {
           positionCompactPanel(menu, root, rootRect)
         }
       }
-      // 仅当视口宽或名字集合变化时才重新测量缩放，避免每次 DOM 变更都强制作废布局
-      if (vw > 0 && (vw !== fittedVw || sig !== fittedSig)) {
-        for (const menu of findMenus()) {
-          if (menu.querySelector('[class*="modelName"]') !== null) fitModelNameFont(menu)
-        }
+      // 菜单关闭再打开时 React 会重建菜单元素（新元素没有任何内联样式），
+      // 所以缓存必须含元素身份：vw / 名字集合 / 菜单实例任一变化都要重测，
+      // 否则重开的菜单会漏掉 nowrap+缩字而再次换行。
+      const needFit = modelMenus.some((m) => !fittedMenus.includes(m))
+      if (vw > 0 && (needFit || vw !== fittedVw || sig !== fittedSig)) {
+        for (const menu of modelMenus) fitModelNameFont(menu)
         fittedVw = vw
         fittedSig = sig
+        fittedMenus = modelMenus
       }
     }
     sync()
