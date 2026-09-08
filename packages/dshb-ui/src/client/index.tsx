@@ -638,11 +638,13 @@ export function apply(ctx: ClientContext): void {
       sub.slots.inject('settings.section', () =>
         sub.slots.register({ name: 'settings.section', id: SECTION_ID, order: 110, label: () => '工作节点' }, NodeSection),
       )
+      /* 上游 dsh-client-ui-directory-picker-browse 以默认 priority 0 注册同一 slot；
+         priority 升序遮蔽（lowest renders），用 -10 抢占渲染，避免同优先级抛错。 */
       sub.slots.inject('conversation.hero.workspace.directoryFlow', () =>
-        sub.slots.register({ name: 'conversation.hero.workspace.directoryFlow' }, DirectoryFlowOccupant),
+        sub.slots.register({ name: 'conversation.hero.workspace.directoryFlow', priority: -10 }, DirectoryFlowOccupant),
       )
       sub.slots.inject('sidebar.workspaces.directoryFlow', () =>
-        sub.slots.register({ name: 'sidebar.workspaces.directoryFlow' }, DirectoryFlowOccupant),
+        sub.slots.register({ name: 'sidebar.workspaces.directoryFlow', priority: -10 }, DirectoryFlowOccupant),
       )
     },
   })
