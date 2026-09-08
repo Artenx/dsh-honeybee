@@ -15,7 +15,7 @@ function writeFixture(): void {
         { id: 'local', name: '本地环境', type: 'local-host', createdAt: '', updatedAt: '' },
         {
           id: REMOTE_NODE,
-          name: '38',
+          name: 'remote',
           type: 'remote-ssh',
           ssh: { host: '192.0.2.10', port: 22, username: 'root', auth: { kind: 'password' } },
           createdAt: '',
