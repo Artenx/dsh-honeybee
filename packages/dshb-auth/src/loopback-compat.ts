@@ -8,7 +8,7 @@ html{-webkit-text-size-adjust:100%!important;text-size-adjust:100%!important}
 [class*="_output_10eou_"]{overflow-x:auto!important;overflow-y:auto!important;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y!important}
 [class*="_line_10eou_"]{min-width:max-content!important;overflow-x:visible!important;max-height:999999px!important}
 [class*="_copyButton_10eou_"]{position:sticky!important;right:0}
-[class*="7KE1Ra_modelName"],[class*="7KE1Ra_description"],[class*="modelName"]{white-space:normal!important;overflow-wrap:anywhere;text-overflow:clip!important;overflow:visible!important}
+[class*="7KE1Ra_modelName"],[class*="7KE1Ra_description"],[class*="modelName"]{white-space:normal!important;overflow-wrap:break-word;text-overflow:clip!important;overflow:visible!important}
 [class*="7KE1Ra_menu"],[class*="_menu"]:has([class*="modelName"]){left:0!important;right:auto!important;width:calc(100vw - 32px)!important;min-width:0!important;max-width:calc(100vw - 32px)!important}
 [class*="_copyButton_"]{touch-action:manipulation!important}
 [class*="_copyAnchor_"],[class*="_body_1ye18_"],[class*="_root_4qrvp_"]{touch-action:pan-x pan-y!important}

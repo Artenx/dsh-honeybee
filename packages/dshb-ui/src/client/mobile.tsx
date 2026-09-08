@@ -105,17 +105,21 @@ const MOBILE_CSS = `
     overflow-wrap: anywhere;
   }
 
-  /* 模型选择器（dsh-client-ui-model-selection，CSS 模块前缀 7KE1Ra_）：
-     列表内模型名/描述默认 ellipsis 截断，改换行完整显示。除当前 hash 外，
-     再加 modelName 语义匹配，防止上游升级换 hash 后规则失效。 */
-  [class*="7KE1Ra_modelName"],
-  [class*="7KE1Ra_description"],
-  [class*="modelName"] {
-    white-space: normal !important;
-    overflow-wrap: anywhere;
-    text-overflow: clip !important;
-    overflow: visible !important;
-  }
+   /* 模型选择器（dsh-client-ui-model-selection，CSS 模块前缀 7KE1Ra_）：
+      列表内模型名/描述默认 ellipsis 截断，改换行完整显示。除当前 hash 外，
+      再加 modelName 语义匹配，防止上游升级换 hash 后规则失效。
+      注意：必须用 break-word 而非 anywhere —— anywhere 让文字 min-content
+      宽度≈1 字符，配合全局 * {min-width:0} 会把 flex 行内名字列压到 1 字符宽，
+      出现"一字符就换行"。break-word 的 min-content 取最长词宽，只在真正
+      放不下时才断词。 */
+   [class*="7KE1Ra_modelName"],
+   [class*="7KE1Ra_description"],
+   [class*="modelName"] {
+     white-space: normal !important;
+     overflow-wrap: break-word;
+     text-overflow: clip !important;
+     overflow: visible !important;
+   }
 
   /* 模型选择器弹窗：JS（installModelMenuPosition）在窄屏下改为 position:fixed
      视口级浮层（fixed 不受祖先 overflow 裁剪），这里仅做静态兜底（JS 未生效时
@@ -546,6 +550,36 @@ function positionFixedSheet(
   el.style.setProperty('overflow-y', 'auto', 'important')
 }
 
+/**
+ * 一级 pane（Model/Effort 单元格小菜单）紧凑浮层：右缘对齐触发按钮右缘
+ * （钳制在视口内 8px 起）、向上展开、空间不足向下展开；宽度跟随内容
+ * （max-content，封顶 min(420, vw-16)），避免小菜单被全宽 sheet 拉远到
+ * 屏幕中间。测量与定位在同一任务内同步完成，无闪烁。
+ */
+function positionCompactPanel(el: HTMLElement, rootRect: DOMRect): void {
+  const margin = 8
+  const vw = window.innerWidth
+  el.style.setProperty('position', 'fixed', 'important')
+  el.style.setProperty('left', '0', 'important')
+  el.style.setProperty('top', '0', 'important')
+  el.style.setProperty('right', 'auto', 'important')
+  el.style.setProperty('bottom', 'auto', 'important')
+  el.style.setProperty('width', 'max-content', 'important')
+  el.style.setProperty('min-width', '0', 'important')
+  el.style.setProperty('max-width', `${Math.min(420, vw - margin * 2)}px`, 'important')
+  el.style.setProperty('max-height', 'none', 'important')
+  el.style.setProperty('overflow-y', 'visible', 'important')
+  const w = el.offsetWidth
+  const h = el.offsetHeight
+  const rightEdge = Math.max(margin, Math.min(vw - margin, vw - rootRect.right))
+  const expandUp = rootRect.top - margin - h >= margin
+  const top = Math.max(margin, expandUp ? rootRect.top - margin - h : rootRect.bottom + margin)
+  const left = Math.max(margin, rightEdge - w)
+  el.style.setProperty('left', `${left}px`, 'important')
+  el.style.setProperty('top', `${top}px`, 'important')
+  el.style.setProperty('width', `${w}px`, 'important')
+}
+
 /** 清除 positionFixedSheet 写入的内联样式，交还上游/移动端 CSS 兜底。 */
 function clearFixedSheet(el: HTMLElement | null | undefined): void {
   if (el === null || el === undefined) return
@@ -557,8 +591,10 @@ function clearFixedSheet(el: HTMLElement | null | undefined): void {
  * 元素：一级 Model/Effort 单元格列表（cellLabel），点击后切到模型列表（modelName）
  * 或档位列表。上游默认 `position:absolute;right:0` 贴触发按钮右缘，触发按钮在
  * 可横向滚动的 stats 行内时菜单会整体出屏。两级 pane 都必须接管（不能只按
- * modelName 匹配，否则一级 pane 漏掉）。窄屏下统一改为视口级居中 fixed 浮层：
- * 左右各留 8px、高度 45% 视口封顶、内容滚动、上方空间不足时向下展开。
+ * modelName 匹配，否则一级 pane 漏掉）。窄屏下：一级小菜单走紧凑浮层
+ * （右缘贴按钮、向上展开，避免全宽 sheet 把小菜单拉到屏幕中间离按钮太远）；
+ * 二级列表走视口级居中 fixed sheet（左右各 8px、高度 45% 视口封顶、
+ * 内容滚动、上方空间不足时向下展开）。
  */
 function installModelMenuPosition(ctx: ClientContext): void {
   ctx.effect(() => {
@@ -581,17 +617,24 @@ function installModelMenuPosition(ctx: ClientContext): void {
       if (menu === null) return
       const root = menu.parentElement
       if (root === null) return
-      positionFixedSheet(menu, root.getBoundingClientRect(), Number.POSITIVE_INFINITY, 0.45)
+      const rootRect = root.getBoundingClientRect()
+      if (menu.querySelector('[class*="modelName"]')) {
+        positionFixedSheet(menu, rootRect, Number.POSITIVE_INFINITY, 0.45)
+      } else {
+        positionCompactPanel(menu, rootRect)
+      }
     }
     sync()
     const mo = new MutationObserver(() => requestAnimationFrame(sync))
     mo.observe(document.documentElement, { childList: true, subtree: true })
     narrow.addEventListener('change', sync)
     window.addEventListener('resize', sync)
+    window.addEventListener('scroll', sync, true)
     return () => {
       mo.disconnect()
       narrow.removeEventListener('change', sync)
       window.removeEventListener('resize', sync)
+      window.removeEventListener('scroll', sync, true)
     }
   }, 'dshb-mobile: model menu position')
 }
