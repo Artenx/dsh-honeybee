@@ -604,6 +604,47 @@ function applyNonBreakingHyphens(menu: HTMLElement): void {
   }
 }
 
+/**
+ * 模型名"整行显示、不换行、不截断"：窄屏下把名字列里的所有 .modelName 设为
+ * nowrap，并按"最宽名字 vs 可用列宽"统一缩小字号（下限 11px，上限 14px），
+ * 让最长的名字也恰好放得下——从根上消除"换行太早"。只测一次最宽名字
+ * （scrollWidth 一次布局读取），缩放结果应用到全部名字，保持同一字号。
+ * 调用方按 vw + 名字集合签名缓存，避免每次 DOM 变更都强制作废布局。
+ */
+function fitModelNameFont(menu: HTMLElement): void {
+  const names = Array.from(menu.querySelectorAll<HTMLElement>('[class*="modelName"]'))
+  if (names.length === 0) return
+  const col = names[0].parentElement
+  if (col === null) return
+  const colW = col.clientWidth - 4
+  if (colW <= 0) return
+  const base = 14
+  let longest = names[0]
+  for (const n of names) {
+    if ((n.textContent?.length ?? 0) > (longest.textContent?.length ?? 0)) longest = n
+  }
+  const prevWs = longest.style.whiteSpace
+  longest.style.whiteSpace = 'nowrap'
+  longest.style.fontSize = `${base}px`
+  const natural = longest.scrollWidth
+  longest.style.whiteSpace = prevWs
+  longest.style.fontSize = ''
+  const fs = natural > colW ? Math.max(11, Math.min(base, Math.round(base * (colW / natural)))) : base
+  for (const n of names) {
+    n.style.setProperty('white-space', 'nowrap', 'important')
+    n.style.setProperty('font-size', `${fs}px`, 'important')
+  }
+}
+
+/** 宽屏（窄屏判定不成立）时复位名字列内联样式，交还上游 CSS（nowrap+ellipsis）。 */
+function clearModelNameFit(menu: HTMLElement | null | undefined): void {
+  if (menu === null || menu === undefined) return
+  for (const n of Array.from(menu.querySelectorAll<HTMLElement>('[class*="modelName"]'))) {
+    n.style.removeProperty('white-space')
+    n.style.removeProperty('font-size')
+  }
+}
+
 /** 清除 positionFixedSheet 写入的内联样式，交还上游/移动端 CSS 兜底。 */
 function clearFixedSheet(el: HTMLElement | null | undefined): void {
   if (el === null || el === undefined) return
@@ -623,30 +664,56 @@ function clearFixedSheet(el: HTMLElement | null | undefined): void {
 function installModelMenuPosition(ctx: ClientContext): void {
   ctx.effect(() => {
     const narrow = window.matchMedia(NARROW_QUERY)
-    const findMenu = (): HTMLElement | null => {
-      const byHash = document.querySelector<HTMLElement>('[class*="7KE1Ra_menu"]')
-      if (byHash) return byHash
+    // 多 tab 场景可能并存多个模型选择器（各自一个 _menu）；只处理可见的，
+    // 避免 document.querySelector 命中隐藏 tab 的菜单而漏掉用户正在看的那个。
+    const findMenus = (): HTMLElement[] => {
+      const byHash = Array.from(document.querySelectorAll<HTMLElement>('[class*="7KE1Ra_menu"]'))
+      if (byHash.length > 0) return byHash
       // 上游升级换 hash 后回退：语义类匹配（cellLabel 命中一级 pane，modelName 命中二级）
-      for (const el of Array.from(document.querySelectorAll<HTMLElement>('[class*="_menu"]'))) {
-        if (el.querySelector('[class*="cellLabel"], [class*="modelName"]')) return el
-      }
-      return null
+      return Array.from(document.querySelectorAll<HTMLElement>('[class*="_menu"]')).filter((el) =>
+        el.querySelector('[class*="cellLabel"], [class*="modelName"]') !== null,
+      )
     }
+    let fittedVw = 0
+    let fittedSig = -1
     const sync = (): void => {
-      const menu = findMenu()
+      const menus = findMenus()
       if (!narrow.matches) {
-        clearFixedSheet(menu)
+        for (const menu of menus) {
+          clearFixedSheet(menu)
+          clearModelNameFit(menu)
+        }
+        fittedVw = 0
+        fittedSig = -1
         return
       }
-      if (menu === null) return
-      const root = menu.parentElement
-      if (root === null) return
-      const rootRect = root.getBoundingClientRect()
-      if (menu.querySelector('[class*="modelName"]')) {
-        positionFixedSheet(menu, rootRect, Number.POSITIVE_INFINITY, 0.45)
-        applyNonBreakingHyphens(menu)
-      } else {
-        positionCompactPanel(menu, root, rootRect)
+      let vw = 0
+      let sig = 0
+      for (const menu of menus) {
+        const root = menu.parentElement
+        if (root === null) continue
+        const rect = menu.getBoundingClientRect()
+        // 跳过隐藏 tab / 未打开的菜单（0 尺寸或祖先 display:none）
+        if (rect.width === 0 && rect.height === 0) continue
+        const rootRect = root.getBoundingClientRect()
+        if (menu.querySelector('[class*="modelName"]')) {
+          positionFixedSheet(menu, rootRect, Number.POSITIVE_INFINITY, 0.45)
+          applyNonBreakingHyphens(menu)
+          vw = window.innerWidth
+          for (const n of menu.querySelectorAll<HTMLElement>('[class*="modelName"]')) {
+            sig += n.textContent?.length ?? 0
+          }
+        } else {
+          positionCompactPanel(menu, root, rootRect)
+        }
+      }
+      // 仅当视口宽或名字集合变化时才重新测量缩放，避免每次 DOM 变更都强制作废布局
+      if (vw > 0 && (vw !== fittedVw || sig !== fittedSig)) {
+        for (const menu of findMenus()) {
+          if (menu.querySelector('[class*="modelName"]') !== null) fitModelNameFont(menu)
+        }
+        fittedVw = vw
+        fittedSig = sig
       }
     }
     sync()
