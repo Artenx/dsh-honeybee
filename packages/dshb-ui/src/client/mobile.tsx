@@ -499,62 +499,107 @@ function installStatsLine(ctx: ClientContext): void {
   }, 'dshb-mobile: stats line')
 }
 
+/** 浮层 fixed 定位需管理的内联样式键，清理时逐一移除以交还上游 CSS。 */
+const SHEET_PROPS = [
+  'position', 'width', 'left', 'right', 'top', 'bottom',
+  'min-width', 'max-width', 'max-height', 'overflow-y',
+] as const
+
 /**
- * 模型选择弹窗（dsh-client-ui-model-selection）上游是 `right:0` 贴触发按钮右缘的
- * 绝对定位；触发按钮在 composer 左侧时，近全宽菜单会向屏幕左侧溢出。且菜单挂在
- * composer 内部，任何带 overflow 裁剪的祖先都会截断它。窄屏下改为 position:fixed
- * 视口级浮层（fixed 不受祖先 overflow 裁剪），用触发按钮的视口坐标定位为
- * 左右各留 8px、向上展开。
+ * 把挂在 composer 内部的绝对定位浮层统一改造成 position:fixed 视口级浮层：
+ * 水平居中（左右各留 8px，绝不贴边/溢出），高度按视口比例封顶并内容滚动，
+ * 触发元素上方空间足够则向上展开、否则向下展开，四边都约束在视口内。
+ * fixed 不受祖先 overflow 裁剪（祖先带 transform 时失效）。
+ */
+function positionFixedSheet(
+  el: HTMLElement,
+  rootRect: DOMRect,
+  maxWidth: number,
+  maxHeightRatio: number,
+): void {
+  const margin = 8
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const width = Math.max(0, Math.min(maxWidth, vw - margin * 2))
+  const left = Math.round((vw - width) / 2)
+  const maxH = Math.round(vh * maxHeightRatio)
+  const spaceAbove = rootRect.top - margin
+  const spaceBelow = vh - rootRect.bottom - margin
+  const expandUp = spaceAbove >= 140 && spaceAbove >= spaceBelow
+  let top: number
+  if (expandUp) {
+    const h = Math.min(maxH, Math.max(spaceAbove, 140))
+    top = rootRect.top - margin - h
+  } else {
+    top = rootRect.bottom + margin
+  }
+  top = Math.max(margin, top)
+  el.style.setProperty('position', 'fixed', 'important')
+  el.style.setProperty('width', `${width}px`, 'important')
+  el.style.setProperty('left', `${left}px`, 'important')
+  el.style.setProperty('right', 'auto', 'important')
+  el.style.setProperty('top', `${top}px`, 'important')
+  el.style.setProperty('bottom', 'auto', 'important')
+  el.style.setProperty('min-width', '0', 'important')
+  el.style.setProperty('max-width', 'none', 'important')
+  el.style.setProperty('max-height', `${maxH}px`, 'important')
+  el.style.setProperty('overflow-y', 'auto', 'important')
+}
+
+/** 清除 positionFixedSheet 写入的内联样式，交还上游/移动端 CSS 兜底。 */
+function clearFixedSheet(el: HTMLElement | null | undefined): void {
+  if (el === null || el === undefined) return
+  for (const key of SHEET_PROPS) el.style.removeProperty(key)
+}
+
+/**
+ * 模型选择弹窗（dsh-client-ui-model-selection）是两级 pane 的同一个 `_7KE1Ra_menu`
+ * 元素：一级 Model/Effort 单元格列表（cellLabel），点击后切到模型列表（modelName）
+ * 或档位列表。上游默认 `position:absolute;right:0` 贴触发按钮右缘，触发按钮在
+ * 可横向滚动的 stats 行内时菜单会整体出屏。两级 pane 都必须接管（不能只按
+ * modelName 匹配，否则一级 pane 漏掉）。窄屏下统一改为视口级居中 fixed 浮层：
+ * 左右各留 8px、高度 45% 视口封顶、内容滚动、上方空间不足时向下展开。
  */
 function installModelMenuPosition(ctx: ClientContext): void {
   ctx.effect(() => {
     const narrow = window.matchMedia(NARROW_QUERY)
     const findMenu = (): HTMLElement | null => {
-      for (const el of Array.from(document.querySelectorAll<HTMLElement>('[class*="7KE1Ra_menu"], [class*="_menu"]'))) {
-        if (el.querySelector('[class*="modelName"]') !== null) return el
+      const byHash = document.querySelector<HTMLElement>('[class*="7KE1Ra_menu"]')
+      if (byHash) return byHash
+      // 上游升级换 hash 后回退：语义类匹配（cellLabel 命中一级 pane，modelName 命中二级）
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('[class*="_menu"]'))) {
+        if (el.querySelector('[class*="cellLabel"], [class*="modelName"]')) return el
       }
       return null
     }
     const sync = (): void => {
-      if (!narrow.matches) return
       const menu = findMenu()
+      if (!narrow.matches) {
+        clearFixedSheet(menu)
+        return
+      }
       if (menu === null) return
       const root = menu.parentElement
       if (root === null) return
-      const rootRect = root.getBoundingClientRect()
-      const gap = 8
-      const viewport = document.documentElement.clientWidth
-      menu.style.setProperty('position', 'fixed', 'important')
-      menu.style.setProperty('top', 'auto', 'important')
-      menu.style.setProperty('bottom', `${window.innerHeight - rootRect.top + gap}px`, 'important')
-      menu.style.setProperty('left', `${gap}px`, 'important')
-      menu.style.setProperty('right', 'auto', 'important')
-      menu.style.setProperty('width', `${viewport - gap * 2}px`, 'important')
-      menu.style.setProperty('min-width', '0', 'important')
-      menu.style.setProperty('max-width', 'none', 'important')
-      menu.style.setProperty('max-height', `${Math.max(160, rootRect.top - gap * 2)}px`, 'important')
-      menu.style.setProperty('overflow-y', 'auto', 'important')
+      positionFixedSheet(menu, root.getBoundingClientRect(), Number.POSITIVE_INFINITY, 0.45)
     }
     sync()
     const mo = new MutationObserver(() => requestAnimationFrame(sync))
     mo.observe(document.documentElement, { childList: true, subtree: true })
     narrow.addEventListener('change', sync)
     window.addEventListener('resize', sync)
-    window.addEventListener('scroll', sync, true)
     return () => {
       mo.disconnect()
       narrow.removeEventListener('change', sync)
       window.removeEventListener('resize', sync)
-      window.removeEventListener('scroll', sync, true)
     }
   }, 'dshb-mobile: model menu position')
 }
 
 /**
  * 上下文用量弹窗（ContextMeter .JObwrW_panel，dsh-client-ui-conversation）上游是
- * `position:absolute; bottom:calc(100%+8px); right:0` 挂在 .JObwrW_root 内；面板向上
- * 展开超出统计行/输入框范围时，被任何 overflow 裁剪祖先截断。窄屏下同样改为
- * position:fixed 视口级浮层，锚定触发元素（.JObwrW_root）视口坐标向上展开。
+ * `position:absolute; bottom:calc(100%+8px); right:0` 挂 .JObwrW_root 内。窄屏下
+ * 改为 fixed 视口浮层，右缘锚定触发按钮右缘、向上展开（用户已验证该形态正常，勿改）。
  */
 function installContextPanelPosition(ctx: ClientContext): void {
   ctx.effect(() => {
