@@ -12,6 +12,9 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
  */
 export const MOBILE_QUERY = '(max-width: 1023px) and (pointer: coarse)'
 
+/** 纯视口宽度判定：与放宽后的 MOBILE_CSS 媒体查询一致（不依赖 pointer 类型）。 */
+const NARROW_QUERY = '(max-width: 1023px)'
+
 const FRAME_ATTR = 'data-dshb-mobile'
 const COLLAPSED_ATTR = 'data-sidebar-collapsed'
 
@@ -114,13 +117,15 @@ const MOBILE_CSS = `
     overflow: visible !important;
   }
 
-  /* 模型选择器弹窗：上游 width:max-content + 换行后内容变窄塌到 min-width(240px)，
-     窄屏撑到近全宽（100vw-48px）给长名留出空间；:has(modelName) 为 hash 无关匹配，
-     菜单 right:0 贴根右缘、移动端 composer 近全宽，左缘余 48px 不会溢出屏幕。 */
+  /* 模型选择器弹窗：上游 right:0 贴触发按钮右缘，触发按钮在 composer 左侧时近全宽
+     会向左溢出屏幕。改为从触发按钮左缘向右展开、宽度收进视口（JS 按视口坐标精修）。 */
   [class*="7KE1Ra_menu"],
   [class*="_menu"]:has([class*="modelName"]) {
-    min-width: calc(100vw - 48px) !important;
-    max-width: calc(100vw - 48px) !important;
+    left: 0 !important;
+    right: auto !important;
+    width: calc(100vw - 32px) !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 32px) !important;
   }
 
   /* 工具调用执行结果/代码/JSON：窄屏可横向滑动。details 抽屉宽 min(92%,420px)
@@ -491,6 +496,48 @@ function installStatsLine(ctx: ClientContext): void {
   }, 'dshb-mobile: stats line')
 }
 
+/**
+ * 模型选择弹窗（dsh-client-ui-model-selection）上游是 `right:0` 贴触发按钮右缘的
+ * 绝对定位；触发按钮在 composer 左侧时，近全宽菜单会向屏幕左侧溢出。这里在窄屏下
+ * 用触发按钮的视口坐标把菜单重定位为左右各留 8px、向上展开的浮层。
+ */
+function installModelMenuPosition(ctx: ClientContext): void {
+  ctx.effect(() => {
+    const narrow = window.matchMedia(NARROW_QUERY)
+    const findMenu = (): HTMLElement | null => {
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('[class*="7KE1Ra_menu"], [class*="_menu"]'))) {
+        if (el.querySelector('[class*="modelName"]') !== null) return el
+      }
+      return null
+    }
+    const sync = (): void => {
+      if (!narrow.matches) return
+      const menu = findMenu()
+      if (menu === null) return
+      const root = menu.parentElement
+      if (root === null) return
+      const rootRect = root.getBoundingClientRect()
+      const gap = 8
+      const viewport = document.documentElement.clientWidth
+      menu.style.setProperty('left', `${gap - rootRect.left}px`, 'important')
+      menu.style.setProperty('right', 'auto', 'important')
+      menu.style.setProperty('width', `${viewport - gap * 2}px`, 'important')
+      menu.style.setProperty('min-width', '0', 'important')
+      menu.style.setProperty('max-width', 'none', 'important')
+      menu.style.setProperty('max-height', `${Math.max(160, rootRect.top - gap * 2)}px`, 'important')
+      menu.style.setProperty('overflow-y', 'auto', 'important')
+    }
+    sync()
+    const mo = new MutationObserver(() => requestAnimationFrame(sync))
+    mo.observe(document.documentElement, { childList: true, subtree: true })
+    narrow.addEventListener('change', sync)
+    return () => {
+      mo.disconnect()
+      narrow.removeEventListener('change', sync)
+    }
+  }, 'dshb-mobile: model menu position')
+}
+
 interface LayoutLike { toggleSidebar(): void }
 interface SlotsLike {
   inject(name: string, fn: () => unknown): unknown
@@ -573,6 +620,7 @@ export function installMobile(ctx: ClientContext): void {
   installViewport(ctx)
   installFrameMarker(ctx)
   installStatsLine(ctx)
+  installModelMenuPosition(ctx)
   const layout = (ctx as unknown as { layout?: LayoutLike }).layout
   const slots = (ctx as unknown as { slots?: SlotsLike }).slots
   if (layout && typeof layout.toggleSidebar === 'function') {
