@@ -17,7 +17,7 @@ const COLLAPSED_ATTR = 'data-sidebar-collapsed'
 
 const MOBILE_CSS = `
 @media (max-width: 1023px) and (pointer: coarse) {
-  html, body { touch-action: pan-y pinch-zoom !important; overscroll-behavior-x: none !important; }
+  html, body { touch-action: pan-y pinch-zoom !important; overscroll-behavior-x: none !important; -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important; }
 
   [${FRAME_ATTR}="frame"] {
     box-sizing: border-box !important;
@@ -180,6 +180,9 @@ const MOBILE_CSS = `
     min-width: max-content !important;
     max-width: none !important;
     overflow: visible !important;
+    /* Android Chrome TextAutosizer 按块宽计算 font boosting，max-content 行宽不一
+       导致各行字号参差；max-height 是其豁免条件，禁用放大并锁定继承字号。 */
+    max-height: 999999px !important;
   }
   [data-phase] [class*="_command_10eou_"] {
     display: inline-block;
@@ -197,6 +200,7 @@ const MOBILE_CSS = `
   [data-phase] [class*="_line_10eou_"] {
     min-width: max-content !important;
     overflow-x: visible !important;
+    max-height: 999999px !important;
   }
 
   /* 复制按钮周边也允许纵向页面手势，避免代码/总结区域形成触控死区。 */
