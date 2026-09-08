@@ -16,7 +16,10 @@ const FRAME_ATTR = 'data-dshb-mobile'
 const COLLAPSED_ATTR = 'data-sidebar-collapsed'
 
 const MOBILE_CSS = `
-@media (max-width: 1023px) and (pointer: coarse) {
+/* 仅按视口宽度判定，不绑定 pointer:coarse —— 触屏笔记本 / DevTools 响应式模式
+   常报 pointer:fine，绑定 coarse 会让全部窄屏修复失效。抽屉相关选择器都挂在
+   [data-dshb-mobile] 标记上，标记由 JS 的 coarse 判定添加，故放宽 CSS 不会误开抽屉。 */
+@media (max-width: 1023px) {
   html, body { touch-action: pan-y pinch-zoom !important; overscroll-behavior-x: none !important; -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important; }
 
   [${FRAME_ATTR}="frame"] {
@@ -100,9 +103,11 @@ const MOBILE_CSS = `
   }
 
   /* 模型选择器（dsh-client-ui-model-selection，CSS 模块前缀 7KE1Ra_）：
-     列表内模型名/描述默认 ellipsis 截断，改换行完整显示。 */
+     列表内模型名/描述默认 ellipsis 截断，改换行完整显示。除当前 hash 外，
+     再加 modelName 语义匹配，防止上游升级换 hash 后规则失效。 */
   [class*="7KE1Ra_modelName"],
-  [class*="7KE1Ra_description"] {
+  [class*="7KE1Ra_description"],
+  [class*="modelName"] {
     white-space: normal !important;
     overflow-wrap: anywhere;
     text-overflow: clip !important;
@@ -110,9 +115,10 @@ const MOBILE_CSS = `
   }
 
   /* 模型选择器弹窗：上游 width:max-content + 换行后内容变窄塌到 min-width(240px)，
-     移动端撑到近全宽（100vw-48px）给长名留出空间；菜单 right:0 贴根右缘，
-     移动端 composer 近全宽，左缘余 48px 不会溢出屏幕。 */
-  [class*="7KE1Ra_menu"] {
+     窄屏撑到近全宽（100vw-48px）给长名留出空间；:has(modelName) 为 hash 无关匹配，
+     菜单 right:0 贴根右缘、移动端 composer 近全宽，左缘余 48px 不会溢出屏幕。 */
+  [class*="7KE1Ra_menu"],
+  [class*="_menu"]:has([class*="modelName"]) {
     min-width: calc(100vw - 48px) !important;
     max-width: calc(100vw - 48px) !important;
   }
