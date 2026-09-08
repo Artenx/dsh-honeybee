@@ -506,7 +506,7 @@ function installStatsLine(ctx: ClientContext): void {
 /** 浮层 fixed 定位需管理的内联样式键，清理时逐一移除以交还上游 CSS。 */
 const SHEET_PROPS = [
   'position', 'width', 'left', 'right', 'top', 'bottom',
-  'min-width', 'max-width', 'max-height', 'overflow-y',
+  'min-width', 'max-width', 'max-height', 'overflow-y', 'box-sizing',
 ] as const
 
 /**
@@ -539,6 +539,7 @@ function positionFixedSheet(
   }
   top = Math.max(margin, top)
   el.style.setProperty('position', 'fixed', 'important')
+  el.style.setProperty('box-sizing', 'border-box', 'important')
   el.style.setProperty('width', `${width}px`, 'important')
   el.style.setProperty('left', `${left}px`, 'important')
   el.style.setProperty('right', 'auto', 'important')
@@ -552,14 +553,20 @@ function positionFixedSheet(
 
 /**
  * 一级 pane（Model/Effort 单元格小菜单）紧凑浮层：右缘对齐触发按钮右缘
- * （钳制在视口内 8px 起）、向上展开、空间不足向下展开；宽度跟随内容
+ * （面板右缘 x = 按钮右缘 x，钳制在视口内 8px 起，避免宽面板超出屏幕左缘时
+ * 被甩到左边贴边），向上展开、空间不足向下展开；宽度跟随内容
  * （max-content，封顶 min(420, vw-16)），避免小菜单被全宽 sheet 拉远到
  * 屏幕中间。测量与定位在同一任务内同步完成，无闪烁。
  */
-function positionCompactPanel(el: HTMLElement, rootRect: DOMRect): void {
+function positionCompactPanel(el: HTMLElement, root: HTMLElement, rootRect: DOMRect): void {
   const margin = 8
   const vw = window.innerWidth
+  // 锚定触发按钮本身（root 包着按钮，取按钮 rect 更准；换 hash 后按语义类找）
+  const trigger =
+    root.querySelector<HTMLElement>('[class*="7KE1Ra_trigger"], [class*="_trigger"]') ?? root
+  const anchorRect = trigger === root ? rootRect : trigger.getBoundingClientRect()
   el.style.setProperty('position', 'fixed', 'important')
+  el.style.setProperty('box-sizing', 'border-box', 'important')
   el.style.setProperty('left', '0', 'important')
   el.style.setProperty('top', '0', 'important')
   el.style.setProperty('right', 'auto', 'important')
@@ -571,13 +578,30 @@ function positionCompactPanel(el: HTMLElement, rootRect: DOMRect): void {
   el.style.setProperty('overflow-y', 'visible', 'important')
   const w = el.offsetWidth
   const h = el.offsetHeight
-  const rightEdge = Math.max(margin, Math.min(vw - margin, vw - rootRect.right))
-  const expandUp = rootRect.top - margin - h >= margin
-  const top = Math.max(margin, expandUp ? rootRect.top - margin - h : rootRect.bottom + margin)
-  const left = Math.max(margin, rightEdge - w)
+  const panelRightX = Math.min(anchorRect.right, vw - margin)
+  const expandUp = anchorRect.top - margin - h >= margin
+  const top = Math.max(margin, expandUp ? anchorRect.top - margin - h : anchorRect.bottom + margin)
+  const left = Math.max(margin, panelRightX - w)
   el.style.setProperty('left', `${left}px`, 'important')
   el.style.setProperty('top', `${top}px`, 'important')
   el.style.setProperty('width', `${w}px`, 'important')
+}
+
+/**
+ * 模型名多为纯连字符词（DeepSeek-V4-Flash-Vision-Exp）；white-space:normal 下
+ * 每个 "-" 都是软断点，名字一旦超列宽就在第一个连字符处断行（"换行太早"）。
+ * 把 "-" 就地换成不换行连字符 U+2011：放得下就整行显示，真超宽时仍由
+ * overflow-wrap:break-word 兜底任意断。只改文本节点 data、不换节点，
+ * 避免与 React 文本协调冲突；React 重渲染重置文本后由 MutationObserver
+ * 重新应用（幂等：换过之后不再有 "-"）。
+ */
+function applyNonBreakingHyphens(menu: HTMLElement): void {
+  for (const el of Array.from(menu.querySelectorAll<HTMLElement>('[class*="modelName"]'))) {
+    const tn = el.firstChild
+    if (tn && tn.nodeType === Node.TEXT_NODE && tn.nodeValue !== null && tn.nodeValue.includes('-')) {
+      tn.nodeValue = tn.nodeValue.replace(/-/g, '\u2011')
+    }
+  }
 }
 
 /** 清除 positionFixedSheet 写入的内联样式，交还上游/移动端 CSS 兜底。 */
@@ -620,8 +644,9 @@ function installModelMenuPosition(ctx: ClientContext): void {
       const rootRect = root.getBoundingClientRect()
       if (menu.querySelector('[class*="modelName"]')) {
         positionFixedSheet(menu, rootRect, Number.POSITIVE_INFINITY, 0.45)
+        applyNonBreakingHyphens(menu)
       } else {
-        positionCompactPanel(menu, rootRect)
+        positionCompactPanel(menu, root, rootRect)
       }
     }
     sync()
