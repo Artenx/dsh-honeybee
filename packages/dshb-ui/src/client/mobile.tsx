@@ -99,6 +99,16 @@ const MOBILE_CSS = `
     overflow-wrap: anywhere;
   }
 
+  /* 模型选择器（dsh-client-ui-model-selection，CSS 模块前缀 7KE1Ra_）：
+     列表内模型名/描述默认 ellipsis 截断，改换行完整显示。 */
+  [class*="7KE1Ra_modelName"],
+  [class*="7KE1Ra_description"] {
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    text-overflow: clip !important;
+    overflow: visible !important;
+  }
+
   /* 工具调用执行结果/代码/JSON：窄屏可横向滑动。details 抽屉宽 min(92%,420px)
      较窄，命令行输出/JSON 长行溢出被外层 overflow:hidden 裁剪看不到。命令行输出
      改 white-space:pre（保持原格式不折行，像终端）+ overflow-x:auto 横向滑动；
