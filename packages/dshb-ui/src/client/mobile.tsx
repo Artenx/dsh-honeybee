@@ -117,8 +117,9 @@ const MOBILE_CSS = `
     overflow: visible !important;
   }
 
-  /* 模型选择器弹窗：上游 right:0 贴触发按钮右缘，触发按钮在 composer 左侧时近全宽
-     会向左溢出屏幕。改为从触发按钮左缘向右展开、宽度收进视口（JS 按视口坐标精修）。 */
+  /* 模型选择器弹窗：JS（installModelMenuPosition）在窄屏下改为 position:fixed
+     视口级浮层（fixed 不受祖先 overflow 裁剪），这里仅做静态兜底（JS 未生效时
+     仍从触发按钮左缘向右展开、宽度收进视口）。 */
   [class*="7KE1Ra_menu"],
   [class*="_menu"]:has([class*="modelName"]) {
     left: 0 !important;
@@ -126,6 +127,8 @@ const MOBILE_CSS = `
     width: calc(100vw - 32px) !important;
     min-width: 0 !important;
     max-width: calc(100vw - 32px) !important;
+    overflow-y: auto !important;
+    max-height: calc(100vh - 120px) !important;
   }
 
   /* 工具调用执行结果/代码/JSON：窄屏可横向滑动。details 抽屉宽 min(92%,420px)
@@ -498,8 +501,10 @@ function installStatsLine(ctx: ClientContext): void {
 
 /**
  * 模型选择弹窗（dsh-client-ui-model-selection）上游是 `right:0` 贴触发按钮右缘的
- * 绝对定位；触发按钮在 composer 左侧时，近全宽菜单会向屏幕左侧溢出。这里在窄屏下
- * 用触发按钮的视口坐标把菜单重定位为左右各留 8px、向上展开的浮层。
+ * 绝对定位；触发按钮在 composer 左侧时，近全宽菜单会向屏幕左侧溢出。且菜单挂在
+ * composer 内部，任何带 overflow 裁剪的祖先都会截断它。窄屏下改为 position:fixed
+ * 视口级浮层（fixed 不受祖先 overflow 裁剪），用触发按钮的视口坐标定位为
+ * 左右各留 8px、向上展开。
  */
 function installModelMenuPosition(ctx: ClientContext): void {
   ctx.effect(() => {
@@ -519,7 +524,10 @@ function installModelMenuPosition(ctx: ClientContext): void {
       const rootRect = root.getBoundingClientRect()
       const gap = 8
       const viewport = document.documentElement.clientWidth
-      menu.style.setProperty('left', `${gap - rootRect.left}px`, 'important')
+      menu.style.setProperty('position', 'fixed', 'important')
+      menu.style.setProperty('top', 'auto', 'important')
+      menu.style.setProperty('bottom', `${window.innerHeight - rootRect.top + gap}px`, 'important')
+      menu.style.setProperty('left', `${gap}px`, 'important')
       menu.style.setProperty('right', 'auto', 'important')
       menu.style.setProperty('width', `${viewport - gap * 2}px`, 'important')
       menu.style.setProperty('min-width', '0', 'important')
@@ -531,11 +539,57 @@ function installModelMenuPosition(ctx: ClientContext): void {
     const mo = new MutationObserver(() => requestAnimationFrame(sync))
     mo.observe(document.documentElement, { childList: true, subtree: true })
     narrow.addEventListener('change', sync)
+    window.addEventListener('resize', sync)
+    window.addEventListener('scroll', sync, true)
     return () => {
       mo.disconnect()
       narrow.removeEventListener('change', sync)
+      window.removeEventListener('resize', sync)
+      window.removeEventListener('scroll', sync, true)
     }
   }, 'dshb-mobile: model menu position')
+}
+
+/**
+ * 上下文用量弹窗（ContextMeter .JObwrW_panel，dsh-client-ui-conversation）上游是
+ * `position:absolute; bottom:calc(100%+8px); right:0` 挂在 .JObwrW_root 内；面板向上
+ * 展开超出统计行/输入框范围时，被任何 overflow 裁剪祖先截断。窄屏下同样改为
+ * position:fixed 视口级浮层，锚定触发元素（.JObwrW_root）视口坐标向上展开。
+ */
+function installContextPanelPosition(ctx: ClientContext): void {
+  ctx.effect(() => {
+    const narrow = window.matchMedia(NARROW_QUERY)
+    const sync = (): void => {
+      if (!narrow.matches) return
+      const panels = document.querySelectorAll<HTMLElement>('[class*="JObwrW_panel"]')
+      for (const panel of Array.from(panels)) {
+        const root = panel.parentElement
+        if (root === null || !root.className.includes('JObwrW_root')) continue
+        const rootRect = root.getBoundingClientRect()
+        if (rootRect.width === 0 && rootRect.height === 0) continue
+        const gap = 8
+        panel.style.setProperty('position', 'fixed', 'important')
+        panel.style.setProperty('top', 'auto', 'important')
+        panel.style.setProperty('bottom', `${window.innerHeight - rootRect.top + gap}px`, 'important')
+        panel.style.setProperty('left', 'auto', 'important')
+        panel.style.setProperty('right', `${Math.max(gap, window.innerWidth - rootRect.right)}px`, 'important')
+        panel.style.setProperty('max-height', `${Math.max(160, rootRect.top - gap * 2)}px`, 'important')
+        panel.style.setProperty('overflow-y', 'auto', 'important')
+      }
+    }
+    sync()
+    const mo = new MutationObserver(() => requestAnimationFrame(sync))
+    mo.observe(document.documentElement, { childList: true, subtree: true })
+    narrow.addEventListener('change', sync)
+    window.addEventListener('resize', sync)
+    window.addEventListener('scroll', sync, true)
+    return () => {
+      mo.disconnect()
+      narrow.removeEventListener('change', sync)
+      window.removeEventListener('resize', sync)
+      window.removeEventListener('scroll', sync, true)
+    }
+  }, 'dshb-mobile: context panel position')
 }
 
 interface LayoutLike { toggleSidebar(): void }
@@ -621,6 +675,7 @@ export function installMobile(ctx: ClientContext): void {
   installFrameMarker(ctx)
   installStatsLine(ctx)
   installModelMenuPosition(ctx)
+  installContextPanelPosition(ctx)
   const layout = (ctx as unknown as { layout?: LayoutLike }).layout
   const slots = (ctx as unknown as { slots?: SlotsLike }).slots
   if (layout && typeof layout.toggleSidebar === 'function') {

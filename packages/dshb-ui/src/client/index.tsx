@@ -591,19 +591,17 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
 export function apply(ctx: ClientContext): void {
   const globalStyle = document.createElement('style')
   globalStyle.textContent = `
+    /* 仅在页面根阻止整页横向滚动。绝对定位浮层（模型菜单、上下文统计面板等）
+       依赖祖先 overflow:visible 才能展开到输入框之外，禁止给任何中间祖先加裁剪。 */
     html, body { overflow-x: hidden !important; max-width: 100vw !important }
     * { min-width: 0 !important; }
     table { display: block !important; overflow-x: auto !important; }
     img, video, canvas, svg { max-width: 100% !important; height: auto !important }
     pre, code { white-space: pre-wrap !important; word-break: break-all !important }
     input, select, textarea { max-width: 100% !important; }
-    [class*="content"], [class*="main"], [class*="panel"], [class*="page"], [class*="wrapper"], [class*="container"] { max-width: 100% !important; overflow-x: hidden !important }
-    body > div { max-width: 100vw !important; overflow-x: hidden !important; }
-    body > div > div { max-width: 100vw !important; overflow-x: hidden !important; }
-    /* 上下文用量弹窗 .JObwrW_panel（ContextMeter）：第 600 行 [class*="panel"] 全局
-       max-width:100%!important 误伤本弹窗，使其从 264px 塌缩成竖条；桌面端同样解除
-       （移动端见 mobile.tsx）。JObwrW_ 为上游 CSS 模块 hash，上游升级需同步。 */
-    .JObwrW_panel { max-width: none !important; overflow-x: visible !important; }
+    /* 上下文用量弹窗 .JObwrW_panel（ContextMeter）：解除宽度塌缩并允许溢出显示。
+       JObwrW_ 为上游 CSS 模块 hash，上游升级需同步。 */
+    .JObwrW_panel { max-width: none !important; overflow: visible !important; }
     /* 子代理切换弹窗（dsh-client-ui-subagent）：menu 是 flex column + max-height + overflow:auto，
        position:fixed 经 portal 渲染。子代理很多时 flex 压缩 node（flex-shrink:1 默认），
        文字挤压且不触发滚动。给 node flex-shrink:0 让 menu 整体 overflow:auto 滚动。 */
@@ -614,21 +612,6 @@ export function apply(ctx: ClientContext): void {
     [class*="Ra_menu"] { max-width: 720px !important; width: auto !important; }
   `
    document.head.appendChild(globalStyle)
-
-   const fixOverflow = () => {
-    const vw = document.documentElement.clientWidth
-    const walk = (el: Element) => {
-      if (!(el instanceof HTMLElement)) return
-      if (el.scrollWidth > vw && el !== document.documentElement && el !== document.body) {
-        el.style.maxWidth = '100vw'
-        el.style.overflowX = 'hidden'
-      }
-      for (const child of el.children) walk(child)
-    }
-    walk(document.documentElement)
-  }
-  fixOverflow()
-  new MutationObserver(() => requestAnimationFrame(fixOverflow)).observe(document.body, { childList: true, subtree: true })
 
   installMobile(ctx)
 
