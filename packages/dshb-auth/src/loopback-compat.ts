@@ -1,7 +1,8 @@
 const MOBILE_CSS = `
 <style id="dshb-mobile-fix">
 @media (max-width:768px),(display-mode:standalone),(max-device-width:860px){
-._command_10eou_122{overflow-x:auto;white-space:pre;text-overflow:unset;-webkit-overflow-scrolling:touch}
+._command_10eou_122{min-width:max-content;max-width:none;overflow:visible;white-space:pre;text-overflow:unset}
+._prompt_10eou_76,._promptLine_10eou_84{min-width:max-content}
 ._output_10eou_162{overflow-x:auto;overflow-y:auto;-webkit-overflow-scrolling:touch}
 ._root_4qrvp_1{width:100%;min-width:0;overflow-x:auto}
 ._container_4qrvp_30{width:auto;min-width:100%;max-width:none}
@@ -9,7 +10,7 @@ const MOBILE_CSS = `
 ._body_biesw_72{overflow-x:auto;-webkit-overflow-scrolling:touch}
 ._body_srovd_36{overflow-x:auto;-webkit-overflow-scrolling:touch}
 ._body_s66q0_51{overflow-x:auto;-webkit-overflow-scrolling:touch}
-._line_10eou_186{min-width:max-content}
+._line_10eou_186{min-width:max-content;overflow-x:visible}
 ._line_biesw_81{min-width:max-content}
 ._line_srovd_44{min-width:max-content}
 ._line_s66q0_60{min-width:max-content}
