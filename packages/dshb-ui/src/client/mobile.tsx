@@ -88,8 +88,16 @@ const MOBILE_CSS = `
   /* footer 容器各项间距 16px 偏松 */
   [data-phase] [class*="_root"][class*="osXY9a"] { gap: 8px !important; }
   /* footer 统计行窄屏可横向滑动看全，不溢出页面 */
-  [data-phase] [class*="_actions"] { max-width: 100% !important; overflow-x: auto !important; scrollbar-width: none; touch-action: pan-x !important; }
+  [data-phase] [class*="_actions"] { max-width: 100% !important; overflow-x: auto !important; scrollbar-width: none; touch-action: pan-x pan-y !important; }
   [data-phase] [class*="_actions"]::-webkit-scrollbar { display: none; }
+
+  /* 模型切换菜单：名称完整展示，长名称在菜单项内换行。 */
+  [class*="_submenu_"] [class*="_itemLabel_"] {
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+  }
 
   /* 工具调用执行结果/代码/JSON：窄屏可横向滑动。details 抽屉宽 min(92%,420px)
      较窄，命令行输出/JSON 长行溢出被外层 overflow:hidden 裁剪看不到。命令行输出
@@ -104,7 +112,7 @@ const MOBILE_CSS = `
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    touch-action: pan-x !important;
+    touch-action: pan-x pan-y !important;
   }
   [data-phase] [class*="resultBlockText"]::-webkit-scrollbar,
   [data-phase] [class*="payload"]::-webkit-scrollbar,
@@ -122,7 +130,7 @@ const MOBILE_CSS = `
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    touch-action: pan-x !important;
+    touch-action: pan-x pan-y !important;
   }
   [data-phase] [class*="jsonPayload"]::-webkit-scrollbar,
   [data-phase] [class*="jsonPreview"]::-webkit-scrollbar,
@@ -145,7 +153,7 @@ const MOBILE_CSS = `
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    touch-action: pan-x !important;
+    touch-action: pan-x pan-y !important;
   }
   [data-phase] [class*="bodyScroll"]::-webkit-scrollbar,
   [data-phase] [class*="ioCard"]::-webkit-scrollbar,
@@ -158,15 +166,42 @@ const MOBILE_CSS = `
      hidden；_line_10eou_186（white-space:pre 不折行）也被设 hidden，672px 裁到
      300px 无法滑动。用 !important 覆盖内联样式：_output 恢复 auto 可滑，
      _line 改 visible 让行内容溢出到 _output 触发滚动。 */
-  [data-phase] [class*="terminal"] [class*="_output_"] {
+  [data-phase] [class*="_header_10eou_"] {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    overscroll-behavior: contain;
+    touch-action: pan-x pan-y !important;
+  }
+  [data-phase] [class*="_command_10eou_"] {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    text-overflow: clip !important;
+    white-space: pre !important;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y !important;
+  }
+  [data-phase] [class*="_output_10eou_"] {
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
+    touch-action: pan-x pan-y !important;
   }
-  [data-phase] [class*="terminal"] [class*="_output_"]::-webkit-scrollbar { display: none !important; }
-  [data-phase] [class*="terminal"] [class*="_line_"] {
+  [data-phase] [class*="_command_10eou_"]::-webkit-scrollbar,
+  [data-phase] [class*="_output_10eou_"]::-webkit-scrollbar { display: none !important; }
+  [data-phase] [class*="_line_10eou_"] {
+    min-width: max-content !important;
     overflow-x: visible !important;
   }
+
+  /* 复制按钮周边也允许纵向页面手势，避免代码/总结区域形成触控死区。 */
+  [data-phase] [class*="_copyButton_"] { touch-action: manipulation !important; }
+  [data-phase] [class*="_copyAnchor_"],
+  [data-phase] [class*="_body_1ye18_"],
+  [data-phase] [class*="_root_4qrvp_"] { touch-action: pan-x pan-y !important; }
 
   /* 上下文用量弹窗（ContextMeter .JObwrW_panel）：上游 dsh-client-ui-trajectory 的
      [class*="panel"] 全局规则给它加了 max-width:100%!important，命中本弹窗，使宽度
