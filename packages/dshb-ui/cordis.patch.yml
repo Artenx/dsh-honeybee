@@ -1,6 +1,3 @@
 - insert:
-    - id: dshb-directory-picker
-      name: dshb-ui/picker
-- insert:
     - id: dshb-ui
       name: dshb-ui

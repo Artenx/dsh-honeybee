@@ -17,7 +17,7 @@ const BUNDLE_ID = 'dshb-ui'
 
 export default defineConfig([
   {
-    entry: ['src/index.ts', 'src/picker.ts'],
+    entry: ['src/index.ts', 'src/decorate-picker.ts'],
     outDir: 'lib',
     format: ['esm'],
     dts: true,

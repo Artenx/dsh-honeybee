@@ -7,7 +7,7 @@
   "exports": {
     ".": "./lib/index.js",
     "./startup": "./lib/startup.js",
-    "./webserver": "./lib/webserver.js",
+    "./decorate-webserver": "./lib/decorate-webserver.js",
     "./loopback": "./lib/loopback.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json"

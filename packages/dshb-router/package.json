@@ -6,9 +6,9 @@
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
-    "./fs": "./lib/router-fs.js",
-    "./subprocess": "./lib/router-subprocess.js",
-    "./shell": "./lib/router-shell.js",
+    "./fs": "./lib/decorate-fs.js",
+    "./subprocess": "./lib/decorate-subprocess.js",
+    "./shell": "./lib/decorate-shell.js",
     "./resolve": "./lib/resolve.js",
     "./types": "./lib/types.js",
     "./package.json": "./package.json"

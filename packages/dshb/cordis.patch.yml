@@ -5,37 +5,14 @@
     - id: dshb-web-startup
       name: dshb-auth/startup
 - insert:
-    - id: dshb-webserver
-      name: dshb-auth/webserver
-      inject:
-        - webStartup
-      config:
-        host: !!js ctx.webStartup.host ?? '127.0.0.1'
-        port: !!js ctx.webStartup.port ?? 3080
-- insert:
     - id: dshb-core
       name: dshb-core
 - insert:
     - id: dshb-router
       name: dshb-router
 - insert:
-    - id: dshb-fs
-      name: dshb-router/fs
-- insert:
-    - id: dshb-subprocess
-      name: dshb-router/subprocess
-- insert:
-    - id: dshb-bash-sandbox
-      name: dshb-router/shell
-      disabled: !!js process.platform === 'win32'
-      config:
-        timeoutMs: 60000
-- insert:
     - id: dshb-exec-ssh
       name: dshb-exec-ssh
-- insert:
-    - id: dshb-directory-picker
-      name: dshb-ui/picker
 - insert:
     - id: dshb-ui
       name: dshb-ui

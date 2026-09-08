@@ -15,7 +15,7 @@ const BUNDLE_ID = 'dshb-auth'
 
 export default defineConfig([
   {
-    entry: ['src/index.ts', 'src/startup.ts', 'src/webserver.ts', 'src/loopback.ts', 'src/loopback-compat.ts', 'src/routes.ts', 'src/credentials.ts', 'src/session.ts', 'src/ratelimit.ts', 'src/gate.ts', 'src/login-page.ts'],
+    entry: ['src/index.ts', 'src/startup.ts', 'src/decorate-webserver.ts', 'src/loopback.ts', 'src/loopback-compat.ts', 'src/routes.ts', 'src/credentials.ts', 'src/session.ts', 'src/ratelimit.ts', 'src/gate.ts', 'src/login-page.ts'],
     outDir: 'lib',
     format: ['esm'],
     dts: true,
