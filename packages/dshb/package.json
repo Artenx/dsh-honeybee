@@ -1,6 +1,6 @@
 {
   "name": "@artenx/dshb",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "DSH-HoneyBee \u805a\u5408\u5305\u2014\u2014\u4e00\u6761\u547d\u4ee4\u5b89\u88c5\u5168\u90e8 DSHB \u63d2\u4ef6",
   "files": [
     "cordis.patch.yml"

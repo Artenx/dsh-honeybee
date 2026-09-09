@@ -1,6 +1,6 @@
 {
   "name": "dshb-core",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "DSHB \u8282\u70b9\u6ce8\u518c\u8868\uff08ctx.nodeRegistry\uff09\u4e0e\u51ed\u636e\u6258\u7ba1",
   "type": "module",
   "main": "lib/index.js",

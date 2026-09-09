@@ -1,6 +1,6 @@
 {
   "name": "dshb-ui",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "DSHB \u8282\u70b9\u611f\u77e5\u6dfb\u52a0\u5de5\u4f5c\u533a occupant \u4e0e\u8282\u70b9\u7ba1\u7406\u8bbe\u7f6e\u9875",
   "type": "module",
   "main": "lib/index.js",

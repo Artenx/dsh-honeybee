@@ -1,6 +1,6 @@
 {
   "name": "dshb-auth",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "DSHB \u7ba1\u7406\u7aef\u8ba4\u8bc1\u4e0e\u7f51\u7edc\u66b4\u9732\uff08\u767b\u5f55\u9875 / \u4f1a\u8bdd Cookie / startup \u66ff\u6362\uff09",
   "type": "module",
   "main": "lib/index.js",
