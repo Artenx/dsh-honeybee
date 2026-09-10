@@ -33,13 +33,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.5-rc.1",
     "dshb-router": "workspace:*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-shell": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-subprocess": "^0.1.1-rc.2"
+    "@deepseek-ai/dsh-shell": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-subprocess": "^0.1.5-rc.1"
   },
   "types": "lib/index.d.ts"
 }

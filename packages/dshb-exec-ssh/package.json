@@ -44,10 +44,10 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-fs": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-sandbox": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-shell": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-subprocess": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-fs": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-sandbox": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-shell": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-subprocess": "^0.1.5-rc.1",
     "@types/ssh2": "^1.15.6"
   },
   "types": "lib/index.d.ts"

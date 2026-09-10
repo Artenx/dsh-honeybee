@@ -197,22 +197,22 @@ const MOBILE_CSS = `
   [data-phase] [class*="terminalBody"]::-webkit-scrollbar,
   [data-phase] [class*="codeBody"]::-webkit-scrollbar { display: none !important; }
 
-  /* 终端组件（dsh-web-frontend，CSS 模块前缀 10eou_）：多行命令上游按行渲染成
+  /* 终端组件（dsh-web-frontend，CSS 模块前缀 1gdtu_）：多行命令上游按行渲染成
      多个 _promptLine_>_command_ 元素，行级不能各自设 overflow（会变成每行独立
-     滚动）。唯一横向滚动容器是公共祖先 _header_10eou_38（本就 overflow-y:auto）：
+     滚动）。唯一横向滚动容器是公共祖先 _header_1gdtu_32（本就 overflow-y:auto）：
      行链 _prompt_/_promptLine_/_command_ 全部撑到 max-content 且 overflow 可见，
      长行内容溢出传入 _header_ 的 scrollWidth，所有行随 _header_ 同步滚动。
-     _output_10eou_162（输出区）同理以其为唯一容器，_line_ 撑宽不裁剪。 */
-  [data-phase] [class*="_header_10eou_"] {
+     _output_1gdtu_156（输出区）同理以其为唯一容器，_line_ 撑宽不裁剪。 */
+  [data-phase] [class*="_header_1gdtu_"] {
     min-width: 0 !important;
     max-width: 100% !important;
     overflow-x: auto !important;
     overscroll-behavior-x: contain;
     touch-action: pan-x pan-y !important;
   }
-  [data-phase] [class*="_prompt_10eou_"],
-  [data-phase] [class*="_promptLine_10eou_"],
-  [data-phase] [class*="_command_10eou_"] {
+  [data-phase] [class*="_prompt_1gdtu_"],
+  [data-phase] [class*="_promptLine_1gdtu_"],
+  [data-phase] [class*="_command_1gdtu_"] {
     min-width: max-content !important;
     max-width: none !important;
     overflow: visible !important;
@@ -220,20 +220,20 @@ const MOBILE_CSS = `
        导致各行字号参差；max-height 是其豁免条件，禁用放大并锁定继承字号。 */
     max-height: 999999px !important;
   }
-  [data-phase] [class*="_command_10eou_"] {
+  [data-phase] [class*="_command_1gdtu_"] {
     display: inline-block;
     text-overflow: clip !important;
     white-space: pre !important;
   }
-  [data-phase] [class*="_copyButton_10eou_"] { position: sticky !important; right: 0; }
-  [data-phase] [class*="_output_10eou_"] {
+  [data-phase] [class*="_copyButton_1gdtu_"] { position: sticky !important; right: 0; }
+  [data-phase] [class*="_output_1gdtu_"] {
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     touch-action: pan-x pan-y !important;
   }
-  [data-phase] [class*="_output_10eou_"]::-webkit-scrollbar { display: none !important; }
-  [data-phase] [class*="_line_10eou_"] {
+  [data-phase] [class*="_output_1gdtu_"]::-webkit-scrollbar { display: none !important; }
+  [data-phase] [class*="_line_1gdtu_"] {
     min-width: max-content !important;
     overflow-x: visible !important;
     max-height: 999999px !important;

@@ -610,32 +610,32 @@ export function apply(ctx: ClientContext): void {
        长模型名单行放不下被 ellipsis 截断。放宽到 720px 让模型名单行完整显示。
        [class*="Ra_menu"] 精确匹配模型弹窗，避免误伤其他菜单。Ra_ 为 hash，上游升级需同步。 */
     [class*="Ra_menu"] { max-width: 720px !important; width: auto !important; }
-    /* 终端组件（dsh-web-frontend，CSS 模块前缀 10eou_）桌面端修复：上游 _command_ 默认
+    /* 终端组件（dsh-web-frontend，CSS 模块前缀 1gdtu_）桌面端修复：上游 _command_ 默认
        overflow:hidden+text-overflow:ellipsis，LLM 调 bash 的长命令在桌面端被省略号
        截断、看不到完整内容（输出区 _output_ 本就可横向滚动，唯命令区不行）。宽屏与
        mobile.tsx 的窄屏规则等效：行链 _prompt_/_promptLine_/_command_ 撑到 max-content、
        overflow 可见，长行溢出传入 _header_（本就 overflow-y:auto）的 scrollWidth，整个
-       命令区随 _header_ 横向滚动；copyButton 贴右缘保持可见。与窄屏规则共用 10eou_
+       命令区随 _header_ 横向滚动；copyButton 贴右缘保持可见。与窄屏规则共用 1gdtu_
        hash，上游升级需同步。桌面保留可见滚动条（不隐藏、不加 touch-action）。 */
     @media (min-width: 1024px) {
-      [data-phase] [class*="_header_10eou_"] {
+      [data-phase] [class*="_header_1gdtu_"] {
         min-width: 0 !important;
         max-width: 100% !important;
         overflow-x: auto !important;
       }
-      [data-phase] [class*="_prompt_10eou_"],
-      [data-phase] [class*="_promptLine_10eou_"],
-      [data-phase] [class*="_command_10eou_"] {
+      [data-phase] [class*="_prompt_1gdtu_"],
+      [data-phase] [class*="_promptLine_1gdtu_"],
+      [data-phase] [class*="_command_1gdtu_"] {
         min-width: max-content !important;
         max-width: none !important;
         overflow: visible !important;
       }
-      [data-phase] [class*="_command_10eou_"] {
+      [data-phase] [class*="_command_1gdtu_"] {
         display: inline-block;
         text-overflow: clip !important;
         white-space: pre !important;
       }
-      [data-phase] [class*="_copyButton_10eou_"] { position: sticky !important; right: 0; top: 0; }
+      [data-phase] [class*="_copyButton_1gdtu_"] { position: sticky !important; right: 0; top: 0; }
     }
   `
    document.head.appendChild(globalStyle)
