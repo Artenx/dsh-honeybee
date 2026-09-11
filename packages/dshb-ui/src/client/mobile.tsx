@@ -680,13 +680,20 @@ function installModelMenuPosition(ctx: ClientContext): void {
     const sync = (): void => {
       const menus = findMenus()
       if (!narrow.matches) {
-        for (const menu of menus) {
-          clearFixedSheet(menu)
-          clearModelNameFit(menu)
+        // Desktop: upstream place() owns menu positioning via inline left/top.
+        // Only clear DSHB's !important overrides when transitioning FROM narrow
+        // mode (fittedMenus non-empty). Clearing on every MutationObserver tick
+        // would strip upstream's menuPos and drop the menu off-screen.
+        if (fittedMenus.length > 0) {
+          for (const menu of fittedMenus) {
+            clearFixedSheet(menu)
+            clearModelNameFit(menu)
+          }
+          fittedVw = 0
+          fittedSig = -1
+          fittedMenus = []
+          window.dispatchEvent(new Event('resize'))
         }
-        fittedVw = 0
-        fittedSig = -1
-        fittedMenus = []
         return
       }
       let vw = 0
