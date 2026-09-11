@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { basename, dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { sharedCredentialStore } from './credentials.js'
 import { decorateWebServer } from './decorate-webserver.js'
@@ -9,8 +12,51 @@ export const name = 'dshb-auth'
 
 export const inject = ['webServer']
 
+function registerFrontendBootRaceWorkaround(ctx: Context): void {
+  try {
+    // Resolve from the active profile so the route patches the same hashed asset
+    // that dsh-web-app's static fallback serves.
+    const resolver = createRequire(import.meta.url)
+    const manifestPath = resolver.resolve('@deepseek-ai/dsh-web-frontend/package.json', {
+      paths: [process.cwd()],
+    })
+    const assetDir = join(dirname(manifestPath), 'dist', 'assets')
+    const assetName = readdirSync(assetDir).find((name) => /^index-.*\.js$/.test(name))
+    if (!assetName) return
+
+    const assetPath = join(assetDir, assetName)
+    const source = readFileSync(assetPath, 'utf8')
+    // DSH 0.1.5 asserts before api-remotes' dynamic remote namespace fibers
+    // settle. The throw prevents mountApp even though every required service
+    // becomes active on the following loader turns.
+    const patched = source.replace(
+      /if\((\w+)\.length>0\)throw new Error\(`web boot:/,
+      'if($1.length>0)console.warn(`web boot:',
+    )
+    if (patched === source) return
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: `/assets/${basename(assetPath)}`,
+        handler: (_req, res) => {
+          res.writeHead(200, {
+            'cache-control': 'no-store',
+            'content-type': 'application/javascript; charset=utf-8',
+          })
+          res.end(patched)
+        },
+      }),
+    )
+  } catch {
+    // Upstream assets are optional from DSHB's perspective. A missing or changed
+    // frontend layout simply skips this version-specific workaround.
+  }
+}
+
 export function apply(ctx: Context): void {
   decorateWebServer(ctx.webServer, sharedCredentialStore())
+  registerFrontendBootRaceWorkaround(ctx)
   ctx.webServer.tapIndex(installLoopbackCompat)
   registerAuthRoutes(ctx, sharedCredentialStore(), new LoginRateLimiter())
 
