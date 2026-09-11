@@ -35,6 +35,19 @@ export function decorateWebServer(
     })
   }
 
+  // DSH 0.1.5+: the frontend-static plugin may have claimed the fallback seat
+  // *before* this decoration runs (plugin apply order is not guaranteed). The
+  // registerFallback wrap above only gates fallbacks registered later, so also
+  // wrap an already-claimed seat in place. Idempotent via the __dshbGated mark.
+  const ws = webServer as unknown as { fallback?: WebRoute['handler'] & { __dshbGated?: true } }
+  const origFallback = ws.fallback
+  if (typeof origFallback === 'function' && !origFallback.__dshbGated) {
+    const wrapped: WebRoute['handler'] & { __dshbGated?: true } = (req, res) =>
+      guarded({ kind: 'exact', path: '/', handler: origFallback }, req, res)
+    wrapped.__dshbGated = true
+    ws.fallback = wrapped
+  }
+
   function guarded(
     route: WebRoute,
     req: IncomingMessage,
@@ -76,5 +89,6 @@ export function decorateWebServer(
     webServer.register = origRegister
     webServer.registerFallback = origRegisterFallback
     webServer.registerUpgrade = origRegisterUpgrade
+    ws.fallback = origFallback
   }
 }
