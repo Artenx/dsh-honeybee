@@ -27,11 +27,11 @@ function registerFrontendBootRaceWorkaround(ctx: Context): void {
     const assetPath = join(assetDir, assetName)
     const source = readFileSync(assetPath, 'utf8')
     // DSH 0.1.5 asserts before api-remotes' dynamic remote namespace fibers
-    // settle. The throw prevents mountApp even though every required service
-    // becomes active on the following loader turns.
+    // settle. Delay the assertion so mountApp sees the complete client graph;
+    // real activation failures still throw after the bounded wait.
     const patched = source.replace(
-      /if\((\w+)\.length>0\)throw new Error\(`web boot:/,
-      'if($1.length>0)console.warn(`web boot:',
+      'await i.await(),this.assertEntriesActive(t)',
+      'await i.await(),await new Promise(r=>setTimeout(r,8000)),this.assertEntriesActive(t)',
     )
     if (patched === source) return
 
