@@ -674,6 +674,15 @@ function installModelMenuPosition(ctx: ClientContext): void {
         el.querySelector('[class*="cellLabel"], [class*="modelName"]') !== null,
       )
     }
+    const findTrigger = (menu: HTMLElement): HTMLElement | null => {
+      if (menu.id) {
+        const controlled = Array.from(document.querySelectorAll<HTMLElement>('[aria-controls]')).find(
+          (el) => el.getAttribute('aria-controls') === menu.id,
+        )
+        if (controlled) return controlled
+      }
+      return document.querySelector<HTMLElement>('[class*="7KE1Ra_trigger"][aria-expanded="true"]')
+    }
     let fittedVw = 0
     let fittedSig = -1
     let fittedMenus: HTMLElement[] = []
@@ -700,14 +709,17 @@ function installModelMenuPosition(ctx: ClientContext): void {
       let sig = 0
       const modelMenus: HTMLElement[] = []
       for (const menu of menus) {
-        const root = menu.parentElement
-        if (root === null) continue
+        // 0.1.5 renders the menu through createPortal(..., document.body), so
+        // parentElement is body rather than the trigger root. Match aria-controls
+        // to the portal menu id to find the exact trigger across multiple tabs.
+        const trigger = findTrigger(menu)
+        if (trigger === null) continue
         const rect = menu.getBoundingClientRect()
         // 跳过隐藏 tab / 未打开的菜单（0 尺寸或祖先 display:none）
         if (rect.width === 0 && rect.height === 0) continue
-        const rootRect = root.getBoundingClientRect()
+        const triggerRect = trigger.getBoundingClientRect()
         if (menu.querySelector('[class*="modelName"]')) {
-          positionFixedSheet(menu, rootRect, Number.POSITIVE_INFINITY, 0.45)
+          positionFixedSheet(menu, triggerRect, Number.POSITIVE_INFINITY, 0.45)
           applyNonBreakingHyphens(menu)
           modelMenus.push(menu)
           vw = window.innerWidth
@@ -715,7 +727,7 @@ function installModelMenuPosition(ctx: ClientContext): void {
             sig += n.textContent?.length ?? 0
           }
         } else {
-          positionCompactPanel(menu, root, rootRect)
+          positionCompactPanel(menu, trigger, triggerRect)
         }
       }
       // 菜单关闭再打开时 React 会重建菜单元素（新元素没有任何内联样式），
