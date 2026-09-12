@@ -140,7 +140,14 @@ export class SshConnection {
         fn()
       }
       client.once('ready', () => finish(() => resolve(client)))
-      client.once('error', (err: unknown) => finish(() => reject(err)))
+      client.on('error', (err: unknown) => {
+        try {
+          client.end()
+        } catch {
+          // client already torn down
+        }
+        finish(() => reject(err))
+      })
       client.connect(buildConnectConfig(this.target, this.secrets))
     })
   }

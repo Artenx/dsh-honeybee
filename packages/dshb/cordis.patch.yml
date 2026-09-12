@@ -18,4 +18,4 @@
       name: "@artenx/dshb/exec-docker"
 - insert:
     - id: dshb-ui
-      name: "@artenx/dshb/ui"
+      name: "@artenx/dshb"
