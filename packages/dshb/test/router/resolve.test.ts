@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { resolveWorld, WorldResolver } from 'dshb-router/resolve'
-import type { ExecutionWorldProvider, WorkspaceBindings, WorldRegistry } from 'dshb-router/types'
+import { resolveWorld, WorldResolver } from '../../src/router/resolve.js'
+import type { ExecutionWorldProvider, WorkspaceBindings, WorldRegistry } from '../../src/router/types.js'
 
 function mockProvider(nodeId: string, remotePath = '/remote'): ExecutionWorldProvider {
   return {

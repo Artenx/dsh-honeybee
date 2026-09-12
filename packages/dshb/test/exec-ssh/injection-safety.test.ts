@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeRunnerPayload, REMOTE_RUNNER_COMMAND, REMOTE_RUNNER_SCRIPT, isRunnerSafe } from '../src/runner.js'
+import { encodeRunnerPayload, REMOTE_RUNNER_COMMAND, REMOTE_RUNNER_SCRIPT, isRunnerSafe } from '../../src/exec-ssh/runner.js'
 
 describe('行协议注入安全（设计正确性属性 8，需求 8.1）', () => {
   it('命令串是静态字面量（固定内容，不含用户数据）', () => {

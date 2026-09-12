@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { NodeRegistry, slugifyName } from '../src/node-registry.js'
+import { NodeRegistry, slugifyName } from '../../src/core/node-registry.js'
 
 const TMP_HOME = '/tmp/dshb-test-nodes'
 const mockCredentials = {

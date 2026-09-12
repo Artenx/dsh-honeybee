@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildEngineRunner, bytesOfForTest, type DaemonRequest } from '../src/daemon-runner.js'
+import { buildEngineRunner, bytesOfForTest, type DaemonRequest } from '../../src/exec-docker/daemon-runner.js'
 
 function scripted(routes: Array<{ match: (method: string, path: string) => boolean; status: number; body?: unknown }>): { request: DaemonRequest; calls: Array<{ method: string; path: string; body?: string }> } {
   const calls: Array<{ method: string; path: string; body?: string }> = []

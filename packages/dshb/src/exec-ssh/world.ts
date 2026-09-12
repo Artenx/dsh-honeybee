@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { ExecutionWorldProvider, NodeTestReport } from 'dshb-router/types'
-import { sharedWorldResolver } from 'dshb-router/resolve'
+import type { ExecutionWorldProvider, NodeTestReport } from '../router/types.js'
+import { sharedWorldResolver } from '../router/resolve.js'
 import { SshConnectionPool } from './connection-pool.js'
 import { SshExecutor } from './executor.js'
 import { SshFileSystem } from './fs-provider.js'

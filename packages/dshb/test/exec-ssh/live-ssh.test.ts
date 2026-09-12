@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
-import { SshConnection } from '../src/connection.js'
-import { SshExecutor } from '../src/executor.js'
+import { SshConnection } from '../../src/exec-ssh/connection.js'
+import { SshExecutor } from '../../src/exec-ssh/executor.js'
 
 const SSH_HOST = '127.0.0.1'
 const SSH_PORT = 2222

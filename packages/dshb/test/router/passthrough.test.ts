@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { resolveWorld, WorldResolver } from '../src/resolve.js'
-import type { ExecutionWorldProvider, WorkspaceBindings } from '../src/types.js'
+import { resolveWorld, WorldResolver } from '../../src/router/resolve.js'
+import type { ExecutionWorldProvider, WorkspaceBindings } from '../../src/router/types.js'
 
 function mockProvider(nodeId: string): ExecutionWorldProvider {
   return {

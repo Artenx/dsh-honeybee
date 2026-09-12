@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { provisionContainer, listContainers } from '../src/provision.js'
-import type { HostCommandRunner } from '../src/docker-backend.js'
+import { provisionContainer, listContainers } from '../../src/exec-docker/provision.js'
+import type { HostCommandRunner } from '../../src/exec-docker/docker-backend.js'
 
 describe('供给失败清理属性（设计正确性属性 7，需求 5.6）', () => {
   it('拉取失败时抛错', async () => {

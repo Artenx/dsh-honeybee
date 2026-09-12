@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { sharedWorldResolver } from 'dshb-router/resolve'
+import { sharedWorldResolver } from '../router/resolve.js'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { sharedAuditLogger } from './audit.js'
 import { KnownHostsStore } from './known-hosts.js'

@@ -1,10 +1,10 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { isLoopbackAddress, isLoopbackHost, isLoopbackRequest } from '../src/loopback.js'
-import { CredentialStore, sanitizeUsername } from '../src/credentials.js'
-import { issueSession, verifySession, readCookie, SESSION_COOKIE } from '../src/session.js'
-import { LoginRateLimiter } from '../src/ratelimit.js'
+import { isLoopbackAddress, isLoopbackHost, isLoopbackRequest } from '../../src/auth/loopback.js'
+import { CredentialStore, sanitizeUsername } from '../../src/auth/credentials.js'
+import { issueSession, verifySession, readCookie, SESSION_COOKIE } from '../../src/auth/session.js'
+import { LoginRateLimiter } from '../../src/auth/ratelimit.js'
 
 const TMP_HOME = '/tmp/dshb-test-auth'
 const TMP_KEY = Buffer.from('a'.repeat(32))

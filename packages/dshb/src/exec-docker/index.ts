@@ -7,7 +7,7 @@ import { DockerClient } from './docker-client.js'
 import { registerDockerRoutes } from './docker-routes.js'
 import { listContainers, provisionContainer } from './provision.js'
 import { resolveHostRunner, type DockerNodeLike } from './host-runner.js'
-import { sharedWorldResolver } from 'dshb-router/resolve'
+import { sharedWorldResolver } from '../router/resolve.js'
 
 interface NodeRegistryLike {
   get(id: string): { id: string; type: string; ssh?: { host: string; port: number; username: string }; docker?: { containerId?: string; image?: string; mode?: 'existing' | 'managed'; resources?: { cpus?: number; memoryMB?: number } } } | undefined

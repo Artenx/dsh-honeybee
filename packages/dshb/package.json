@@ -1,13 +1,81 @@
 {
   "name": "@artenx/dshb",
-  "version": "0.0.5",
-  "description": "DSH-HoneyBee \u805a\u5408\u5305\u2014\u2014\u4e00\u6761\u547d\u4ee4\u5b89\u88c5\u5168\u90e8 DSHB \u63d2\u4ef6",
+  "version": "0.1.0",
+  "description": "DSH-HoneyBee — a cloud Agent workbench for DeepSeek Harness: drive multiple hosts and Docker containers from one web entry, with auth gate, node registry, SSH/Docker execution worlds, and a mobile-aware node-management UI.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": "./lib/index.js",
+    "./auth": "./lib/auth/index.js",
+    "./auth/startup": "./lib/auth/startup.js",
+    "./auth/decorate-webserver": "./lib/auth/decorate-webserver.js",
+    "./auth/loopback": "./lib/auth/loopback.js",
+    "./auth/loopback-compat": "./lib/auth/loopback-compat.js",
+    "./auth/routes": "./lib/auth/routes.js",
+    "./auth/credentials": "./lib/auth/credentials.js",
+    "./auth/session": "./lib/auth/session.js",
+    "./auth/ratelimit": "./lib/auth/ratelimit.js",
+    "./auth/gate": "./lib/auth/gate.js",
+    "./auth/login-page": "./lib/auth/login-page.js",
+    "./auth/webserver": "./lib/auth/webserver.js",
+    "./core": "./lib/core/index.js",
+    "./core/node-registry": "./lib/core/node-registry.js",
+    "./core/routes": "./lib/core/routes.js",
+    "./core/test": "./lib/core/test.js",
+    "./core/ssh-config": "./lib/core/ssh-config.js",
+    "./core/known-hosts": "./lib/core/known-hosts.js",
+    "./core/workspace-bindings": "./lib/core/workspace-bindings.js",
+    "./core/workspaces": "./lib/core/workspaces.js",
+    "./core/audit": "./lib/core/audit.js",
+    "./router": "./lib/router/index.js",
+    "./router/resolve": "./lib/router/resolve.js",
+    "./router/types": "./lib/router/types.js",
+    "./router/decorate-fs": "./lib/router/decorate-fs.js",
+    "./router/decorate-subprocess": "./lib/router/decorate-subprocess.js",
+    "./router/decorate-shell": "./lib/router/decorate-shell.js",
+    "./exec-ssh": "./lib/exec-ssh/index.js",
+    "./exec-ssh/connection": "./lib/exec-ssh/connection.js",
+    "./exec-ssh/connection-pool": "./lib/exec-ssh/connection-pool.js",
+    "./exec-ssh/env-scrub": "./lib/exec-ssh/env-scrub.js",
+    "./exec-ssh/runner": "./lib/exec-ssh/runner.js",
+    "./exec-ssh/executor": "./lib/exec-ssh/executor.js",
+    "./exec-ssh/fs-provider": "./lib/exec-ssh/fs-provider.js",
+    "./exec-ssh/process-provider": "./lib/exec-ssh/process-provider.js",
+    "./exec-ssh/world": "./lib/exec-ssh/world.js",
+    "./exec-docker": "./lib/exec-docker/index.js",
+    "./exec-docker/docker-client": "./lib/exec-docker/docker-client.js",
+    "./exec-docker/docker-backend": "./lib/exec-docker/docker-backend.js",
+    "./exec-docker/remote-docker-cli": "./lib/exec-docker/remote-docker-cli.js",
+    "./exec-docker/world": "./lib/exec-docker/world.js",
+    "./exec-docker/fs-provider": "./lib/exec-docker/fs-provider.js",
+    "./exec-docker/process-provider": "./lib/exec-docker/process-provider.js",
+    "./exec-docker/provision": "./lib/exec-docker/provision.js",
+    "./exec-docker/docker-routes": "./lib/exec-docker/docker-routes.js",
+    "./exec-docker/daemon-runner": "./lib/exec-docker/daemon-runner.js",
+    "./exec-docker/host-runner": "./lib/exec-docker/host-runner.js",
+    "./ui": "./lib/ui/index.js",
+    "./ui/decorate-picker": "./lib/ui/decorate-picker.js",
+    "./ui/picker": "./lib/ui/picker.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
   "files": [
+    "lib",
     "cordis.patch.yml"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
     },
     "compatibility": {
       "dshReleases": {
@@ -22,12 +90,81 @@
       "nodeVersions": ">=22.13"
     }
   },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
-    "dshb-auth": "workspace:*",
-    "dshb-core": "workspace:*",
-    "dshb-router": "workspace:*",
-    "dshb-exec-ssh": "workspace:*",
-    "dshb-exec-docker": "workspace:*",
-    "dshb-ui": "workspace:*"
+    "commander": "^15.0.0",
+    "ssh2": "^1.16.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-layout": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-cmdline": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-credentials": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-fs": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-fs-sandbox": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-host-directory-picker": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-sandbox": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-shell": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-bash-sandbox": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-subprocess": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-subprocess-local": "^0.1.5-rc.1",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-cmdline": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-credentials": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-fs": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-fs-sandbox": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-host-directory-picker": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-sandbox": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-shell": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-bash-sandbox": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-subprocess": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-subprocess-local": "^0.1.5-rc.1",
+    "@types/react": "^19.0.0",
+    "@types/ssh2": "^1.15.6",
+    "react": "^19.0.0",
+    "tsdown": "^0.22.14",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "sideEffects": false,
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "agent",
+    "ssh",
+    "docker",
+    "remote-execution"
+  ],
+  "license": "MIT",
+  "author": "Artenx",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Artenx/dsh-honeybee.git",
+    "directory": "packages/dshb"
+  },
+  "homepage": "https://github.com/Artenx/dsh-honeybee#readme",
+  "bugs": {
+    "url": "https://github.com/Artenx/dsh-honeybee/issues"
   }
 }

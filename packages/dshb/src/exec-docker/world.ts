@@ -1,4 +1,4 @@
-import type { ExecutionWorldProvider, NodeTestReport } from 'dshb-router/types'
+import type { ExecutionWorldProvider, NodeTestReport } from '../router/types.js'
 import type { DockerBackend } from './docker-backend.js'
 import { DockerClient } from './docker-client.js'
 import { RemoteDockerCli } from './remote-docker-cli.js'

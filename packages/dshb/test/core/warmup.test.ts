@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { apply } from '../src/index.js'
+import { apply } from '../../src/core/index.js'
 
 const TMP_HOME = '/tmp/dshb-test-warmup'
 const REMOTE_NODE = 'nd08f171b21a2'

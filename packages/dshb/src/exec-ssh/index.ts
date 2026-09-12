@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { sharedWorldResolver } from 'dshb-router/resolve'
+import { sharedWorldResolver } from '../router/resolve.js'
 import { SshConnectionPool } from './connection-pool.js'
 import { SshWorldRegistry } from './world.js'
 
