@@ -47,7 +47,7 @@ Entries discovered by the Agent during task execution should follow this format:
 - Context: Agent 合并 6 个子包为单一 `@artenx/dshb` 以适配社区插件市场收录（聚合包不被 awesome-dsh-plugin 收录，只收单插件）
 - Category: Operations & Deployment
 - Instructions:
-  - 现仓库只有 `packages/dshb` 单包（`@artenx/dshb`，0.1.0）；旧 6 个 `dshb-*@0.0.5` 与旧聚合包 `@artenx/dshb@0.0.5` 已在 npm deprecate，迁移指向 `dsh plugin --profile web add @artenx/dshb`
+  - 现仓库只有 `packages/dshb` 单包；npm 当前版本为 `@artenx/dshb@0.1.1`（含包内 README、只声明 DSH 0.1.5-rc.1 兼容并移除 type-only runtime peer）；旧 6 个 `dshb-*@0.0.5` 及 `@artenx/dshb@0.0.5/0.1.0` 已 deprecate，迁移指向 `dsh plugin --profile web add @artenx/dshb`
   - 生产 profile（/root/.dsh/profiles/web）`bundles` 仅 `[@deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @artenx/dshb]`；`@artenx/dshb` link 指向 `/app/packages/dshb`；旧 `dshb-*` 软链接已重指向 `/app/_neutralized`（空目录）避免旧代码被加载
   - 构建：`pnpm build`（根）构建 packages/dshb（唯一 workspace 包）；服务器无构建环境，改本地构建后 `tar lib cordis.patch.yml package.json` 传服务器解压到 `/root/.dshb/dsh-honeybee/packages/dshb`
   - 服务器宿主 node 仅 v16（puppeteer-core 25 需 ≥18，无法跑浏览器测试）；dshb2 容器有 pnpm 11.25 + node 22；浏览器验证靠用户真实浏览器或临时 `node:22-bookworm` 容器装 chromium
