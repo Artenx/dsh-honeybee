@@ -1,6 +1,0 @@
-- insert:
-    - id: dshb-auth
-      name: dshb-auth
-- insert:
-    - id: dshb-web-startup
-      name: dshb-auth/startup
