@@ -15,7 +15,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
-  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.1.1--rc.2-blue?style=flat-square" alt="upstream dsh 0.1.1-rc.2" /></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.1.5--rc.1-blue?style=flat-square" alt="upstream dsh 0.1.5-rc.1" /></a>
   <img src="https://img.shields.io/badge/status-developing-orange?style=flat-square" alt="status" />
 </p>
 
@@ -41,13 +41,21 @@ A single web entry drives execution environments across multiple cloud hosts or 
 - A runnable DSH environment
 - Docker Engine pre-installed on the target host if using Docker nodes
 
-### One-command deploy
+### Install from npm (recommended)
+
+```sh
+dsh plugin --profile web add @artenx/dshb
+```
+
+Restart the corresponding DSH Web profile after installation.
+
+### One-command source deploy
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Artenx/dsh-honeybee/main/scripts/bootstrap.sh | bash
 ```
 
-The script detects `dsh` (skips if present, installs otherwise), clones the repo, builds, and installs all plugins. Start `dsh web` when done.
+The script detects `dsh` (uses it when present and otherwise runs the pinned version), clones the repository, builds it, and installs the single `@artenx/dshb` plugin. Start the corresponding DSH Web profile when done.
 
 Useful overrides: `DSH_HOME` (default `~/.dsh`), `PROFILE` (default `web`):
 
@@ -61,14 +69,9 @@ DSH_HOME="$HOME/.dsh-prod" PROFILE=prod \
 ```sh
 pnpm install
 pnpm build
-./scripts/install.sh    # installs into the web profile
-dsh web
-```
-
-### Aggregate package (after npm publish)
-
-```sh
-dsh plugin --profile web add @artenx/dshb
+# Install into the web profile
+./scripts/install.sh
+dsh --profile web
 ```
 
 ## Usage

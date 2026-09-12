@@ -3,7 +3,7 @@
 # DSH-HoneyBee (DSHB) one-shot bootstrap.
 #
 # Installs standard DSH if it is not already on PATH, then fetches this repo,
-# builds the DSHB packages, and installs them into the DSH web profile.
+# builds the DSHB package, and installs it into the DSH web profile.
 # Detect an existing `dsh` binary and skip the DSH install step entirely.
 #
 # Usage:
@@ -16,12 +16,11 @@
 #   DSH        exact command used to drive dsh; overrides auto-detection
 set -euo pipefail
 
-DSH_VERSION="${DSH_VERSION:-0.1.1-rc.2}"
+DSH_VERSION="${DSH_VERSION:-0.1.5-rc.1}"
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 PROFILE="${PROFILE:-web}"
 REPO_URL="${REPO_URL:-https://github.com/Artenx/dsh-honeybee.git}"
 SRC="${DSHB_SRC:-$HOME/.dshb/dsh-honeybee}"
-PLUGINS="dshb-auth dshb-core dshb-router dshb-exec-ssh dshb-exec-docker dshb-ui"
 
 say() { printf '\033[1;32m%s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m%s\033[0m\n' "$*" >&2; }
@@ -65,7 +64,7 @@ else
 fi
 
 # ---- 3. build DSHB --------------------------------------------------------
-say "Building DSHB packages (pnpm install + build)..."
+say "Building DSHB package (pnpm install + build)..."
 (
   cd "$SRC"
   if ! pnpm install --frozen-lockfile 2>/dev/null; then
@@ -76,14 +75,11 @@ say "Building DSHB packages (pnpm install + build)..."
 )
 
 # ---- 4. install into DSH profile -----------------------------------------
-say "Installing DSHB plugins into profile '$PROFILE' (DSH_HOME=$DSH_HOME) ..."
-for p in $PLUGINS; do
-  say "== installing $p =="
-  DSH_HOME="$DSH_HOME" run_dsh plugin --profile "$PROFILE" add "$SRC/packages/$p"
-done
+say "Installing @artenx/dshb into profile '$PROFILE' (DSH_HOME=$DSH_HOME) ..."
+DSH_HOME="$DSH_HOME" run_dsh plugin --profile "$PROFILE" add "$SRC/packages/dshb"
 
 say ""
 say "All done. Start the management web:"
-say "  DSH_HOME=\"$DSH_HOME\" dsh web"
+say "  DSH_HOME=\"$DSH_HOME\" dsh --profile \"$PROFILE\""
 warn "If dsh was pulled via npx (no global binary), run:"
-warn "  DSH_HOME=\"$DSH_HOME\" npx --yes @deepseek-ai/dsh@${DSH_VERSION} web"
+warn "  DSH_HOME=\"$DSH_HOME\" npx --yes @deepseek-ai/dsh@${DSH_VERSION} --profile \"$PROFILE\""

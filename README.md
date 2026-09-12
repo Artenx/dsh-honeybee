@@ -15,7 +15,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
-  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.1.1--rc.2-blue?style=flat-square" alt="upstream dsh 0.1.1-rc.2" /></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.1.5--rc.1-blue?style=flat-square" alt="upstream dsh 0.1.5-rc.1" /></a>
   <img src="https://img.shields.io/badge/status-developing-orange?style=flat-square" alt="status" />
 </p>
 
@@ -41,13 +41,21 @@
 - 一份可运行的 DSH 环境
 - 使用 Docker 节点需目标宿主机预装 Docker Engine
 
-### 一键部署
+### npm 安装（推荐）
+
+```sh
+dsh plugin --profile web add @artenx/dshb
+```
+
+安装后重启对应 DSH Web profile。
+
+### 一键源码部署
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Artenx/dsh-honeybee/main/scripts/bootstrap.sh | bash
 ```
 
-脚本自动检测 `dsh`（已存在则跳过，不存在则安装）、克隆仓库、构建并安装全部插件。完成后按提示启动 `dsh web`。
+脚本自动检测 `dsh`（已存在则跳过，不存在则使用固定版本）、克隆仓库、构建并安装单一 `@artenx/dshb` 插件。完成后按提示启动对应 DSH Web profile。
 
 常用覆盖项：`DSH_HOME`（默认 `~/.dsh`）、`PROFILE`（默认 `web`）：
 
@@ -61,14 +69,9 @@ DSH_HOME="$HOME/.dsh-prod" PROFILE=prod \
 ```sh
 pnpm install
 pnpm build
-./scripts/install.sh    # 装入 web profile
-dsh web
-```
-
-### 聚合包安装（npm 发布后）
-
-```sh
-dsh plugin --profile web add @artenx/dshb
+# 装入 web profile
+./scripts/install.sh
+dsh --profile web
 ```
 
 ## 使用
