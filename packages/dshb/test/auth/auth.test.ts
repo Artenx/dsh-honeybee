@@ -5,6 +5,7 @@ import { isLoopbackAddress, isLoopbackHost, isLoopbackRequest } from '../../src/
 import { CredentialStore, sanitizeUsername } from '../../src/auth/credentials.js'
 import { issueSession, verifySession, readCookie, SESSION_COOKIE } from '../../src/auth/session.js'
 import { LoginRateLimiter } from '../../src/auth/ratelimit.js'
+import { installLoopbackCompat } from '../../src/auth/loopback-compat.js'
 
 const TMP_HOME = '/tmp/dshb-test-auth'
 const TMP_KEY = Buffer.from('a'.repeat(32))
@@ -90,6 +91,13 @@ describe('HMAC-SHA256 会话 Cookie（需求 1.4）', () => {
   it('readCookie 从 Cookie 头解析', () => {
     expect(readCookie(`other=1; ${SESSION_COOKIE}=abc.def.ghi; foo=2`, SESSION_COOKIE)).toBe('abc.def.ghi')
     expect(readCookie(undefined, SESSION_COOKIE)).toBe(undefined)
+  })
+})
+
+describe('移动端页面兼容', () => {
+  it('表单控件使用 16px 字号以避免 iOS 聚焦缩放', () => {
+    const html = installLoopbackCompat('<html><head></head><body></body></html>')
+    expect(html).toContain('input,textarea,select,[contenteditable="true"]{font-size:16px!important}')
   })
 })
 

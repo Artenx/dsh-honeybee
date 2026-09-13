@@ -2,6 +2,7 @@ const MOBILE_CSS = `
 <style id="dshb-mobile-fix">
 @media (max-width:1023px),(display-mode:standalone){
 html{-webkit-text-size-adjust:100%!important;text-size-adjust:100%!important}
+input,textarea,select,[contenteditable="true"]{font-size:16px!important}
 [class*="_command_1gdtu_"]{min-width:max-content!important;max-width:none!important;overflow:visible!important;white-space:pre!important;text-overflow:clip!important;max-height:999999px!important}
 [class*="_prompt_1gdtu_"],[class*="_promptLine_1gdtu_"]{min-width:max-content!important;max-height:999999px!important}
 [class*="_header_1gdtu_"]{min-width:0!important;max-width:100%!important;overflow-x:auto!important;overscroll-behavior-x:contain;touch-action:pan-x pan-y!important}
