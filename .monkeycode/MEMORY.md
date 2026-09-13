@@ -48,9 +48,10 @@ Entries discovered by the Agent during task execution should follow this format:
 - Category: Operations & Deployment
 - Instructions:
   - 现仓库只有 `packages/dshb` 单包；npm 当前版本为 `@artenx/dshb@0.1.1`（含包内 README、只声明 DSH 0.1.5-rc.1 兼容并移除 type-only runtime peer）；旧 6 个 `dshb-*@0.0.5` 及 `@artenx/dshb@0.0.5/0.1.0` 已 deprecate，迁移指向 `dsh plugin --profile web add @artenx/dshb`
-  - 生产 profile（/root/.dsh/profiles/web）`bundles` 仅 `[@deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @artenx/dshb]`；`@artenx/dshb` link 指向 `/app/packages/dshb`；旧 `dshb-*` 软链接已重指向 `/app/_neutralized`（空目录）避免旧代码被加载
+  - 生产 profile（宿主 `/root/.dsh/profiles/web`，容器 `/data/dsh/profiles/web`）当前 `bundles` 为 `[@deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @artenx/dshb]`；`@artenx/dshb` link 指向 `/app/packages/dshb`；旧 `dshb-*` 软链接已重指向 `/app/_neutralized`（空目录）避免旧代码被加载
   - 构建：`pnpm build`（根）构建 packages/dshb（唯一 workspace 包）；服务器无构建环境，改本地构建后 `tar lib cordis.patch.yml package.json` 传服务器解压到 `/root/.dshb/dsh-honeybee/packages/dshb`
-  - 服务器宿主 node 仅 v16（puppeteer-core 25 需 ≥18，无法跑浏览器测试）；dshb2 容器有 pnpm 11.25 + node 22；浏览器验证靠用户真实浏览器或临时 `node:22-bookworm` 容器装 chromium
+  - 服务器宿主 node 仅 v16（puppeteer-core 25 需 ≥18，无法跑浏览器测试）；生产 DSH 运行于 `dshb2` 容器，宿主 `/root/.dsh` 挂载到容器 `/data/dsh`、仓库挂载到 `/app`，容器有 pnpm 11.25 + node 22；插件须在容器中执行 `dsh plugin --profile web add <package>`，宿主全局 npm 安装不会加入 DSH profile
+  - pnpm 11 安装 profile 插件时若报 `ERR_PNPM_IGNORED_BUILDS`，在 profile 的 `pnpm-workspace.yaml` 中将提示的既有 DSH 原生依赖加入 `allowBuilds: true` 后重跑安装；成功后 DSH CLI 会自动把声明 `dsh.bundle` 的包加入 bundles
   - DSH client-modules 通过 `require.resolve(<loader entry name>/package.json)` 发现 client bundle：cordis.patch 里 client 承载条目（dshb-ui）的 `name` 必须是裸包 `@artenx/dshb`（非子路径 `@artenx/dshb/ui`），子路径 spec 解析失败会被静默跳过致 client bundle 不入 boot graph；根 `.` 导出 ui 的 apply 供服务端加载
   - ssh2 Client 的 'error' 必须用持久 `on('error')`（非 `once`）：握手失败首 error 被 once 捕获后监听器移除，teardown 期间同连接第二个 error 变未处理事件致进程崩溃（dshb-exec-ssh/connection.ts connectOnce）
   - GitHub 推送用 PAT（Artenx 账号，值存于 agent 运行环境，不在仓库文件中记录）；awesome-dsh-plugin PR #4905 已开（CI 通过，待评审合并）；`dsh-plugin` topic 已设置，dshmarketplace.dev / dsh-plugin.org 自动扫描收录
