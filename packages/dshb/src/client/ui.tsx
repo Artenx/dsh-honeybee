@@ -6,6 +6,7 @@ import type { CSSProperties, ReactElement } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { DirectoryFlowOccupant } from './directory-flow.js'
 import { installMobile } from './mobile.js'
+import { registerWorkspaceInstructionMenu } from './workspace-instruction-menu.js'
 
 export const inject = ['connection', 'workspaces', 'slots', 'layout', 'conversation']
 
@@ -641,6 +642,8 @@ export function apply(ctx: ClientContext): void {
    document.head.appendChild(globalStyle)
 
   installMobile(ctx)
+
+  registerWorkspaceInstructionMenu(ctx)
 
   ctx.plugin({
     inject: ['slots', 'settingsScope'],

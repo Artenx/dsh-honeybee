@@ -90,6 +90,8 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
   const [error, setError] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [newDirName, setNewDirName] = useState('')
+  const [pendingInstruction, setPendingInstruction] = useState<string | undefined>(undefined)
+  const [instructionDialogOpen, setInstructionDialogOpen] = useState(false)
 
   useEffect(() => {
     if (!props.open) return
@@ -165,27 +167,30 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
     try {
       const node = nodes.find((n) => n.id === nodeId)
       if (!node) return
-      if (node.type === 'local-host') {
-        props.onPicked(path)
-        return
+      let pickedPath = path
+      if (node.type !== 'local-host') {
+        const res = await fetch('/api/dshb/workspaces/bind', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ nodeId, remotePath: path }),
+        })
+        const data = (await res.json()) as { ok?: boolean; mirrorPath?: string; error?: string }
+        if (!res.ok || !data.ok || !data.mirrorPath) {
+          setError(data.error ?? '工作区注册失败')
+          return
+        }
+        pickedPath = data.mirrorPath
       }
-      const res = await fetch('/api/dshb/workspaces/bind', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ nodeId, remotePath: path }),
-      })
-      const data = (await res.json()) as { ok?: boolean; mirrorPath?: string; error?: string }
-      if (!res.ok || !data.ok || !data.mirrorPath) {
-        setError(data.error ?? '工作区注册失败')
-        return
+      props.onPicked(pickedPath)
+      if (pendingInstruction !== undefined && pendingInstruction.trim()) {
+        savePendingInstruction(pickedPath, pendingInstruction)
       }
-      props.onPicked(data.mirrorPath)
     } catch {
       setError('网络错误')
     } finally {
       setBusy(false)
     }
-  }, [nodeId, path, nodes, props])
+  }, [nodeId, path, nodes, props, pendingInstruction])
 
   if (!props.open) return null
 
@@ -265,11 +270,34 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
           <button type="button" onClick={props.onCancel} style={secondaryButtonStyle}>
             取消
           </button>
+          <button
+            type="button"
+            onClick={() => setInstructionDialogOpen(true)}
+            disabled={busy || props.busy || !nodeId || !path}
+            style={{
+              ...secondaryButtonStyle,
+              borderColor: pendingInstruction !== undefined && pendingInstruction.trim() ? 'var(--dsw-alias-state-business-primary)' : 'var(--dsw-alias-border-l2)',
+              color: pendingInstruction !== undefined && pendingInstruction.trim() ? 'var(--dsw-alias-state-business-primary)' : 'var(--dsw-alias-label-primary)',
+            }}
+          >
+            指令{pendingInstruction !== undefined && pendingInstruction.trim() ? ' ●' : ''}
+          </button>
           <button type="button" onClick={() => void confirm()} disabled={busy || props.busy || !nodeId || !path} style={primaryButtonStyle}>
             设为工作区
           </button>
         </div>
       </div>
+
+      {instructionDialogOpen && (
+        <InstructionPreviewDialog
+          text={pendingInstruction ?? ''}
+          onClose={() => setInstructionDialogOpen(false)}
+          onSave={(t) => {
+            setPendingInstruction(t)
+            setInstructionDialogOpen(false)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -278,4 +306,100 @@ function dirnameOf(path: string): string {
   const parts = path.split('/').filter(Boolean)
   parts.pop()
   return parts.length === 0 ? '/' : `/${parts.join('/')}`
+}
+
+const pendingInstructions = new Map<string, string>()
+
+function savePendingInstruction(path: string, text: string): void {
+  pendingInstructions.set(path, text)
+  void (async () => {
+    try {
+      let attempts = 0
+      const tryResolve = async (): Promise<void> => {
+        if (attempts++ > 10) return
+        const wks = (window as unknown as { workspaces?: { list?: { getSnapshot?: () => { items?: { workspaceId: string; path: string }[] } } } }).workspaces
+        const snap = wks?.list?.getSnapshot?.()
+        const items = snap?.items ?? []
+        const ws = items.find((w) => w.path === path)
+        if (!ws) {
+          await new Promise((r) => setTimeout(r, 300))
+          return tryResolve()
+        }
+        await fetch(`/api/dshb/instructions/${ws.workspaceId}`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text, expectedRevision: 0 }),
+        })
+        pendingInstructions.delete(path)
+      }
+      void tryResolve()
+    } catch {}
+  })()
+}
+
+function InstructionPreviewDialog(props: {
+  text: string
+  onClose: () => void
+  onSave: (text: string) => void
+}): ReactElement {
+  const [text, setText] = useState(props.text)
+  const overlayStyle: CSSProperties = {
+    position: 'fixed',
+    inset: 0,
+    background: 'var(--dsw-alias-overlay-mask, rgba(0,0,0,0.45))',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1100,
+  }
+  const dialogStyle: CSSProperties = {
+    width: 'min(92vw, 600px)',
+    maxWidth: '100%',
+    maxHeight: '85vh',
+    overflow: 'auto',
+    overflowX: 'hidden',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    border: '1px solid var(--dsw-alias-border-l2)',
+    borderRadius: 12,
+    padding: 20,
+    boxSizing: 'border-box',
+    color: 'var(--dsw-alias-label-primary)',
+  }
+  return (
+    <div style={overlayStyle} onClick={props.onClose}>
+      <div style={dialogStyle} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <h2 style={{ margin: 0, fontSize: 16, color: 'var(--dsw-alias-label-primary)' }}>项目指令</h2>
+          <button type="button" onClick={props.onClose} style={secondaryButtonStyle}>关闭</button>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 10 }}>
+          工作区创建后，此指令将自动保存为新工作区的项目指令。新对话首次交互时注入。
+        </div>
+        <textarea
+          style={{
+            width: '100%',
+            minHeight: '280px',
+            fontFamily: 'monospace',
+            fontSize: 13,
+            padding: '12px',
+            border: '1px solid var(--dsw-alias-border-l2)',
+            borderRadius: 8,
+            background: 'var(--dsw-alias-bg-layer-2)',
+            color: 'var(--dsw-alias-label-primary)',
+            resize: 'vertical',
+            boxSizing: 'border-box',
+            outline: 'none',
+          }}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="留空则不注入指令..."
+          spellCheck={false}
+        />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+          <button type="button" onClick={props.onClose} style={secondaryButtonStyle}>取消</button>
+          <button type="button" onClick={() => props.onSave(text)} style={primaryButtonStyle}>确定</button>
+        </div>
+      </div>
+    </div>
+  )
 }
