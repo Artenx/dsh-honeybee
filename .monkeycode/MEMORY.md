@@ -54,4 +54,15 @@ Entries discovered by the Agent during task execution should follow this format:
   - pnpm 11 安装 profile 插件时若报 `ERR_PNPM_IGNORED_BUILDS`，在 profile 的 `pnpm-workspace.yaml` 中将提示的既有 DSH 原生依赖加入 `allowBuilds: true` 后重跑安装；成功后 DSH CLI 会自动把声明 `dsh.bundle` 的包加入 bundles
   - DSH client-modules 通过 `require.resolve(<loader entry name>/package.json)` 发现 client bundle：cordis.patch 里 client 承载条目（dshb-ui）的 `name` 必须是裸包 `@artenx/dshb`（非子路径 `@artenx/dshb/ui`），子路径 spec 解析失败会被静默跳过致 client bundle 不入 boot graph；根 `.` 导出 ui 的 apply 供服务端加载
   - ssh2 Client 的 'error' 必须用持久 `on('error')`（非 `once`）：握手失败首 error 被 once 捕获后监听器移除，teardown 期间同连接第二个 error 变未处理事件致进程崩溃（dshb-exec-ssh/connection.ts connectOnce）
-  - GitHub 推送用 PAT（Artenx 账号，值存于 agent 运行环境，不在仓库文件中记录）；awesome-dsh-plugin PR #4905 已开（CI 通过，待评审合并）；`dsh-plugin` topic 已设置，dshmarketplace.dev / dsh-plugin.org 自动扫描收录
+  - GitHub 推送用 PAT（Artenx 账号，值存于 agent 运行环境，不在仓库文件中记录）；awesome-dsh-plugin PR #4905 已合并（2026-09-13）；`dsh-plugin` topic 已设置，dshmarketplace.dev / dsh-plugin.org 自动扫描收录
+
+[Project Knowledge Summary]
+- Date: 2026-09-13
+- Context: Agent 发布 @artenx/dshb@0.1.3 并梳理 awesome-dsh-plugin 市场同步机制
+- Category: Operations & Deployment
+- Instructions:
+  - 生产/说明：本 agent 环境当前无有效 GitHub 凭据（`git credential fill` 经 `/app/agent/bin/agent git-credential-helper` 返回 32 位占位值，github.com 返回 401），无法 push 或开 PR；需用户提供 PAT 或重新认证。npm 凭据有效（`npm whoami`=artenx）
+  - npm 自 2026-09 起对启用 2FA 的账号采用分阶段发布（staged publishing）：`pnpm publish` 可能只暂存并返回成功文案，`npm publish` 对其重发会报 409 `Cannot publish over previously staged version`；该报错也可能只是 CDN 传播竞态，需用 token 查权威数据 `GET https://registry.npmjs.org/<pkg>?write=true` 的 `dist-tags`/`versions` 才能确认真实发布状态
+  - 查询/处理暂存：`pnpm stage list` / `npm stage list`（npm≥11，API `GET /-/stage`）；批准用 `npm stage approve <stage-id>`，必须维护者 2FA（`--otp`），带 bypass 2FA 的 GAT 不免除批准
+  - awesome-dsh-plugin 同步机制：条目来自 `data/plugins/<owner>__<repo>--<subpath>.yml`（本插件为 `Artenx__dsh-honeybee--packages-dshb.yml`）；`.github/workflows/build-site.yml` 每日 02:23 UTC 全量探测 `probe-npm`（记录 registry `dist-tags.latest`）/`probe-readmes`/`probe-stars` 等，再经 `publish-catalog.mjs` 发布 npm 包 `dsh-plugin-catalog`；因此 **版本号、README、星标会自动同步**，但 YAML 里的一行描述属静态内容，只有改 YAML 的 PR 才会更新
+  - 发布 npm 新版本后无需向 awesome 列表重新提交；若要让列表描述体现新特性，需另提改 YAML 描述的小 PR
