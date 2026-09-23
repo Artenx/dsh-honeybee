@@ -66,3 +66,12 @@ Entries discovered by the Agent during task execution should follow this format:
   - 查询/处理暂存：`pnpm stage list` / `npm stage list`（npm≥11，API `GET /-/stage`）；批准用 `npm stage approve <stage-id>`，必须维护者 2FA（`--otp`），带 bypass 2FA 的 GAT 不免除批准
   - awesome-dsh-plugin 同步机制：条目来自 `data/plugins/<owner>__<repo>--<subpath>.yml`（本插件为 `Artenx__dsh-honeybee--packages-dshb.yml`）；`.github/workflows/build-site.yml` 每日 02:23 UTC 全量探测 `probe-npm`（记录 registry `dist-tags.latest`）/`probe-readmes`/`probe-stars` 等，再经 `publish-catalog.mjs` 发布 npm 包 `dsh-plugin-catalog`；因此 **版本号、README、星标会自动同步**，但 YAML 里的一行描述属静态内容，只有改 YAML 的 PR 才会更新
   - 发布 npm 新版本后无需向 awesome 列表重新提交；若要让列表描述体现新特性，需另提改 YAML 描述的小 PR
+
+[Project Knowledge Summary]
+- Date: 2026-09-23
+- Context: Agent 排查用户报告的 "web boot: N entries did not activate"（30 个 client 插件 pending）时定位到 DSHB 前端 boot-race 兼容层的脆弱匹配
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - "web boot: N entries did not activate" 来自浏览器侧 `@deepseek-ai/dsh-client-web` 的 `AppWebEntry.assertEntriesActive`（`packages/client/web/src/boot.ts`）；pending 项是 client 侧 Cordis 服务缺失，常见根因是 api-remotes 动态 `remote.*` 命名空间未就绪，级联致 session/workspace controller 及全部 UI 插件 pending，并非 DSHB 插件注册失败
+  - `dshb-auth` 的 `registerFrontendBootRaceWorkaround` 在 `assertEntriesActive` 前插入 8s 延迟规避该竞态；替换锚点不可写死 minified 标识符（换 DSH 构建后标识符变化会静默 no-op），须按形状正则匹配：`/await ([A-Za-z_$][\w$]*)\.await\(\),this\.assertEntriesActive\(([A-Za-z_$][\w$]*)\)/`
+  - 排查：在 profile 的 `node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js` 中 grep `assertEntriesActive`，核对实际 minified 调用形态
