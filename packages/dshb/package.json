@@ -1,6 +1,6 @@
 {
   "name": "@artenx/dshb",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Routes DSH filesystem, shell, subprocess, and PTY operations to local, SSH, and Docker execution nodes, with a node registry, an authentication gate, a mobile-aware management UI, and per-workspace custom project instructions.",
   "type": "module",
   "main": "lib/index.js",
