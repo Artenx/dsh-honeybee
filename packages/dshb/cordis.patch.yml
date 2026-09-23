@@ -1,6 +1,8 @@
 - insert:
     - id: dshb-auth
       name: "@artenx/dshb/auth"
+- id: web-startup
+  disabled: true
 - insert:
     - id: dshb-web-startup
       name: "@artenx/dshb/auth/startup"
