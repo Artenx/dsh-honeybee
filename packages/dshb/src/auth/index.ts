@@ -28,10 +28,12 @@ function registerFrontendBootRaceWorkaround(ctx: Context): void {
     const source = readFileSync(assetPath, 'utf8')
     // DSH 0.1.5 asserts before api-remotes' dynamic remote namespace fibers
     // settle. Delay the assertion so mountApp sees the complete client graph;
-    // real activation failures still throw after the bounded wait.
+    // real activation failures still throw after the bounded wait. The loader
+    // and context identifiers are minified per build, so match them by shape
+    // rather than by the identifier names of any single bundle.
     const patched = source.replace(
-      'await i.await(),this.assertEntriesActive(t)',
-      'await i.await(),await new Promise(r=>setTimeout(r,8000)),this.assertEntriesActive(t)',
+      /await ([A-Za-z_$][\w$]*)\.await\(\),this\.assertEntriesActive\(([A-Za-z_$][\w$]*)\)/,
+      'await $1.await(),await new Promise(r=>setTimeout(r,8000)),this.assertEntriesActive($2)',
     )
     if (patched === source) return
 
