@@ -14,12 +14,20 @@ export const inject = ['webServer']
 
 function registerFrontendBootRaceWorkaround(ctx: Context): void {
   try {
-    // Resolve from the active profile so the route patches the same hashed asset
-    // that dsh-web-app's static fallback serves.
+    // Resolve the frontend through the same `dsh-web-app` bundle the webserver
+    // loads, so the patched hashed asset is the one the static fallback serves.
+    // `process.cwd()` may hold a different installation whose asset filename
+    // the server never requests, leaving the served bundle unpatched.
     const resolver = createRequire(import.meta.url)
-    const manifestPath = resolver.resolve('@deepseek-ai/dsh-web-frontend/package.json', {
-      paths: [process.cwd()],
-    })
+    let manifestPath: string
+    try {
+      const webAppManifest = resolver.resolve('@deepseek-ai/dsh-web-app/package.json')
+      manifestPath = createRequire(webAppManifest).resolve('@deepseek-ai/dsh-web-frontend/package.json')
+    } catch {
+      manifestPath = resolver.resolve('@deepseek-ai/dsh-web-frontend/package.json', {
+        paths: [process.cwd()],
+      })
+    }
     const assetDir = join(dirname(manifestPath), 'dist', 'assets')
     const assetName = readdirSync(assetDir).find((name) => /^index-.*\.js$/.test(name))
     if (!assetName) return
