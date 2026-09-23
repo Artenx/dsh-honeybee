@@ -1,23 +1,17 @@
-- insert:
-    - id: dshb-auth
-      name: "@artenx/dshb/auth"
 - id: web-startup
   disabled: true
 - insert:
+    - id: dshb-auth
+      name: "@artenx/dshb/auth"
     - id: dshb-web-startup
       name: "@artenx/dshb/auth/startup"
-- insert:
     - id: dshb-core
       name: "@artenx/dshb/core"
-- insert:
     - id: dshb-router
       name: "@artenx/dshb/router"
-- insert:
     - id: dshb-exec-ssh
       name: "@artenx/dshb/exec-ssh"
-- insert:
     - id: dshb-exec-docker
       name: "@artenx/dshb/exec-docker"
-- insert:
     - id: dshb-ui
       name: "@artenx/dshb"
