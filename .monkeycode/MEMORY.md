@@ -93,3 +93,22 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - 本环境 `npm --version` 为 10.9.8（无 `stage` 子命令），`pnpm --version` 为 11.24.0；查询/查看/批准暂存须用 `npx -y npm@11 stage <list|view|approve|reject>`（批准需维护者 OTP）
   - 命中分阶段发布时 `pnpm --filter @artenx/dshb publish` 会打印 `✅ Published package` 但仅暂存；实时状态以 `GET https://registry.npmjs.org/@artenx/dshb?write=true` 的 `dist-tags`/`versions` 为准，`GET /-/stage` 列表可能滞后返回空
+
+[Project Knowledge Summary]
+- Date: 2026-09-25
+- Context: Agent 为验证远程文件预览修复，升级本地 dshb 实例时梳理本地预览环境
+- Category: Environment Configuration
+- Instructions:
+  - 本地预览实例：`dshv2`（`DSH_HOME=/tmp/opencode/dshv2`，端口 3199，npm 安装的 `@artenx/dshb`）；`dshv17`（端口 3205）与 `dshv19preview`（端口 3204）的 `@artenx/dshb` 以 `link:/workspace/dsh-honeybee/packages/dshb` 指向本地源码
+  - 两套 DSH CLI：`/tmp/opencode/dshtool` = 0.1.5-rc.1，`/tmp/opencode/dshtool17` = 0.1.7-rc.1
+  - 对外预览域名形如 `https://<port>-57aa6cc7315ae197.monkeycode-ai.online/`；DSHB 登录门会把根路径 302 到 `/login`，需用管理员凭据登录
+  - 启动命令：`cd /workspace/dsh-honeybee && DSH_HOME=<home> node <tool>/node_modules/.bin/dsh --profile web --no-open --port <port>`
+
+[Project Knowledge Summary]
+- Date: 2026-09-25
+- Context: Agent 将 dshv2 升级到 @artenx/dshb@0.1.14 后启动失败并定位根因
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - `@artenx/dshb` ≥0.1.13（自 commit 882ffa0）在 exec-ssh/exec-docker 的 process-provider 中 `import { SubprocessExecutableNotFoundError } from '@deepseek-ai/dsh-subprocess'`，该导出仅存在于 DSH 0.1.7-rc.1
+  - 在 DSH 0.1.5-rc.1 上启动报 `The requested module '@deepseek-ai/dsh-subprocess' does not provide an export named 'SubprocessExecutableNotFoundError'`，plugin tree failed to load，进程 exit 1
+  - 因此该 profile 必须在 DSH 0.1.7-rc.1（dshtool17）下运行；`@artenx/dshb@0.1.15` 起 `dsh.compatibility.dshReleases` 已移除 `0.1.5-rc.1`、只声明 `0.1.7-rc.1`（此前 0.1.13–0.1.14 的声明与实际能力不符）
