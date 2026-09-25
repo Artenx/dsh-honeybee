@@ -51,6 +51,17 @@ export default class RouterFileSystem extends SandboxedFileSystem {
     return ref.provider.fs.readBytes(ref.remotePath, signal, maxBytes)
   }
 
+  override async readByteRange(target: FsTarget, range: { offset: number; length: number }, signal?: AbortSignal): Promise<Uint8Array> {
+    const ref = this.resolver.resolve(this.targetPath(target))
+    if (ref.kind === 'local') {
+      const end = range.offset + range.length
+      const bytes = await super.readBytes(target, signal, end)
+      return bytes.subarray(range.offset, end)
+    }
+    if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
+    return ref.provider.fs.readByteRange(ref.remotePath, range, signal)
+  }
+
   override async listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> {
     const ref = this.resolver.resolve(this.targetPath(target))
     if (ref.kind === 'local') return super.listDir(target, signal)

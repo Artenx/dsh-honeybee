@@ -18,6 +18,7 @@ export interface FsDelegate {
   readText(target: FsTargetLike, signal?: AbortSignal): Promise<string>
   streamText(target: FsTargetLike, signal?: AbortSignal): Promise<AsyncIterable<string>>
   readBytes(target: FsTargetLike, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array>
+  readByteRange(target: FsTargetLike, range: { offset: number; length: number }, signal?: AbortSignal): Promise<Uint8Array>
   listDir(target: FsTargetLike, signal?: AbortSignal): Promise<unknown[]>
   writeText(target: FsTargetLike, content: string, expected?: unknown, signal?: AbortSignal, policy?: unknown): Promise<unknown>
   editText(target: FsTargetLike, edit: unknown, expected?: unknown, signal?: AbortSignal, policy?: unknown): Promise<unknown>

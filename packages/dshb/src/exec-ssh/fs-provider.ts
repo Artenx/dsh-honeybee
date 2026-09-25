@@ -64,6 +64,11 @@ export class SshFileSystem {
     return new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength)
   }
 
+  async readByteRange(target: string, range: { offset: number; length: number }, signal?: AbortSignal): Promise<Uint8Array> {
+    const data = await this.executor.readFileRange(target, range.offset, range.length, signal)
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+  }
+
   async listDir(target: string, _signal?: AbortSignal): Promise<Array<{ name: string; path: string; isDirectory: boolean; isFile: boolean; isSymlink: boolean; size: number; mtime: number }>> {
     const entries = await this.executor.listDir(target)
     return entries.map((e) => ({

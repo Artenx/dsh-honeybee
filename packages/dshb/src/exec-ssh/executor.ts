@@ -69,6 +69,28 @@ export class SshExecutor {
     })
   }
 
+  async readFileRange(path: string, offset: number, length: number, signal?: AbortSignal): Promise<Buffer> {
+    if (length === 0) return Buffer.alloc(0)
+    const sftp = await this.sftp()
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = []
+      const stream = sftp.createReadStream(path, { start: offset, end: offset + length - 1, autoClose: true })
+      const cleanup = () => signal?.removeEventListener('abort', abort)
+      const abort = () => stream.destroy(signal?.reason instanceof Error ? signal.reason : new Error('The operation was aborted'))
+      stream.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)))
+      stream.once('error', (error: Error) => {
+        cleanup()
+        reject(error)
+      })
+      stream.once('end', () => {
+        cleanup()
+        resolve(Buffer.concat(chunks))
+      })
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted) abort()
+    })
+  }
+
   async writeFile(path: string, content: Buffer | string): Promise<void> {
     const sftp = await this.sftp()
     const tmp = `${path}.dshb-tmp-${process.pid}-${Date.now()}`

@@ -12,4 +12,14 @@ describe('Docker filesystem metadata', () => {
     await expect(fs.stat('/workspace')).resolves.toMatchObject({ type: 'directory', size: 12 })
     await expect(fs.lstat('/workspace-link')).resolves.toMatchObject({ type: 'symlink', size: 12 })
   })
+
+  it('reads remote byte ranges as binary data', async () => {
+    const client = {
+      readFileRange: vi.fn(async () => Buffer.from([0, 255, 1])),
+    }
+    const fs = new DockerFileSystem(client as never)
+
+    await expect(fs.readByteRange('/data/document.pdf', { offset: 5, length: 3 })).resolves.toEqual(new Uint8Array([0, 255, 1]))
+    expect(client.readFileRange).toHaveBeenCalledWith('/data/document.pdf', 5, 3)
+  })
 })

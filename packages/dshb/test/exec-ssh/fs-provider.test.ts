@@ -16,4 +16,14 @@ describe('SSH filesystem metadata', () => {
       { name: 'home', path: '/home', isDirectory: true, isFile: false },
     ])
   })
+
+  it('reads remote byte ranges without text decoding', async () => {
+    const executor = {
+      readFileRange: vi.fn(async () => Buffer.from([0, 255, 1])),
+    }
+    const fs = new SshFileSystem(executor as never)
+
+    await expect(fs.readByteRange('/data/image.png', { offset: 5, length: 3 })).resolves.toEqual(new Uint8Array([0, 255, 1]))
+    expect(executor.readFileRange).toHaveBeenCalledWith('/data/image.png', 5, 3, undefined)
+  })
 })

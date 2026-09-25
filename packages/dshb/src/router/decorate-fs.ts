@@ -13,6 +13,7 @@ export function decorateFileSystem(fs: FileSystem): () => void {
   const origReadText = fs.readText.bind(fs)
   const origStreamText = fs.streamText.bind(fs)
   const origReadBytes = fs.readBytes.bind(fs)
+  const origReadByteRange = typeof fs.readByteRange === 'function' ? fs.readByteRange.bind(fs) : undefined
   const origListDir = fs.listDir.bind(fs)
   const origWriteText = fs.writeText.bind(fs)
   const origEditText = fs.editText.bind(fs)
@@ -54,6 +55,18 @@ export function decorateFileSystem(fs: FileSystem): () => void {
     if (ref.kind === 'local') return origReadBytes(target, signal, maxBytes)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
     return ref.provider.fs.readBytes(ref.remotePath, signal, maxBytes)
+  }
+
+  fs.readByteRange = async (target: FsTarget, range: { offset: number; length: number }, signal?: AbortSignal): Promise<Uint8Array> => {
+    const ref = resolver.resolve(targetPath(target))
+    if (ref.kind === 'local') {
+      if (origReadByteRange) return origReadByteRange(target, range, signal)
+      const end = range.offset + range.length
+      const bytes = await origReadBytes(target, signal, end)
+      return bytes.subarray(range.offset, end)
+    }
+    if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
+    return ref.provider.fs.readByteRange(ref.remotePath, range, signal)
   }
 
   fs.listDir = async (target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> => {
@@ -99,6 +112,8 @@ export function decorateFileSystem(fs: FileSystem): () => void {
     fs.readText = origReadText
     fs.streamText = origStreamText
     fs.readBytes = origReadBytes
+    if (origReadByteRange) fs.readByteRange = origReadByteRange
+    else delete (fs as unknown as { readByteRange?: unknown }).readByteRange
     fs.listDir = origListDir
     fs.writeText = origWriteText
     fs.editText = origEditText

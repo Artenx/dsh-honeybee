@@ -20,8 +20,19 @@ export class RemoteDockerCli implements DockerBackend {
   }
 
   async readFile(path: string): Promise<Buffer> {
-    const result = await this.ssh.exec(['docker', 'exec', this.containerId, 'cat', path], '/')
-    return Buffer.from(result.stdout, 'utf8')
+    const quoted = `'${path.replace(/'/g, "'\\''")}'`
+    const result = await this.ssh.exec(['docker', 'exec', this.containerId, 'bash', '-c', `base64 ${quoted}`], '/')
+    if (result.code !== 0) throw new Error(result.stderr || `failed to read file: ${path}`)
+    return Buffer.from(result.stdout, 'base64')
+  }
+
+  async readFileRange(path: string, offset: number, length: number): Promise<Buffer> {
+    if (length === 0) return Buffer.alloc(0)
+    const quoted = `'${path.replace(/'/g, "'\\''")}'`
+    const command = `set -o pipefail; dd if=${quoted} iflag=skip_bytes,count_bytes skip=${offset} count=${length} status=none | base64`
+    const result = await this.ssh.exec(['docker', 'exec', this.containerId, 'bash', '-c', command], '/')
+    if (result.code !== 0) throw new Error(result.stderr || `failed to read file range: ${path}`)
+    return Buffer.from(result.stdout, 'base64')
   }
 
   async writeFile(path: string, content: Buffer | string): Promise<void> {
