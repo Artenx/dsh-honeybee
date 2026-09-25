@@ -30,7 +30,8 @@ export function decorateFileSystem(fs: FileSystem): () => void {
   }
 
   fs.lstat = async (path: string, opts?: { cwd?: string }, signal?: AbortSignal): Promise<FsPathInfo | undefined> => {
-    const ref = resolver.resolve(path)
+    const resolved = await fs.resolve(path, { cwd: opts?.cwd, signal })
+    const ref = resolver.resolve(fs.processPath(resolved))
     if (ref.kind === 'local') return origLstat(path, opts, signal)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
     return ref.provider.fs.lstat(ref.remotePath, opts, signal) as Promise<FsPathInfo | undefined>

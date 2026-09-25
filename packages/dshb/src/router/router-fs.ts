@@ -24,7 +24,8 @@ export default class RouterFileSystem extends SandboxedFileSystem {
   }
 
   override async lstat(path: string, opts?: { cwd?: string }, signal?: AbortSignal): Promise<FsPathInfo | undefined> {
-    const ref = this.resolver.resolve(path)
+    const resolved = await super.resolve(path, { cwd: opts?.cwd, signal })
+    const ref = this.resolver.resolve(super.processPath(resolved))
     if (ref.kind === 'local') return super.lstat(path, opts, signal)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
     return ref.provider.fs.lstat(ref.remotePath, opts, signal) as Promise<FsPathInfo | undefined>
