@@ -77,3 +77,19 @@ Entries discovered by the Agent during task execution should follow this format:
   - 第二个更隐蔽的根因是版本偏差：`registerFrontendBootRaceWorkaround` 曾用 `require.resolve('@deepseek-ai/dsh-web-frontend', { paths: [process.cwd()] })` 定位前端产物，而 webserver 实际服务的是 web-app bundle 解析到的那份；当 cwd 处的安装版本不同（实测 cwd 解析 rc.1 → `index-DuF6ti6g.js`，服务端服务 rc.3 → `index-BKQ_L1z6.js`），注册的补丁路由指向一个永不被请求的哈希文件名，服务端资源保持未打补丁，竞态照旧触发。正确做法是先 `resolve('@deepseek-ai/dsh-web-app/package.json')`（插件自身安装位置解析，即 profile 内那份），再从该 web-app 解析 dsh-web-frontend，cwd 仅作兜底
   - 验证方法：`DSH_HOME=<tmp> dsh --profile web add @artenx/dshb@<ver>` 后，用 Playwright 加载 `http://127.0.0.1:<port>/`，断言 console 无 `web boot: N entries did not activate` 且页面渲染出 UI；同时 curl 服务的 `./assets/index-*.js` 断言包含 `setTimeout(r,8000)`
   - 排查：在 profile 的 `node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js` 中 grep `assertEntriesActive`，核对实际 minified 调用形态
+
+[Project Knowledge Summary]
+- Date: 2026-09-25
+- Context: 用户纠正 Agent 将工作误扩展到工作区中的 DSH 核心仓库 deepseek-harness，要求把提交与 npm 发布限定在 dsh-honeybee
+- Category: Workflow & Collaboration
+- Instructions:
+  - 本仓库的 git 提交与 npm 发布只针对 `dsh-honeybee` / `@artenx/dshb`；不要把工作区其他仓库（如 `/workspace/deepseek-harness`）的改动纳入本仓库的提交或发布
+  - 涉及 DSH 版本时先确认仓库：本插件的依赖与兼容声明在 `packages/dshb/package.json`（当前 `@deepseek-ai/dsh` 为 `0.1.7-rc.1`）；`deepseek-harness` 根包版本（如 `0.1.2-alpha.1`）是另一套版本体系，与本插件无关
+
+[Project Knowledge Summary]
+- Date: 2026-09-25
+- Context: Agent 发布 @artenx/dshb@0.1.13 时处理分阶段发布（staged publishing）
+- Category: Operations & Deployment
+- Instructions:
+  - 本环境 `npm --version` 为 10.9.8（无 `stage` 子命令），`pnpm --version` 为 11.24.0；查询/查看/批准暂存须用 `npx -y npm@11 stage <list|view|approve|reject>`（批准需维护者 OTP）
+  - 命中分阶段发布时 `pnpm --filter @artenx/dshb publish` 会打印 `✅ Published package` 但仅暂存；实时状态以 `GET https://registry.npmjs.org/@artenx/dshb?write=true` 的 `dist-tags`/`versions` 为准，`GET /-/stage` 列表可能滞后返回空
