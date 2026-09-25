@@ -100,7 +100,7 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
         const res = await fetch('/api/dshb/nodes')
         if (!res.ok) return
         const data = (await res.json()) as { nodes?: NodeProfileView[] }
-        setNodes((data.nodes ?? []).filter((n) => n.type === 'local-host' || n.status?.reachable === true))
+        setNodes(data.nodes ?? [])
       } catch {}
     })()
   }, [props.open])

@@ -13,6 +13,6 @@ Restart the corresponding DSH Web profile after installation.
 ## Requirements
 
 - Node.js 22.13 or newer
-- DeepSeek Harness 0.1.5-rc.1
+- DeepSeek Harness 0.1.7-rc.1
 
 Source code and complete documentation: https://github.com/Artenx/dsh-honeybee

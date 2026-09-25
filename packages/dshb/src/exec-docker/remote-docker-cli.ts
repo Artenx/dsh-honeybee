@@ -45,7 +45,19 @@ export class RemoteDockerCli implements DockerBackend {
       .filter((e): e is NonNullable<typeof e> => e !== null)
   }
 
-  async stat(path: string): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean } | undefined> {
+  async stat(path: string): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean; isSymlink: boolean } | undefined> {
+    const result = await this.ssh.exec(['docker', 'exec', this.containerId, 'stat', '-L', '-c', '%s %Y %F', path], '/')
+    const line = result.stdout.trim()
+    if (!line) return undefined
+    const parts = line.split(/\s+/)
+    if (parts.length < 3) return undefined
+    const size = Number(parts[0])
+    const mtime = Number(parts[1]) * 1000
+    const ftype = parts.slice(2).join(' ')
+    return { size, mtime, isDirectory: ftype.includes('directory'), isFile: ftype.includes('regular'), isSymlink: ftype.includes('symbolic link') }
+  }
+
+  async lstat(path: string): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean; isSymlink: boolean } | undefined> {
     const result = await this.ssh.exec(['docker', 'exec', this.containerId, 'stat', '-c', '%s %Y %F', path], '/')
     const line = result.stdout.trim()
     if (!line) return undefined
@@ -54,7 +66,7 @@ export class RemoteDockerCli implements DockerBackend {
     const size = Number(parts[0])
     const mtime = Number(parts[1]) * 1000
     const ftype = parts.slice(2).join(' ')
-    return { size, mtime, isDirectory: ftype.includes('directory'), isFile: ftype.includes('regular') }
+    return { size, mtime, isDirectory: ftype.includes('directory'), isFile: ftype.includes('regular'), isSymlink: ftype.includes('symbolic link') }
   }
 
   async mkdir(path: string): Promise<void> {
@@ -76,7 +88,7 @@ export class RemoteDockerCli implements DockerBackend {
     }
   }
 
-  async pty(argv: string[], cwd: string, cols: number, rows: number): Promise<{ stream: NodeJS.ReadWriteStream; resize: (c: number, r: number) => void; kill: () => void }> {
+  async pty(_argv: string[], _cwd: string, _cols: number, _rows: number, _env?: Record<string, string>, _terminalType?: string): Promise<{ stream: NodeJS.ReadWriteStream; resize: (c: number, r: number) => void; kill: () => void }> {
     throw new Error('remote docker PTY not yet supported')
   }
 }

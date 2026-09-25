@@ -19,7 +19,7 @@ function dshHome(): string {
 }
 
 function normalize(p: string): string {
-  return p.replace(/\/+$/, '') || '/'
+  return p.replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/'
 }
 
 export class WorkspaceBindingsStore {
@@ -37,6 +37,7 @@ export class WorkspaceBindingsStore {
       this.bindings = (JSON.parse(readFileSync(this.file(), 'utf8')) as WorkspaceBinding[]).map((b) => ({
         ...b,
         mirrorPath: normalize(b.mirrorPath),
+        remotePath: normalize(b.remotePath),
       }))
     } catch {
       this.bindings = []
@@ -56,7 +57,7 @@ export class WorkspaceBindingsStore {
     this.load()
     const mirrorPath = normalize(binding.mirrorPath)
     this.bindings = this.bindings.filter((b) => normalize(b.mirrorPath) !== mirrorPath)
-    this.bindings.push({ ...binding, mirrorPath })
+    this.bindings.push({ ...binding, mirrorPath, remotePath: normalize(binding.remotePath) })
     this.save()
   }
 
@@ -86,7 +87,7 @@ export class WorkspaceBindingsStore {
     const root = normalize(best.mirrorPath)
     const remoteRoot = normalize(best.remotePath)
     const suffix = target === root ? '' : target.slice(root.length)
-    return { nodeId: best.nodeId, remotePath: `${remoteRoot}${suffix}` }
+    return { nodeId: best.nodeId, remotePath: normalize(`${remoteRoot}${suffix}`) }
   }
 
   mirrorRoot(nodeId: string, slug: string): string {

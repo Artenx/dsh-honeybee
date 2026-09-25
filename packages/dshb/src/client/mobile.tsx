@@ -191,6 +191,14 @@ const MOBILE_CSS = `
     scrollbar-width: none;
     touch-action: pan-x pan-y !important;
   }
+  /* xterm uses a transparent helper textarea for all terminal input. Keep it
+     focusable and non-zero-sized so mobile browsers can present their keyboard. */
+  [data-phase] .xterm .xterm-helper-textarea {
+    width: 1px !important;
+    height: 1px !important;
+    opacity: .01 !important;
+    z-index: 1 !important;
+  }
   [data-phase] [class*="bodyScroll"]::-webkit-scrollbar,
   [data-phase] [class*="ioCard"]::-webkit-scrollbar,
   [data-phase] [class*="ioSection"]::-webkit-scrollbar,
@@ -509,82 +517,36 @@ const SHEET_PROPS = [
   'min-width', 'max-width', 'max-height', 'overflow-y', 'box-sizing',
 ] as const
 
-/**
- * 把挂在 composer 内部的绝对定位浮层统一改造成 position:fixed 视口级浮层：
- * 水平居中（左右各留 8px，绝不贴边/溢出），高度按视口比例封顶并内容滚动，
- * 触发元素上方空间足够则向上展开、否则向下展开，四边都约束在视口内。
- * fixed 不受祖先 overflow 裁剪（祖先带 transform 时失效）。
- */
-function positionFixedSheet(
-  el: HTMLElement,
-  rootRect: DOMRect,
-  maxWidth: number,
-  maxHeightRatio: number,
-): void {
+/** Keep the model menu anchored to its trigger while fitting it in the viewport. */
+function positionAnchoredMenu(el: HTMLElement, triggerRect: DOMRect, maxWidth: number, maxHeight: number): void {
   const margin = 8
   const vw = window.innerWidth
   const vh = window.innerHeight
-  const width = Math.max(0, Math.min(maxWidth, vw - margin * 2))
-  const left = Math.round((vw - width) / 2)
-  const maxH = Math.round(vh * maxHeightRatio)
-  const spaceAbove = rootRect.top - margin
-  const spaceBelow = vh - rootRect.bottom - margin
-  const expandUp = spaceAbove >= 140 && spaceAbove >= spaceBelow
-  let top: number
-  if (expandUp) {
-    const h = Math.min(maxH, Math.max(spaceAbove, 140))
-    top = rootRect.top - margin - h
-  } else {
-    top = rootRect.bottom + margin
-  }
-  top = Math.max(margin, top)
-  el.style.setProperty('position', 'fixed', 'important')
-  el.style.setProperty('box-sizing', 'border-box', 'important')
-  el.style.setProperty('width', `${width}px`, 'important')
-  el.style.setProperty('left', `${left}px`, 'important')
-  el.style.setProperty('right', 'auto', 'important')
-  el.style.setProperty('top', `${top}px`, 'important')
-  el.style.setProperty('bottom', 'auto', 'important')
-  el.style.setProperty('min-width', '0', 'important')
-  el.style.setProperty('max-width', 'none', 'important')
-  el.style.setProperty('max-height', `${maxH}px`, 'important')
-  el.style.setProperty('overflow-y', 'auto', 'important')
-}
-
-/**
- * 一级 pane（Model/Effort 单元格小菜单）紧凑浮层：右缘对齐触发按钮右缘
- * （面板右缘 x = 按钮右缘 x，钳制在视口内 8px 起，避免宽面板超出屏幕左缘时
- * 被甩到左边贴边），向上展开、空间不足向下展开；宽度跟随内容
- * （max-content，封顶 min(420, vw-16)），避免小菜单被全宽 sheet 拉远到
- * 屏幕中间。测量与定位在同一任务内同步完成，无闪烁。
- */
-function positionCompactPanel(el: HTMLElement, root: HTMLElement, rootRect: DOMRect): void {
-  const margin = 8
-  const vw = window.innerWidth
-  // 锚定触发按钮本身（root 包着按钮，取按钮 rect 更准；换 hash 后按语义类找）
-  const trigger =
-    root.querySelector<HTMLElement>('[class*="7KE1Ra_trigger"], [class*="_trigger"]') ?? root
-  const anchorRect = trigger === root ? rootRect : trigger.getBoundingClientRect()
   el.style.setProperty('position', 'fixed', 'important')
   el.style.setProperty('box-sizing', 'border-box', 'important')
   el.style.setProperty('left', '0', 'important')
-  el.style.setProperty('top', '0', 'important')
   el.style.setProperty('right', 'auto', 'important')
+  el.style.setProperty('top', '0', 'important')
   el.style.setProperty('bottom', 'auto', 'important')
-  el.style.setProperty('width', 'max-content', 'important')
   el.style.setProperty('min-width', '0', 'important')
-  el.style.setProperty('max-width', `${Math.min(420, vw - margin * 2)}px`, 'important')
-  el.style.setProperty('max-height', 'none', 'important')
-  el.style.setProperty('overflow-y', 'visible', 'important')
-  const w = el.offsetWidth
-  const h = el.offsetHeight
-  const panelRightX = Math.min(anchorRect.right, vw - margin)
-  const expandUp = anchorRect.top - margin - h >= margin
-  const top = Math.max(margin, expandUp ? anchorRect.top - margin - h : anchorRect.bottom + margin)
-  const left = Math.max(margin, panelRightX - w)
+  el.style.setProperty('max-width', `${Math.max(0, Math.min(maxWidth, vw - margin * 2))}px`, 'important')
+  el.style.setProperty('max-height', `${Math.max(0, Math.min(maxHeight, vh - margin * 2))}px`, 'important')
+  el.style.setProperty('overflow-y', 'auto', 'important')
+  let width = el.offsetWidth
+  let height = el.offsetHeight
+  const spaceAbove = Math.max(0, triggerRect.top - margin * 2)
+  const spaceBelow = Math.max(0, vh - triggerRect.bottom - margin * 2)
+  const expandUp = height <= spaceAbove || spaceAbove >= spaceBelow
+  const available = expandUp ? spaceAbove : spaceBelow
+  if (height > available) {
+    el.style.setProperty('max-height', `${Math.max(0, available - margin)}px`, 'important')
+    height = el.offsetHeight
+    width = el.offsetWidth
+  }
+  const top = expandUp ? triggerRect.top - margin - height : triggerRect.bottom + margin
+  const left = Math.max(margin, Math.min(triggerRect.right - width, vw - width - margin))
   el.style.setProperty('left', `${left}px`, 'important')
-  el.style.setProperty('top', `${top}px`, 'important')
-  el.style.setProperty('width', `${w}px`, 'important')
+  el.style.setProperty('top', `${Math.max(margin, Math.min(top, vh - height - margin))}px`, 'important')
 }
 
 /**
@@ -645,7 +607,7 @@ function clearModelNameFit(menu: HTMLElement | null | undefined): void {
   }
 }
 
-/** 清除 positionFixedSheet 写入的内联样式，交还上游/移动端 CSS 兜底。 */
+/** 清除 anchored menu 写入的内联样式，交还上游 CSS。 */
 function clearFixedSheet(el: HTMLElement | null | undefined): void {
   if (el === null || el === undefined) return
   for (const key of SHEET_PROPS) el.style.removeProperty(key)
@@ -656,10 +618,8 @@ function clearFixedSheet(el: HTMLElement | null | undefined): void {
  * 元素：一级 Model/Effort 单元格列表（cellLabel），点击后切到模型列表（modelName）
  * 或档位列表。上游默认 `position:absolute;right:0` 贴触发按钮右缘，触发按钮在
  * 可横向滚动的 stats 行内时菜单会整体出屏。两级 pane 都必须接管（不能只按
- * modelName 匹配，否则一级 pane 漏掉）。窄屏下：一级小菜单走紧凑浮层
- * （右缘贴按钮、向上展开，避免全宽 sheet 把小菜单拉到屏幕中间离按钮太远）；
- * 二级列表走视口级居中 fixed sheet（左右各 8px、高度 45% 视口封顶、
- * 内容滚动、上方空间不足时向下展开）。
+ * modelName 匹配，否则一级 pane 漏掉）。所有视口都把菜单锚定到触发按钮，
+ * 在上方/下方可用空间中选择更合适的一侧，避免上游空间不足时把菜单钳到屏幕顶端。
  */
 function installModelMenuPosition(ctx: ClientContext): void {
   ctx.effect(() => {
@@ -686,49 +646,48 @@ function installModelMenuPosition(ctx: ClientContext): void {
     let fittedVw = 0
     let fittedSig = -1
     let fittedMenus: HTMLElement[] = []
+    let positionedMenus: HTMLElement[] = []
     const sync = (): void => {
       const menus = findMenus()
-      if (!narrow.matches) {
-        // Desktop: upstream place() owns menu positioning via inline left/top.
-        // Only clear DSHB's !important overrides when transitioning FROM narrow
-        // mode (fittedMenus non-empty). Clearing on every MutationObserver tick
-        // would strip upstream's menuPos and drop the menu off-screen.
-        if (fittedMenus.length > 0) {
-          for (const menu of fittedMenus) {
-            clearFixedSheet(menu)
-            clearModelNameFit(menu)
-          }
-          fittedVw = 0
-          fittedSig = -1
-          fittedMenus = []
-          window.dispatchEvent(new Event('resize'))
-        }
-        return
-      }
       let vw = 0
       let sig = 0
       const modelMenus: HTMLElement[] = []
+      const visibleMenus: HTMLElement[] = []
       for (const menu of menus) {
         // 0.1.5 renders the menu through createPortal(..., document.body), so
         // parentElement is body rather than the trigger root. Match aria-controls
         // to the portal menu id to find the exact trigger across multiple tabs.
         const trigger = findTrigger(menu)
-        if (trigger === null) continue
+        if (trigger === null || trigger.getAttribute('aria-expanded') !== 'true') continue
         const rect = menu.getBoundingClientRect()
         // 跳过隐藏 tab / 未打开的菜单（0 尺寸或祖先 display:none）
         if (rect.width === 0 && rect.height === 0) continue
         const triggerRect = trigger.getBoundingClientRect()
+        positionAnchoredMenu(menu, triggerRect, Math.min(420, window.innerWidth - 16), 360)
+        visibleMenus.push(menu)
         if (menu.querySelector('[class*="modelName"]')) {
-          positionFixedSheet(menu, triggerRect, Number.POSITIVE_INFINITY, 0.45)
-          applyNonBreakingHyphens(menu)
           modelMenus.push(menu)
-          vw = window.innerWidth
-          for (const n of menu.querySelectorAll<HTMLElement>('[class*="modelName"]')) {
-            sig += n.textContent?.length ?? 0
+          if (narrow.matches) {
+            applyNonBreakingHyphens(menu)
+            vw = window.innerWidth
+            for (const n of menu.querySelectorAll<HTMLElement>('[class*="modelName"]')) {
+              sig += n.textContent?.length ?? 0
+            }
           }
-        } else {
-          positionCompactPanel(menu, trigger, triggerRect)
         }
+      }
+      for (const previous of positionedMenus) {
+        if (visibleMenus.includes(previous)) continue
+        clearFixedSheet(previous)
+        clearModelNameFit(previous)
+      }
+      positionedMenus = visibleMenus
+      if (!narrow.matches) {
+        for (const menu of modelMenus) clearModelNameFit(menu)
+        fittedVw = 0
+        fittedSig = -1
+        fittedMenus = []
+        return
       }
       // 菜单关闭再打开时 React 会重建菜单元素（新元素没有任何内联样式），
       // 所以缓存必须含元素身份：vw / 名字集合 / 菜单实例任一变化都要重测，
@@ -795,6 +754,28 @@ function installContextPanelPosition(ctx: ClientContext): void {
       window.removeEventListener('scroll', sync, true)
     }
   }, 'dshb-mobile: context panel position')
+}
+
+function installMobileTerminalInputFocus(ctx: ClientContext): void {
+  ctx.effect(() => {
+    const mobile = window.matchMedia(MOBILE_QUERY)
+    const focusInput = (event: PointerEvent): void => {
+      if (!mobile.matches || !(event.target instanceof Element)) return
+      const terminal = event.target.closest('.xterm')
+      const textarea = terminal?.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')
+      if (!textarea || textarea.readOnly) return
+      textarea.inputMode = 'text'
+      textarea.focus({ preventScroll: true })
+      try {
+        const virtualKeyboard = (navigator as Navigator & { virtualKeyboard?: { show?: () => void } }).virtualKeyboard
+        virtualKeyboard?.show?.()
+      } catch {
+        // The focus event still opens the keyboard on browsers without VirtualKeyboard API.
+      }
+    }
+    document.addEventListener('pointerdown', focusInput, true)
+    return () => document.removeEventListener('pointerdown', focusInput, true)
+  }, 'dshb-mobile: terminal input focus')
 }
 
 interface LayoutLike { toggleSidebar(): void }
@@ -876,6 +857,7 @@ function installFab(ctx: ClientContext, toggleSidebar: () => void): void {
 /** 安装移动端适配：样式 + viewport + 抽屉标记 + 抽屉交互 + 切换按钮。 */
 export function installMobile(ctx: ClientContext): void {
   installStyles(ctx)
+  installMobileTerminalInputFocus(ctx)
   installViewport(ctx)
   installFrameMarker(ctx)
   installStatsLine(ctx)

@@ -1,4 +1,10 @@
 import type { SshExecutor } from './executor.js'
+import { FsVersion, type FsInfo, type FsPathInfo } from '@deepseek-ai/dsh-fs'
+
+function versionOf(info: { size: number; mtime: number; isDirectory: boolean; isFile: boolean }): FsInfo['version'] {
+  const type = info.isDirectory ? 'directory' : info.isFile ? 'file' : 'other'
+  return FsVersion(`${type}:${info.size}:${info.mtime}`)
+}
 
 export class SshFileSystem {
   constructor(private readonly executor: SshExecutor) {}
@@ -19,12 +25,24 @@ export class SshFileSystem {
     return child === parent || child.startsWith(`${parent}/`)
   }
 
-  async stat(target: string, _signal?: AbortSignal): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean } | undefined> {
-    return this.executor.stat(target)
+  async stat(target: string, _signal?: AbortSignal): Promise<FsInfo | undefined> {
+    const info = await this.executor.stat(target)
+    if (!info) return undefined
+    return {
+      version: versionOf(info),
+      type: info.isDirectory ? 'directory' : info.isFile ? 'file' : 'other',
+      size: info.size,
+    }
   }
 
-  async lstat(path: string, _opts?: { cwd?: string }, _signal?: AbortSignal): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean } | undefined> {
-    return this.executor.stat(path)
+  async lstat(path: string, _opts?: { cwd?: string }, _signal?: AbortSignal): Promise<FsPathInfo | undefined> {
+    const info = await this.executor.lstat(path)
+    if (!info) return undefined
+    return {
+      version: versionOf(info),
+      type: info.isSymlink ? 'symlink' : info.isDirectory ? 'directory' : info.isFile ? 'file' : 'other',
+      size: info.size,
+    }
   }
 
   async readText(target: string, _signal?: AbortSignal): Promise<string> {
@@ -50,7 +68,7 @@ export class SshFileSystem {
     const entries = await this.executor.listDir(target)
     return entries.map((e) => ({
       name: e.name,
-      path: `${target}/${e.name}`,
+      path: `${target.replace(/\/+$/, '')}/${e.name}`,
       isDirectory: e.isDir,
       isFile: e.isFile,
       isSymlink: e.isSymlink,

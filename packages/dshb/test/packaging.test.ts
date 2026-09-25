@@ -26,7 +26,10 @@ describe('single-package distribution', () => {
       devDependencies: Record<string, string>
     }
 
-    expect(pkg.dsh.compatibility.dshReleases).toEqual({ '0.1.5-rc.1': 'compatible' })
+    expect(pkg.dsh.compatibility.dshReleases).toEqual({
+      '0.1.5-rc.1': 'compatible',
+      '0.1.7-rc.1': 'compatible',
+    })
     expect(pkg.peerDependencies).not.toHaveProperty('@deepseek-ai/dsh-client-runtime')
     expect(pkg.devDependencies).toHaveProperty('@deepseek-ai/dsh-client-runtime')
   })

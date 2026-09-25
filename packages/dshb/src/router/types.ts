@@ -1,5 +1,5 @@
 import type { FileSystem } from '@deepseek-ai/dsh-fs'
-import type { SubprocessHandle, SubprocessSpawnSpec, SubprocessRuntime, SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import type { SubprocessHandle, SubprocessSpawnSpec, SubprocessRuntime, SubprocessTerminalEnvironment, SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
 
 export interface NodeTestReport {
@@ -26,6 +26,8 @@ export interface FsDelegate {
 export type FsTargetLike = string
 
 export interface SubprocessDelegate {
+  terminalEnvironment(signal?: AbortSignal): Promise<SubprocessTerminalEnvironment>
+  resolveExecutable(command: string, env?: Readonly<Record<string, string>>, signal?: AbortSignal): Promise<string>
   spawn(spec: SubprocessSpawnSpec): SubprocessHandle
   spawnTerminal(spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle>
 }

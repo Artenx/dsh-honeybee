@@ -1,4 +1,10 @@
 import type { DockerBackend } from './docker-backend.js'
+import { FsVersion, type FsInfo, type FsPathInfo } from '@deepseek-ai/dsh-fs'
+
+function versionOf(info: { size: number; mtime: number; isDirectory: boolean; isFile: boolean; isSymlink?: boolean }): FsInfo['version'] {
+  const type = info.isDirectory ? 'directory' : info.isFile ? 'file' : info.isSymlink ? 'symlink' : 'other'
+  return FsVersion(`${type}:${info.size}:${info.mtime}`)
+}
 
 export class DockerFileSystem {
   constructor(private readonly client: DockerBackend) {}
@@ -19,12 +25,24 @@ export class DockerFileSystem {
     return child === parent || child.startsWith(`${parent}/`)
   }
 
-  async stat(target: string, _signal?: AbortSignal): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean } | undefined> {
-    return this.client.stat(target)
+  async stat(target: string, _signal?: AbortSignal): Promise<FsInfo | undefined> {
+    const info = await this.client.stat(target)
+    if (!info) return undefined
+    return {
+      version: versionOf(info),
+      type: info.isDirectory ? 'directory' : info.isFile ? 'file' : 'other',
+      size: info.size,
+    }
   }
 
-  async lstat(path: string, _opts?: { cwd?: string }, _signal?: AbortSignal): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean } | undefined> {
-    return this.client.stat(path)
+  async lstat(path: string, _opts?: { cwd?: string }, _signal?: AbortSignal): Promise<FsPathInfo | undefined> {
+    const info = await this.client.lstat(path)
+    if (!info) return undefined
+    return {
+      version: versionOf(info),
+      type: info.isSymlink ? 'symlink' : info.isDirectory ? 'directory' : info.isFile ? 'file' : 'other',
+      size: info.size,
+    }
   }
 
   async readText(target: string, _signal?: AbortSignal): Promise<string> {

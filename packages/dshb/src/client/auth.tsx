@@ -245,7 +245,7 @@ export function apply(ctx: ClientContext): void {
     Object.defineProperty(connection, 'isLoopback', { configurable: true, get: () => true })
   }
   ctx.plugin({
-    inject: ['slots', 'settingsScope'],
+    inject: ['slots'],
     apply: (sub: ClientContext): void => {
       sub.slots.inject('settings.section', () =>
         sub.slots.register({ name: 'settings.section', id: SECTION_ID, order: 100, label: () => '认证' }, AuthSection),

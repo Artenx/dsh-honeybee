@@ -124,6 +124,25 @@ export class SshExecutor {
     })
   }
 
+  async lstat(path: string): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean; isSymlink: boolean } | undefined> {
+    const sftp = await this.sftp()
+    return new Promise((resolve) => {
+      sftp.lstat(path, (err, stats) => {
+        if (err) {
+          resolve(undefined)
+          return
+        }
+        resolve({
+          size: Number(stats.size),
+          mtime: stats.mtime * 1000,
+          isDirectory: stats.isDirectory(),
+          isFile: stats.isFile(),
+          isSymlink: stats.isSymbolicLink(),
+        })
+      })
+    })
+  }
+
   async mkdir(path: string): Promise<void> {
     const sftp = await this.sftp()
     return new Promise((resolve, reject) => {
@@ -171,15 +190,18 @@ export class SshExecutor {
     }
   }
 
-  async pty(argv: string[], cwd: string, _env: Record<string, string>, cols: number, rows: number): Promise<{ channel: import('ssh2').ClientChannel; onData: (cb: (chunk: Buffer) => void) => void; resize: (cols: number, rows: number) => void; kill: () => void }> {
+  async pty(argv: string[], cwd: string, env: Record<string, string>, cols: number, rows: number, terminalType = 'xterm-256color'): Promise<{ channel: import('ssh2').ClientChannel; resize: (cols: number, rows: number) => void; kill: () => void }> {
     const client = await this.connection.getClient()
     const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`
-    const cmdParts = argv.map(q)
-    const command = `bash -c 'cd "$0" && exec env -i HOME="$HOME" PATH="\${PATH:-/usr/local/bin:/usr/bin:/bin}" "$@"' ${q(cwd)} ${cmdParts.join(' ')}`
+    const environment = Object.entries(env).map(([key, value]) => {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`invalid terminal environment key: ${key}`)
+      return `${key}=${value}`
+    })
+    const command = `bash -c 'cd "$0" && exec env -i HOME="$HOME" PATH="\${PATH:-/usr/local/bin:/usr/bin:/bin}" "$@"' ${q(cwd)} ${[...environment, ...argv].map(q).join(' ')}`
     return new Promise((resolve, reject) => {
       client.exec(
         command,
-        { pty: { cols, rows, term: 'xterm-256color' } },
+        { pty: { cols, rows, term: terminalType } },
         (err, channel) => {
           if (err) {
             reject(err)
@@ -187,7 +209,6 @@ export class SshExecutor {
           }
           resolve({
             channel,
-            onData: (cb) => channel.on('data', cb),
             resize: (c, r) => channel.setWindow(c, r, 0, 0),
             kill: () => channel.close(),
           })

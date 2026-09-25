@@ -212,8 +212,17 @@ export class DockerClient implements DockerBackend {
       .filter((e): e is NonNullable<typeof e> => e !== null)
   }
 
-  async stat(path: string): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean } | undefined> {
-    const result = await this.execShell(`stat -c '%s %Y %F' ${shellQuote(path)} 2>/dev/null`, '/')
+  async stat(path: string): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean; isSymlink: boolean } | undefined> {
+    return this.readStat(path, true)
+  }
+
+  async lstat(path: string): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean; isSymlink: boolean } | undefined> {
+    return this.readStat(path, false)
+  }
+
+  private async readStat(path: string, followSymlink: boolean): Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean; isSymlink: boolean } | undefined> {
+    const follow = followSymlink ? '-L ' : ''
+    const result = await this.execShell(`stat ${follow}-c '%s %Y %F' ${shellQuote(path)} 2>/dev/null`, '/')
     const line = result.stdout.trim()
     if (!line) return undefined
     const parts = line.split(/\s+/)
@@ -226,6 +235,7 @@ export class DockerClient implements DockerBackend {
       mtime,
       isDirectory: ftype.includes('directory'),
       isFile: ftype.includes('regular file') || ftype.includes('regular empty file'),
+      isSymlink: ftype.includes('symbolic link'),
     }
   }
 
@@ -241,13 +251,16 @@ export class DockerClient implements DockerBackend {
     await this.exec(['mv', src, dest], '/')
   }
 
-  async pty(argv: string[], cwd: string, cols: number, rows: number): Promise<{ stream: NodeJS.ReadWriteStream; resize: (c: number, r: number) => void; kill: () => void }> {
+  async pty(argv: string[], cwd: string, cols: number, rows: number, env: Record<string, string> = {}, terminalType = 'xterm-256color'): Promise<{ stream: NodeJS.ReadWriteStream; resize: (c: number, r: number) => void; kill: () => void }> {
+    const environment = Object.entries(env).map(([key, value]) => `${key}=${value}`)
+    if (!environment.some((entry) => entry.startsWith('TERM='))) environment.push(`TERM=${terminalType}`)
     const createRes = await dockerRequest('POST', `/containers/${this.containerId}/exec`, {
       AttachStdout: true,
       AttachStderr: true,
       AttachStdin: true,
       Tty: true,
       WorkingDir: cwd,
+      Env: environment,
       Cmd: argv,
     })
     if (createRes.statusCode !== 201) throw new Error('docker exec create failed')

@@ -12,7 +12,8 @@
     "typecheck": "pnpm -r --if-present run typecheck"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh": "0.1.5-rc.1",
+    "@deepseek-ai/dsh": "0.1.7-rc.1",
+    "@deepseek-ai/cordis-plugin-group": "~1.0.4",
     "tsdown": "^0.22.14",
     "typescript": "^5.9.2",
     "vitest": "^4.1.11"

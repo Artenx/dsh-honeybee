@@ -7,10 +7,9 @@ const SSH_HOST = '127.0.0.1'
 const SSH_PORT = 2222
 const KEY_PATH = '/tmp/dshb-testkey'
 const skip = !existsSync(KEY_PATH)
+const liveDescribe = skip ? describe.skip : describe
 
-const skipIf = (reason: string) => (skip ? describe.skip(reason, () => {}) : describe)
-
-skipIf('live SSH 全方法测试（需求 12.2，需 sshd:2222 + 密钥）')('live SSH 全方法测试', () => {
+liveDescribe('live SSH 全方法测试（需 sshd:2222 + 密钥）', () => {
   let conn: SshConnection
   let ex: SshExecutor
 

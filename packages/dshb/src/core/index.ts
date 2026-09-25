@@ -20,12 +20,18 @@ export function apply(ctx: Context): void {
   const knownHosts = new KnownHostsStore()
   const registry = new NodeRegistry(ctx)
   const bindings = new WorkspaceBindingsStore()
+  let workspaceRegistry: { list(): Array<{ path: string; title: string }> } | undefined
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['workspaceRegistry'], (workspaceCtx: Context) => {
+      workspaceRegistry = (workspaceCtx as unknown as { workspaceRegistry?: typeof workspaceRegistry }).workspaceRegistry
+    })
+  }
   ctx.provide('nodeRegistry', registry)
   ctx.provide('knownHosts', knownHosts)
   ctx.provide('workspaceBindings', bindings)
   ctx.provide('dshbAudit', sharedAuditLogger())
   sharedWorldResolver().setBindings(bindings)
-  void registerNodeRoutes(ctx, registry)
+  void registerNodeRoutes(ctx, registry, bindings, () => workspaceRegistry)
   void registerSshConfigRoutes(ctx, knownHosts)
   void registerWorkspaceRoutes(ctx, registry, bindings)
   void registerRemoteDownloadRoutes(ctx, registry, bindings)

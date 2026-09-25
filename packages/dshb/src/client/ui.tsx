@@ -279,28 +279,22 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
     if (selectedId === 'new') return
     setBusy(true)
     try {
-      // 容器类型节点：先删除关联容器（失败不阻断节点删除）
-      const node = nodes.find((n) => n.id === selectedId)
-      if (node && (node.type === 'local-docker' || node.type === 'remote-docker') && node.docker?.containerId) {
-        try {
-          await fetch(`/api/dshb/docker/${selectedId}/delete`, { method: 'POST' })
-        } catch {
-          // 容器删除失败仍继续删节点配置
-        }
-      }
       const res = await fetch(`/api/dshb/nodes/${selectedId}`, { method: 'DELETE' })
-      if (res.ok) {
+      const data = (await res.json()) as { ok?: boolean; error?: string }
+      if (res.ok && data.ok) {
         flash({ kind: 'ok', text: '节点已删除' })
         setSelectedId('new')
         setForm(EMPTY_FORM)
         reload()
+      } else {
+        flash({ kind: 'error', text: data.error ?? '删除失败' })
       }
     } catch {
       flash({ kind: 'error', text: '删除失败' })
     } finally {
       setBusy(false)
     }
-  }, [selectedId, nodes, flash, reload])
+  }, [selectedId, flash, reload])
 
   const test = useCallback(async () => {
     if (form.type === 'local-host') {
@@ -646,7 +640,7 @@ export function apply(ctx: ClientContext): void {
   registerWorkspaceInstructionMenu(ctx)
 
   ctx.plugin({
-    inject: ['slots', 'settingsScope'],
+    inject: ['slots'],
     apply: (sub: ClientContext): void => {
       sub.slots.inject('settings.section', () =>
         sub.slots.register({ name: 'settings.section', id: SECTION_ID, order: 110, label: () => '工作节点' }, NodeSection),

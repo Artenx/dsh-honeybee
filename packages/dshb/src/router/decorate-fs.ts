@@ -1,3 +1,5 @@
+import { join } from 'node:path'
+import { FsTargetKey } from '@deepseek-ai/dsh-fs'
 import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import type { FsEditOutcome, FsEditRequest, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome, FsDirEntry, FsInfo, FsPathInfo } from '@deepseek-ai/dsh-fs'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
@@ -55,10 +57,26 @@ export function decorateFileSystem(fs: FileSystem): () => void {
   }
 
   fs.listDir = async (target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> => {
-    const ref = resolver.resolve(targetPath(target))
+    const parentPath = targetPath(target)
+    const ref = resolver.resolve(parentPath)
     if (ref.kind === 'local') return origListDir(target, signal)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
-    return ref.provider.fs.listDir(ref.remotePath, signal) as Promise<FsDirEntry[]>
+    const entries = await ref.provider.fs.listDir(ref.remotePath, signal) as Array<{
+      name: string
+      isDirectory?: boolean
+      isFile?: boolean
+      isSymlink?: boolean
+      size?: number
+    }>
+    return entries.map((entry) => {
+      const childPath = join(parentPath, entry.name)
+      return {
+        name: entry.name,
+        type: entry.isDirectory ? 'directory' : entry.isFile ? 'file' : 'other',
+        target: { targetKey: FsTargetKey(childPath), displayPath: childPath },
+        ...(entry.size === undefined ? {} : { size: entry.size }),
+      }
+    })
   }
 
   fs.writeText = async (target: FsTarget, content: string, expected?: FsWriteIntent, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsWriteOutcome> => {

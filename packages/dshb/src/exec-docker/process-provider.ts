@@ -1,6 +1,6 @@
 import type { DockerBackend } from './docker-backend.js'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
-import type { CollectedOutput, SubprocessHandle, SubprocessSpawnSpec, SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import { SubprocessExecutableNotFoundError, type CollectedOutput, type SubprocessHandle, type SubprocessOutcome, type SubprocessSpawnSpec, type SubprocessTerminalEnvironment, type SubprocessTerminalHandle, type SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 
 export class DockerShellExecutor {
   constructor(private readonly client: DockerBackend) {}
@@ -47,6 +47,24 @@ export class DockerShellExecutor {
 export class DockerSubprocessRuntime {
   constructor(private readonly client: DockerBackend) {}
 
+  async terminalEnvironment(signal?: AbortSignal): Promise<SubprocessTerminalEnvironment> {
+    signal?.throwIfAborted()
+    const script = `user=$(id -un); shell=$(getent passwd "$user" 2>/dev/null | cut -d: -f7); if [ -z "$shell" ]; then shell=$(awk -F: -v user="$user" '$1 == user {print $7; exit}' /etc/passwd); fi; printf "%s" "$shell"`
+    const result = await this.client.exec(['sh', '-c', script], '/')
+    signal?.throwIfAborted()
+    const defaultShell = result.stdout.trim().split('\n')[0]
+    return { platform: 'posix', ...(defaultShell ? { defaultShell } : {}) }
+  }
+
+  async resolveExecutable(command: string, env: Readonly<Record<string, string>> = {}, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted()
+    const result = await this.client.exec(['sh', '-c', 'command -v "$1"', 'sh', command], '/', { ...env })
+    signal?.throwIfAborted()
+    const path = result.stdout.trim().split('\n')[0]
+    if (result.code !== 0 || !path) throw new SubprocessExecutableNotFoundError(`executable not found in Docker node: ${command}`)
+    return path
+  }
+
   spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
     const promise = this.client.exec(spec.argv as string[], spec.cwd, (spec.env ?? {}) as Record<string, string>)
     const handle: SubprocessHandle = {
@@ -60,13 +78,39 @@ export class DockerSubprocessRuntime {
   }
 
   async spawnTerminal(spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle> {
-    const pty = await this.client.pty(spec.argv as string[], spec.cwd, (spec as { cols?: number }).cols ?? 80, (spec as { rows?: number }).rows ?? 24)
+    if (spec.signal?.aborted) throw spec.signal.reason
+    const pty = await this.client.pty(spec.argv as string[], spec.cwd, spec.cols, spec.rows, spec.env, spec.terminalType)
+    if (spec.signal?.aborted) {
+      pty.kill()
+      throw spec.signal.reason
+    }
+    let settled = false
+    const done = new Promise<SubprocessOutcome>((resolve, reject) => {
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        resolve({ exitCode: null, signal: null })
+      }
+      pty.stream.once('end', finish)
+      pty.stream.once('close', finish)
+      pty.stream.once('error', reject)
+    })
     const handle: SubprocessTerminalHandle = {
-      write: (data: string) => pty.stream.write(data),
-      resize: (cols: number, rows: number) => pty.resize(cols, rows),
-      onData: (cb: (data: string) => void) => pty.stream.on('data', (chunk: Buffer) => cb(chunk.toString('utf8'))),
-      kill: () => pty.kill(),
-    } as unknown as SubprocessTerminalHandle
+      pid: -1,
+      output: pty.stream as unknown as import('node:stream').Readable,
+      done,
+      write: (data) => new Promise<void>((resolve, reject) => {
+        pty.stream.write(data, (error) => error ? reject(error) : resolve())
+      }),
+      resize: async (cols, rows) => pty.resize(cols, rows),
+      inspectForeground: async () => undefined,
+      inspectActivity: async () => ({ state: 'unknown', revision: 0 }),
+      signalForeground: async () => { throw new Error('foreground signaling is unsupported for Docker terminals') },
+      terminate: async () => {
+        pty.kill()
+        await done.catch(() => {})
+      },
+    }
     return handle
   }
 }

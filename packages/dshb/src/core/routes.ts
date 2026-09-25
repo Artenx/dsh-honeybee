@@ -2,10 +2,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { mkdirSync, readdirSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { resolveHostRunner } from '../exec-docker/host-runner.js'
 import { NodeRegistry, type NodeProfile, type NodeType } from './node-registry.js'
 import { readSshConfig, resolveSshConfigEntry } from './ssh-config.js'
 import type { KnownHostsStore } from './known-hosts.js'
 import { testNode, type SshHandshakeTester, type DockerNodeTester } from './test.js'
+import type { WorkspaceBindingsStore } from './workspace-bindings.js'
 
 interface WorldsLike {
   ensure(nodeId: string): Promise<{
@@ -68,6 +70,10 @@ interface DockerProvisionerLike {
   status(nodeId: string): { state: string; error?: string; containerId?: string; updatedAt: string } | undefined
 }
 
+interface WorkspaceRegistryLike {
+  list(): Array<{ path: string; title: string }>
+}
+
 function maybeProvision(ctx: Context, node: NodeProfile): boolean {
   if (node.type !== 'local-docker' && node.type !== 'remote-docker') return false
   if (!node.docker?.image) return false
@@ -77,7 +83,12 @@ function maybeProvision(ctx: Context, node: NodeProfile): boolean {
   return true
 }
 
-export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): Promise<void> {
+export async function registerNodeRoutes(
+  ctx: Context,
+  registry: NodeRegistry,
+  bindings: WorkspaceBindingsStore,
+  getWorkspaceRegistry?: () => WorkspaceRegistryLike | undefined,
+): Promise<void> {
   const webServer = ctx.webServer
   ctx.effect(() =>
     webServer.register({
@@ -238,8 +249,62 @@ export async function registerNodeRoutes(ctx: Context, registry: NodeRegistry): 
         }
 
         if (req.method === 'DELETE' && segs[4] === undefined) {
-          await registry.remove(resourceId)
-          sendJson(res, 200, { ok: true })
+          const node = registry.get(resourceId)
+          if (!node) {
+            sendJson(res, 404, { ok: false, error: 'node not found' })
+            return
+          }
+
+          const attached = bindings.list().filter((binding) => binding.nodeId === resourceId)
+          let workspaceRegistry: WorkspaceRegistryLike | undefined
+          try {
+            workspaceRegistry = getWorkspaceRegistry?.()
+          } catch { /* protect deletion when the workspace registry is unavailable */ }
+          let active = attached
+          if (workspaceRegistry?.list) {
+            try {
+              const workspaces = workspaceRegistry.list()
+              const byPath = new Map(workspaces.map((workspace) => [workspace.path, workspace.title]))
+              active = attached.filter((binding) => byPath.has(binding.mirrorPath))
+              if (active.length > 0) {
+                const titles = active.map((binding) => byPath.get(binding.mirrorPath) ?? binding.mirrorPath)
+                sendJson(res, 409, {
+                  ok: false,
+                  code: 'node/in-use',
+                  error: `节点仍被工作区使用：${titles.join('、')}。请先移除或迁移这些工作区。`,
+                  workspaces: titles,
+                })
+                return
+              }
+            } catch {
+              active = attached
+            }
+          }
+          if (active.length > 0) {
+            sendJson(res, 409, {
+              ok: false,
+              code: 'node/in-use',
+              error: `节点仍绑定 ${active.length} 个工作区，请先移除或迁移工作区。`,
+            })
+            return
+          }
+
+          try {
+            if ((node.type === 'local-docker' || node.type === 'remote-docker') && node.docker?.containerId) {
+              const runner = await resolveHostRunner(ctx, node)
+              if (!runner) throw new Error('Docker 节点执行环境不可用，节点未删除')
+              const result = await runner.run(['docker', 'rm', '-f', node.docker.containerId])
+              if (result.code !== 0) throw new Error((result.stderr || result.stdout).trim() || '删除容器失败，节点未删除')
+            }
+            await registry.remove(resourceId)
+            const sshWorlds = ctx.get('dshbSshWorlds') as { remove?: (id: string) => void } | undefined
+            const dockerWorlds = ctx.get('dshbDockerWorlds') as { remove?: (id: string) => void } | undefined
+            sshWorlds?.remove?.(resourceId)
+            dockerWorlds?.remove?.(resourceId)
+            sendJson(res, 200, { ok: true })
+          } catch (err) {
+            sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) })
+          }
           return
         }
 
