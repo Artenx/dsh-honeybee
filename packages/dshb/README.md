@@ -10,9 +10,11 @@ dsh plugin --profile web add @artenx/dshb
 
 Restart the corresponding DSH Web profile after installation.
 
+Desktop app: install from **Settings → Plugins → More** in the DSH desktop app; the plugin takes effect on next startup.
+
 ## Requirements
 
 - Node.js 22.13 or newer
-- DeepSeek Harness 0.1.7-rc.1
+- DeepSeek Harness 0.1.7-rc.1 or 0.2.1-rc.2 (Web or Desktop)
 
 Source code and complete documentation: https://github.com/Artenx/dsh-honeybee

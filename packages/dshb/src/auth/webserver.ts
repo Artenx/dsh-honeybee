@@ -9,7 +9,7 @@ import { AuthGate, rewriteToLoopback } from './gate.js'
 export default class AuthedWebServer extends WebServer {
   private readonly gate = new AuthGate(sharedCredentialStore())
 
-  constructor(ctx: Context, config: { host: '127.0.0.1' | '0.0.0.0'; port: number }) {
+  constructor(ctx: Context, config: { host: string; port: number }) {
     super(ctx, config)
   }
 

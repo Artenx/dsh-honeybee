@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import type { IncomingMessage } from 'node:http'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { isLoopbackAddress, isLoopbackHost, isLoopbackRequest } from '../../src/auth/loopback.js'
@@ -6,6 +7,7 @@ import { CredentialStore, sanitizeUsername } from '../../src/auth/credentials.js
 import { issueSession, verifySession, readCookie, SESSION_COOKIE } from '../../src/auth/session.js'
 import { LoginRateLimiter } from '../../src/auth/ratelimit.js'
 import { installLoopbackCompat } from '../../src/auth/loopback-compat.js'
+import { rewriteToLoopback } from '../../src/auth/gate.js'
 
 const TMP_HOME = '/tmp/dshb-test-auth'
 const TMP_KEY = Buffer.from('a'.repeat(32))
@@ -39,6 +41,25 @@ describe('loopback 判定（需求 1.3/1.7）', () => {
   })
   it('不采信 X-Forwarded-For（函数根本不读该头）', () => {
     expect(isLoopbackRequest('127.0.0.1', '127.0.0.1:3080')).toBe(true)
+  })
+})
+
+describe('WebServer loopback 兼容', () => {
+  it('未传 WebServer 端口时使用当前请求 socket 端口', () => {
+    const req = {
+      socket: { localPort: 3199 },
+      headers: {
+        host: 'example.test',
+        origin: 'http://example.test:3199',
+        referer: 'http://example.test:3199/login',
+      },
+    } as unknown as IncomingMessage
+
+    rewriteToLoopback(req)
+
+    expect(req.headers.host).toBe('127.0.0.1:3199')
+    expect(req.headers.origin).toBe('http://127.0.0.1:3199/')
+    expect(req.headers.referer).toBe('http://127.0.0.1:3199/login')
   })
 })
 

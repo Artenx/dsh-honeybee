@@ -15,11 +15,13 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
-  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.1.7--rc.1-blue?style=flat-square" alt="upstream dsh 0.1.7-rc.1" /></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.2.1--rc.2-blue?style=flat-square" alt="upstream dsh 0.2.1-rc.2" /></a>
   <img src="https://img.shields.io/badge/status-developing-orange?style=flat-square" alt="status" />
 </p>
 
 A single web entry drives execution environments across multiple cloud hosts or Docker containers. The agent loop, LLM calls, sessions, and persistence stay centralized in the management side, while file, command, and terminal operations are transparently dispatched to local or remote nodes. Delivered as plugins with no changes to upstream source. Adapted for mobile browsers so operations are always at hand.
+
+> Desktop note: the DSH desktop app boots the `web` profile internally, so dsh-honeybee installs directly from the desktop **Plugins** page. The WebServer still binds `127.0.0.1`, and the auth gate admits loopback requests, so the desktop client needs no login.
 
 ---
 
@@ -49,6 +51,8 @@ dsh plugin --profile web add @artenx/dshb
 
 Restart the corresponding DSH Web profile after installation.
 
+Desktop users: open the DSH desktop app → **Settings → Plugins → More**, search for `@artenx/dshb`, and install. The plugin takes effect on next startup; no restart is needed.
+
 ### One-command source deploy
 
 ```sh
@@ -76,7 +80,7 @@ dsh --profile web
 
 ## Usage
 
-1. Start `dsh web`, open the console in a browser, and complete first login
+1. Start `dsh web` (browser) or open the DSH desktop app and complete first login (desktop loopback is admitted automatically)
 2. Go to **Settings → Work Nodes** and add a node (SSH or Docker); you can "Test Connection" first
 3. Click "Add Workspace" in the session area, choose an online node, and pick a remote directory from the tree
 4. Read/write files and run commands on the workspace from the session — operations are routed to the node automatically

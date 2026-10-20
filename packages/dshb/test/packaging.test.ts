@@ -21,13 +21,18 @@ describe('single-package distribution', () => {
 
   it('declares only verified DSH compatibility and no type-only runtime peer', () => {
     const pkg = JSON.parse(read('../package.json')) as {
+      version: string
+      engines: { dsh: string }
       dsh: { compatibility: { dshReleases: Record<string, string> } }
       peerDependencies: Record<string, string>
       devDependencies: Record<string, string>
     }
 
+    expect(pkg.version).toBe('0.1.16')
+    expect(pkg.engines.dsh).toBe('=0.1.7-rc.1 || =0.2.1-rc.2')
     expect(pkg.dsh.compatibility.dshReleases).toEqual({
       '0.1.7-rc.1': 'compatible',
+      '0.2.1-rc.2': 'compatible',
     })
     expect(pkg.peerDependencies).not.toHaveProperty('@deepseek-ai/dsh-client-runtime')
     expect(pkg.devDependencies).toHaveProperty('@deepseek-ai/dsh-client-runtime')

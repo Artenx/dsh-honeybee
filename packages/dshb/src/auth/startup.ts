@@ -52,10 +52,10 @@ function runAuthReset(args: readonly string[]): never {
 function webCommand(): Command {
   return new Command()
     .name('dsh --profile web')
-    .description('Serve the DeepSeek Harness browser UI.')
+    .description('Serve the DeepSeek Harness UI.')
     .helpOption('-h, --help', 'show this help')
     .option('--host <host>', 'bind host')
-    .option('--no-open', 'do not open the Web UI in the default browser')
+    .option('--no-open', 'do not open the UI in the default browser')
     .option('--port <port>', 'listen port; pass 0 to let the OS pick a free one')
     .option(
       '--trusted-host <authority...>',
@@ -66,7 +66,7 @@ function webCommand(): Command {
       `
 Examples:
   dsh --profile web                          serve on the composed host and port
-  dsh --profile web --no-open                serve without opening a browser
+  dsh --profile web --no-open                serve without opening a browser (desktop app ignores this)
   dsh --profile web --port 8080              serve on another port
   dsh --profile web --host 0.0.0.0           serve on all interfaces (DSHB: auth plugin guards access)
   dsh --profile web auth-reset --password <新密码>   reset admin credentials and revoke all sessions

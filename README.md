@@ -15,11 +15,13 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
-  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.1.7--rc.1-blue?style=flat-square" alt="upstream dsh 0.1.7-rc.1" /></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.2.1--rc.2-blue?style=flat-square" alt="upstream dsh 0.2.1-rc.2" /></a>
   <img src="https://img.shields.io/badge/status-developing-orange?style=flat-square" alt="status" />
 </p>
 
 一个 Web 入口同时驱动多台云主机或 Docker 容器。Agent 对话、LLM 调用、会话与持久化集中在管理端，文件读写、命令执行、终端操作透明分发到本地或远端节点执行。插件交付，不修改上游源码。适配手机浏览器，移动操作随手可及。
+
+> 桌面版说明：DSH 桌面应用内部启动的是 `web` profile，dsh-honeybee 可直接在桌面应用的 **Plugins** 页安装。桌面版下 WebServer 仍绑定 `127.0.0.1`，本机回环请求自动放行认证门，因此桌面端无需登录即可使用。
 
 ---
 
@@ -49,6 +51,8 @@ dsh plugin --profile web add @artenx/dshb
 
 安装后重启对应 DSH Web profile。
 
+桌面应用用户：打开 DSH 桌面应用 → **Settings → Plugins → More**，搜索 `@artenx/dshb` 并安装；安装后插件随下次启动生效，无需重启。
+
 ### 一键源码部署
 
 ```sh
@@ -76,7 +80,7 @@ dsh --profile web
 
 ## 使用
 
-1. 启动 `dsh web`，浏览器打开控制台，完成首次登录
+1. 启动 `dsh web`（浏览器）或打开 DSH 桌面应用，完成首次登录（桌面版本机回环自动放行）
 2. 进入 **设置 → 工作节点**，添加节点（SSH 或 Docker），可先「测试连接」
 3. 在会话区「添加工作区」，选择在线节点并从目录树选取远端目录
 4. 在会话中直接读写文件、执行命令——操作自动路由到节点侧执行

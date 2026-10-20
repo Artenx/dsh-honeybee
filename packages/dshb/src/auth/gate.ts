@@ -31,8 +31,10 @@ export class AuthGate {
   }
 }
 
-export function rewriteToLoopback(req: IncomingMessage, port: number): void {
-  const authority = `127.0.0.1:${port}`
+export function rewriteToLoopback(req: IncomingMessage, port?: number): void {
+  const localPort = port ?? req.socket.localPort
+  if (typeof localPort !== 'number') return
+  const authority = `127.0.0.1:${localPort}`
   req.headers.host = authority
   for (const name of ['origin', 'referer'] as const) {
     const value = req.headers[name]

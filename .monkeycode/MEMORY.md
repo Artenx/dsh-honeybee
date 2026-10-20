@@ -112,3 +112,15 @@ Entries discovered by the Agent during task execution should follow this format:
   - `@artenx/dshb` ≥0.1.13（自 commit 882ffa0）在 exec-ssh/exec-docker 的 process-provider 中 `import { SubprocessExecutableNotFoundError } from '@deepseek-ai/dsh-subprocess'`，该导出仅存在于 DSH 0.1.7-rc.1
   - 在 DSH 0.1.5-rc.1 上启动报 `The requested module '@deepseek-ai/dsh-subprocess' does not provide an export named 'SubprocessExecutableNotFoundError'`，plugin tree failed to load，进程 exit 1
   - 因此该 profile 必须在 DSH 0.1.7-rc.1（dshtool17）下运行；`@artenx/dshb@0.1.15` 起 `dsh.compatibility.dshReleases` 已移除 `0.1.5-rc.1`、只声明 `0.1.7-rc.1`（此前 0.1.13–0.1.14 的声明与实际能力不符）
+
+[Project Knowledge Summary]
+- Date: 2026-10-19
+- Context: Agent 核对 DSH 桌面版架构后确认 dsh-honeybee 兼容桌面应用，无需改插件代码
+- Category: Environment Configuration
+- Instructions:
+  - DSH 桌面应用（macOS/Windows）内部启动的是 `web` profile（无独立 desktop profile 模板，`PROFILE_TEMPLATES` 只有 acp/web/headless/sdk/sdk-minimal）；桌面壳只是替代浏览器作为前端 carrier，profile 内仍提供 `webServer`、`cmdlineArgs`、`connection`、`webRuntime`、`terminalController` 等全部 dshb 依赖的服务
+  - `provideCmdline` 的 JSDoc 明确"An embedding host with no command line provides an empty argument list"；桌面应用就是 embedding host，会通过 `provideCmdline` 提供 `cmdlineArgs`（空数组），所以 dshb-auth 的 `startup.ts` 的 `ctx.cmdlineArgs?.get() ?? []` 在桌面版下返回空数组，`webStartup` 服务正常提供，webserver 行的 `!!js` 表达式解析为默认值 `127.0.0.1:3080`
+  - dshb 的 `cordis.patch.yml` 禁用 `web-startup` 并替换为 `dshb-web-startup`，在桌面版下安全：桌面应用走 `web` profile，dshb 的替换行为一致
+  - 桌面版下 `isLoopbackRequest` 判定通过（本机回环），认证门自动放行，桌面端无需登录；login 页在桌面壳下不会被触发
+  - dshb 在桌面应用通过 **Settings → Plugins → More** 安装，npm 包名 `@artenx/dshb`，安装后下次启动生效；桌面应用本身不通过 CLI 启动 profile
+  - 适配桌面版的真实工作只在文档层：README 说明桌面版安装方式与认证行为、startup 帮助文本去掉"浏览器"硬编码；插件代码（auth/core/router/exec-ssh/exec-docker/ui）无需改动
