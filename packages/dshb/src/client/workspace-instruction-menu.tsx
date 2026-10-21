@@ -247,8 +247,8 @@ export function registerWorkspaceInstructionMenu(ctx: ClientContext): void {
           if (row) {
             const title = getRowTitle(row)
             if (title) activeWorkspaceTitle = title
+            injectMenuItem(container)
           }
-          injectMenuItem(container)
         }
       }
     }
