@@ -163,7 +163,7 @@ export function registerWorkspaceInstructionMenu(ctx: ClientContext): void {
     return titleEl.textContent ?? null
   }
 
-  const injectMenuItem = (menuContainer: HTMLElement): void => {
+  const injectMenuItem = (menuContainer: HTMLElement, workspaceTitle: string): void => {
     if (menuContainer.getAttribute(MENU_INJECT_FLAG) || menuContainer.querySelector(`[${MENU_ITEM_FLAG}]`)) return
     menuContainer.setAttribute(MENU_INJECT_FLAG, '1')
 
@@ -212,14 +212,14 @@ export function registerWorkspaceInstructionMenu(ctx: ClientContext): void {
     btn.addEventListener('click', (e) => {
       e.stopPropagation()
       e.preventDefault()
-      const ws = activeWorkspaceTitle ? resolveWorkspaceByTitle(activeWorkspaceTitle) : undefined
-      mountInstructionDialog(ws?.workspaceId ?? '', activeWorkspaceTitle || 'Unknown')
+      const ws = resolveWorkspaceByTitle(workspaceTitle)
+      mountInstructionDialog(ws?.workspaceId ?? '', workspaceTitle)
     })
 
     refItem.parentElement?.insertBefore(btn, refItem.nextSibling)
   }
 
-  const observer = new MutationObserver(() => {
+  const scan = (): void => {
     const projectRows = document.querySelectorAll('[class*="projectRow"]')
     for (const row of Array.from(projectRows)) {
       const rowEl = row as HTMLElement
@@ -228,10 +228,10 @@ export function registerWorkspaceInstructionMenu(ctx: ClientContext): void {
       const iconBtns = rowEl.querySelectorAll('button[class*="iconButton"]')
       for (const btn of Array.from(iconBtns)) {
         const label = btn.getAttribute('aria-label') ?? ''
-        if (label.includes('workspace') || label.includes('操作') || label.includes('actions')) {
+        if (label.includes('操作') || label.toLowerCase().includes('actions')) {
           btn.addEventListener('click', () => {
-            const title = getRowTitle(rowEl)
-            if (title) activeWorkspaceTitle = title
+            const isMenuOpen = rowEl.className.includes('menuOpen')
+            activeWorkspaceTitle = isMenuOpen ? '' : (getRowTitle(rowEl) ?? '')
           })
         }
       }
@@ -244,14 +244,17 @@ export function registerWorkspaceInstructionMenu(ctx: ClientContext): void {
         const container = item.closest('[role="menu"]') ?? item.parentElement
         if (container instanceof HTMLElement && !container.getAttribute(MENU_INJECT_FLAG)) {
           const row = findWorkspaceRow(container)
-          if (row) {
-            const title = getRowTitle(row)
-            if (title) activeWorkspaceTitle = title
-            injectMenuItem(container)
-          }
+          // Newer DSH renders workspace menus in a portal under document.body.
+          const title = row ? getRowTitle(row) : activeWorkspaceTitle
+          if (!title) continue
+          injectMenuItem(container, title)
+          activeWorkspaceTitle = ''
         }
       }
     }
-  })
+  }
+
+  const observer = new MutationObserver(scan)
   observer.observe(document.body, { childList: true, subtree: true })
+  scan()
 }

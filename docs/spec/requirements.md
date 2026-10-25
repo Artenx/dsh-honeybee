@@ -132,3 +132,13 @@ DSH-HoneyBee（简称 DSHB）是基于 deepseek-harness（DSH）二次开发的�
 2. 系统 SHALL 提供 DSHB profile 模板，按序叠加 dsh-base、dsh-web-app 与 DSHB 各 Bundle。
 3. WHEN 插件包安装或升级，系统 SHALL 通过随包 patch 自动完成组合，无需手工编辑 profile 配置。
 4. 系统 SHALL 锁定兼容的上游 DSH 版本范围，并在文档中标注已验证的上游版本。
+
+### Requirement 10 — 工作区项目指令
+
+**User Story:** AS 用户，I want 为每个工作区维护独立项目指令，so that 新会话可以自动获得该项目的上下文约定。
+
+#### Acceptance Criteria
+
+1. WHEN 用户打开工作区的操作菜单，系统 SHALL 显示“修改指令”操作。
+2. WHEN 用户选择“修改指令”，系统 SHALL 展示该工作区当前保存的项目指令，并允许用户编辑与保存。
+3. WHEN 工作区操作菜单由 portal 渲染，系统 SHALL 将“修改指令”操作绑定到打开菜单的工作区。

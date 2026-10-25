@@ -1,6 +1,6 @@
 # @artenx/dshb
 
-DSH-HoneyBee routes DSH filesystem, shell, subprocess, and PTY operations to local, SSH, and Docker execution nodes. It includes a node registry, an authentication gate, credential custody, workspace bindings, and a mobile-aware management UI.
+DSH-HoneyBee routes DSH filesystem, shell, subprocess, and PTY operations to local, SSH, and Docker execution nodes. It includes a node registry, an authentication gate, credential custody, workspace bindings and project instructions, and a mobile-aware management UI.
 
 ## Install
 

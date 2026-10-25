@@ -32,6 +32,7 @@ A single web entry drives execution environments across multiple cloud hosts or 
 - **On-demand artifact download**: click a produced file on a container or remote workspace to stream it straight from the node — no write-back needed
 - **Credential custody**: SSH passwords and private keys centrally managed by the management side
 - **Node management UI**: node CRUD, connection tests, directory-tree workspace creation, with built-in mobile-screen adaptation
+- **Workspace project instructions**: view and edit each workspace's instructions from its actions menu
 - **Single-admin authentication**: login page + session cookies to lock down the exposed network entry
 
 ## Installation
