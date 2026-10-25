@@ -1,6 +1,6 @@
 {
   "name": "@artenx/dshb",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "Routes DSH filesystem, shell, subprocess, and PTY operations to local, SSH, and Docker execution nodes, with a node registry, an authentication gate, a mobile-aware management UI, and per-workspace custom project instructions.",
   "type": "module",
   "main": "lib/index.js",
@@ -81,10 +81,7 @@
       ]
     },
     "compatibility": {
-      "dshReleases": {
-        "0.1.7-rc.1": "compatible",
-        "0.2.1-rc.2": "compatible"
-      },
+      "dshReleases": ">=0.1.7-rc.1 <0.2.2-rc.1",
       "nodeVersions": ">=22.13"
     }
   },
@@ -98,22 +95,22 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-client-ui-settings": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-conversation": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-layout": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-workspace": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-cmdline": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-credentials": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-fs": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-fs-sandbox": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-host-directory-picker": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-host-webserver": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-sandbox": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-shell": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-bash-sandbox": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-subprocess": "=0.1.7-rc.1 || =0.2.1-rc.2",
-    "@deepseek-ai/dsh-subprocess-local": "=0.1.7-rc.1 || =0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-layout": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-workspace": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-cmdline": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-credentials": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-fs": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-fs-sandbox": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-host-directory-picker": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-shell": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-bash-sandbox": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-subprocess": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-subprocess-local": ">=0.1.7-rc.1 <0.2.1-rc.2",
     "react": "^19.0.0"
   },
   "devDependencies": {
@@ -142,7 +139,7 @@
   },
   "engines": {
     "node": ">=22.13",
-    "dsh": "=0.1.7-rc.1 || =0.2.1-rc.2"
+    "dsh": ">=0.1.7-rc.1 <0.2.2-rc.1"
   },
   "sideEffects": false,
   "keywords": [
