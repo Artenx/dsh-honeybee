@@ -1,9 +1,20 @@
 import SandboxedFileSystem from '@deepseek-ai/dsh-fs-sandbox'
 import type { Context } from '@deepseek-ai/cordis'
-import type { FsEditOutcome, FsEditRequest, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome, FsDirEntry, FsInfo, FsPathInfo } from '@deepseek-ai/dsh-fs'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { FsDelegate } from './types.js'
 import { sharedWorldResolver } from './resolve.js'
+
+// Derive from the base method groups because pnpm can install separate branded dsh-fs peer instances.
+type FsTarget = Parameters<SandboxedFileSystem['stat']>[0]
+type FsMutationTarget = Parameters<SandboxedFileSystem['writeText']>[0]
+type FsInfo = NonNullable<Awaited<ReturnType<SandboxedFileSystem['stat']>>>
+type FsPathInfo = NonNullable<Awaited<ReturnType<SandboxedFileSystem['lstat']>>>
+type FsDirEntry = NonNullable<Awaited<ReturnType<SandboxedFileSystem['listDir']>>>[number]
+type FsWriteIntent = NonNullable<Parameters<SandboxedFileSystem['writeText']>[2]>
+type FsWriteOutcome = Awaited<ReturnType<SandboxedFileSystem['writeText']>>
+type FsEditRequest = Parameters<SandboxedFileSystem['editText']>[1]
+type FsEditOutcome = Awaited<ReturnType<SandboxedFileSystem['editText']>>
+type FsVersion = NonNullable<Parameters<SandboxedFileSystem['editText']>[2]>['version']
 
 export default class RouterFileSystem extends SandboxedFileSystem {
   private readonly resolver = sharedWorldResolver()
@@ -12,8 +23,8 @@ export default class RouterFileSystem extends SandboxedFileSystem {
     super(ctx, config as never)
   }
 
-  private targetPath(target: FsTarget): string {
-    return this.processPath(target)
+  private targetPath(target: FsTarget | FsMutationTarget): string {
+    return this.processPath(target as FsTarget)
   }
 
   override async stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> {
@@ -70,14 +81,14 @@ export default class RouterFileSystem extends SandboxedFileSystem {
     return ref.provider.fs.listDir(ref.remotePath, signal) as Promise<FsDirEntry[]>
   }
 
-  override async writeText(target: FsTarget, content: string, expected?: FsWriteIntent, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsWriteOutcome> {
+  override async writeText(target: FsMutationTarget, content: string, expected?: FsWriteIntent, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsWriteOutcome> {
     const ref = this.resolver.resolve(this.targetPath(target))
     if (ref.kind === 'local') return super.writeText(target, content, expected, signal, sandboxPolicy)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)
     return ref.provider.fs.writeText(ref.remotePath, content, expected, signal, sandboxPolicy) as Promise<FsWriteOutcome>
   }
 
-  override async editText(target: FsTarget, edit: FsEditRequest, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsEditOutcome> {
+  override async editText(target: FsMutationTarget, edit: FsEditRequest, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsEditOutcome> {
     const ref = this.resolver.resolve(this.targetPath(target))
     if (ref.kind === 'local') return super.editText(target, edit, expected, signal, sandboxPolicy)
     if (ref.kind === 'unrouted') throw new Error(`node ${ref.nodeId} world not available`)

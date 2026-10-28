@@ -11,6 +11,19 @@ import { testNode, type DockerNodeTester, type SshHandshakeTester } from './test
 import { WorkspaceBindingsStore } from './workspace-bindings.js'
 import { sharedWorkspaceInstructionStore } from './workspace-instructions.js'
 import { registerWorkspaceInstructionInjector } from './workspace-instruction-context.js'
+import { SyncPeerManager } from './sync/peer-manager.js'
+import { registerSyncInternalRoutes } from './sync/internal-routes.js'
+import { registerSyncPeerRoutes } from './sync/routes.js'
+import { SyncSshTransport } from './sync/ssh-transport.js'
+import { SyncCoordinator } from './sync/coordinator.js'
+import { SyncScheduler } from './sync/scheduler.js'
+import { SyncNodeService } from './sync/node-sync.js'
+import { SyncSessionService, type WorkspaceRegistryLike } from './sync/session-sync.js'
+import { registerSyncSessionRoutes } from './sync/session-routes.js'
+import { SyncOfflineArchiveService } from './sync/offline-archive.js'
+import { registerSyncOfflineRoutes } from './sync/offline-routes.js'
+import { SyncPeerStore, SyncStateStore } from './sync/stores.js'
+import { sharedSessionInstructionSnapshotStore } from './workspace-instructions.js'
 
 export const name = 'dshb-core'
 
@@ -20,22 +33,88 @@ export function apply(ctx: Context): void {
   const knownHosts = new KnownHostsStore()
   const registry = new NodeRegistry(ctx)
   const bindings = new WorkspaceBindingsStore()
-  let workspaceRegistry: { list(): Array<{ path: string; title: string }> } | undefined
+  const syncPeers = new SyncPeerStore()
+  const syncState = new SyncStateStore()
+  const syncPeerManager = new SyncPeerManager(syncPeers, syncState, ctx.credentials as never)
+  const syncSshTransport = new SyncSshTransport(syncPeerManager)
+  let workspaceRegistry: WorkspaceRegistryLike | undefined
   if (typeof ctx.inject === 'function') {
     ctx.inject(['workspaceRegistry'], (workspaceCtx: Context) => {
       workspaceRegistry = (workspaceCtx as unknown as { workspaceRegistry?: typeof workspaceRegistry }).workspaceRegistry
     })
   }
+  const syncNodes = new SyncNodeService(registry, bindings, syncState, () => workspaceRegistry, (nodeId) => {
+    const sshWorlds = ctx.get('dshbSshWorlds') as { remove?: (id: string) => void } | undefined
+    const dockerWorlds = ctx.get('dshbDockerWorlds') as { remove?: (id: string) => void } | undefined
+    sshWorlds?.remove?.(nodeId)
+    dockerWorlds?.remove?.(nodeId)
+  })
+  const syncSessions = new SyncSessionService(
+    syncState,
+    syncNodes,
+    registry,
+    bindings,
+    () => workspaceRegistry,
+    () => ctx.get('sessionPersistence') as never,
+    () => ctx.get('attachments') as never,
+    () => ctx.get('spillStore') as never,
+    sharedSessionInstructionSnapshotStore(),
+  )
+  const syncOfflineArchives = new SyncOfflineArchiveService(syncNodes, syncSessions, undefined, undefined, syncState)
+  try {
+    syncOfflineArchives.cleanupStagingDirectories()
+    syncSessions.cleanupOrphanedStaging()
+  } catch {
+    ctx.logger.warn('sync staging cleanup failed')
+  }
+  const syncCoordinator = new SyncCoordinator(syncPeerManager, syncState, syncNodes, syncSshTransport, Date.now, syncSessions)
+  const syncScheduler = new SyncScheduler(syncPeerManager, syncCoordinator)
   ctx.provide('nodeRegistry', registry)
   ctx.provide('knownHosts', knownHosts)
   ctx.provide('workspaceBindings', bindings)
+  ctx.provide('syncPeerStore', syncPeers)
+  ctx.provide('syncStateStore', syncState)
+  ctx.provide('syncNodeService', syncNodes)
+  ctx.provide('syncSessionService', syncSessions)
+  ctx.provide('syncOfflineArchiveService', syncOfflineArchives)
+  ctx.provide('syncPeerManager', syncPeerManager)
+  ctx.provide('syncSshTransport', syncSshTransport)
+  ctx.provide('syncCoordinator', syncCoordinator)
+  ctx.provide('syncScheduler', syncScheduler)
   ctx.provide('dshbAudit', sharedAuditLogger())
   sharedWorldResolver().setBindings(bindings)
-  void registerNodeRoutes(ctx, registry, bindings, () => workspaceRegistry)
+  void registerNodeRoutes(ctx, registry, bindings, () => workspaceRegistry, syncNodes)
   void registerSshConfigRoutes(ctx, knownHosts)
-  void registerWorkspaceRoutes(ctx, registry, bindings)
+  void registerWorkspaceRoutes(ctx, registry, bindings, syncNodes)
   void registerRemoteDownloadRoutes(ctx, registry, bindings)
   void registerWorkspaceInstructionRoutes(ctx, sharedWorkspaceInstructionStore())
+  registerSyncPeerRoutes(ctx, syncPeerManager, syncSshTransport, syncCoordinator)
+  registerSyncInternalRoutes(ctx, syncState, syncNodes, syncSessions)
+  registerSyncSessionRoutes(ctx, syncSessions)
+  registerSyncOfflineRoutes(ctx, syncOfflineArchives)
+  ctx.effect(() => {
+    const stopScheduler = syncScheduler.start()
+    let disposed = false
+    setImmediate(() => {
+      if (disposed) return
+      void (async () => {
+        try {
+          await syncSessions.recoverPending()
+        } catch {
+          ctx.logger.warn('sync session recovery remains pending')
+        }
+        try {
+          await syncOfflineArchives.recoverPending()
+        } catch {
+          ctx.logger.warn('offline archive recovery remains pending')
+        }
+      })()
+    })
+    return () => {
+      disposed = true
+      stopScheduler()
+    }
+  })
   registerWorkspaceInstructionInjector(ctx)
   warmupWorlds(ctx, registry, bindings)
   startHeartbeat(ctx, registry)

@@ -147,6 +147,24 @@ describe('SessionInstructionSnapshotStore（需求 3.3-3.5、4.1-4.5、7.1-7.3�
     expect(snap.workspaceRevision).toBe(1)
   })
 
+  it('restore 持久导入快照并对相同输入保持幂等', () => {
+    const workspace = new WorkspaceInstructionStore().update({ workspaceId: 'source-ws', text: 'guide', expectedRevision: 0 })
+    const store = new SessionInstructionSnapshotStore()
+    const snapshot = {
+      sessionId: 'target-session',
+      workspaceId: 'target-ws',
+      workspaceRevision: workspace.revision,
+      digest: workspace.digest,
+      text: workspace.text,
+      capturedAt: '2026-10-26T00:00:00.000Z',
+    }
+
+    expect(store.restore(snapshot)).toEqual(snapshot)
+    expect(new SessionInstructionSnapshotStore().get(snapshot.sessionId)).toEqual(snapshot)
+    expect(store.restore(snapshot)).toEqual(snapshot)
+    expect(() => store.restore({ ...snapshot, text: 'different' })).toThrow('digest mismatch')
+  })
+
   it('inherit 源复制父快照（需求 7.1-7.3）', () => {
     const store = new SessionInstructionSnapshotStore()
     const parent = {

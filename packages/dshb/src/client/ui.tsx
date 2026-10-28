@@ -7,6 +7,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { DirectoryFlowOccupant } from './directory-flow.js'
 import { installMobile } from './mobile.js'
 import { registerWorkspaceInstructionMenu } from './workspace-instruction-menu.js'
+import { SyncPeersSection } from './sync-peers.js'
+import { SyncOfflineSection } from './sync-offline.js'
 
 export const inject = ['connection', 'workspaces', 'slots', 'layout', 'conversation']
 
@@ -31,6 +33,7 @@ interface NodeProfileView {
   hasSecret: { hasPassword: boolean; hasKey: boolean; hasPassphrase: boolean }
   status?: { reachable?: boolean; lastCheckedAt?: string; error?: string }
   provision?: { state: 'provisioning' | 'ready' | 'failed'; error?: string; containerId?: string; updatedAt: string }
+  sync?: { importedVia?: 'peer' | 'offline'; sourceName?: string; pendingRemoval: boolean; credentialsRequired?: boolean }
 }
 
 interface SshConfigEntryView {
@@ -143,6 +146,7 @@ function useNodes(reloadKey: number): NodeProfileView[] {
 
 export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElement {
   const [reloadKey, setReloadKey] = useState(0)
+  const [panel, setPanel] = useState<'nodes' | 'sync' | 'offline'>('nodes')
   const nodes = useNodes(reloadKey)
   const [selectedId, setSelectedId] = useState<string | 'new'>('new')
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
@@ -395,14 +399,15 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
       }
     `}</style>
     <div className="dshb-node-section" style={{ display: 'flex', gap: 20, minHeight: 320, overflow: 'hidden', maxWidth: '100%', width: '100%', boxSizing: 'border-box' }}>
-      <div style={{ width: 200, flexShrink: 0, borderRight: '1px solid var(--dsw-alias-border-l2)', paddingRight: 16 }}>
-        <button type="button" onClick={() => selectNode('new')} style={{ ...primaryButtonStyle, width: '100%', marginBottom: 10 }}>
-          新建节点
+      <div style={{ width: 200, flexShrink: 0, borderRight: '1px solid var(--dsw-alias-border-l2)', paddingRight: 16, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <button type="button" onClick={() => { setPanel('nodes'); selectNode('new') }} style={{ ...secondaryButtonStyle, width: '100%', marginBottom: 10, borderRadius: 8, background: panel !== 'offline' ? 'var(--dsw-alias-interactive-bg-active, var(--dsw-alias-interactive-bg-hover))' : 'transparent' }}>
+          节点列表
         </button>
+        <div style={{ flex: '0 1 auto', minHeight: 0, maxHeight: 'min(60vh, 480px)', overflowY: 'auto' }}>
         {nodes.map((n) => (
           <div
             key={n.id}
-            onClick={() => selectNode(n.id)}
+            onClick={() => { setPanel('nodes'); selectNode(n.id) }}
             style={{
               padding: '8px 10px',
               borderRadius: 6,
@@ -412,7 +417,10 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
               fontSize: 13,
             }}
           >
-            <div style={{ fontWeight: 500 }}>{n.name}</div>
+            <div style={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
+              {n.name}
+              {n.sync?.importedVia === 'peer' && <span aria-label={`同步自 ${n.sync.sourceName ?? 'peer'}`} title={`同步自 ${n.sync.sourceName ?? 'peer'}`} style={{ fontSize: 12, opacity: 0.7 }}>↗</span>}
+            </div>
             <div style={{ fontSize: 11, opacity: 0.7, display: 'flex', alignItems: 'center', gap: 4 }}>
               <span
                 style={{
@@ -432,12 +440,36 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
                 {n.provision.state === 'provisioning' ? '容器拉起中…' : n.provision.state === 'ready' ? '容器已就绪' : `容器拉起失败：${n.provision.error ?? '未知错误'}`}
               </div>
             )}
+            {n.sync?.pendingRemoval && <div style={{ fontSize: 11, marginTop: 2, color: 'var(--dsw-alias-state-warn-label)' }}>等待工作区解绑后删除</div>}
+            {n.sync?.credentialsRequired && <div style={{ fontSize: 11, marginTop: 2, color: 'var(--dsw-alias-state-warn-label)' }}>同步源未包含可迁移凭据</div>}
           </div>
         ))}
         {nodes.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>暂无节点</div>}
+        </div>
       </div>
 
-      <div style={{ flex: 1, maxWidth: 480, minWidth: 0, overflow: 'hidden' }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingBottom: 8, marginBottom: 10, borderBottom: '1px solid var(--dsw-alias-border-l2)' }}>
+          <button type="button" onClick={() => { setPanel('nodes'); selectNode('new') }} style={{ ...(panel === 'nodes' ? primaryButtonStyle : secondaryButtonStyle), height: 32, padding: '0 16px', borderRadius: 8 }}>
+            新建
+          </button>
+          <button type="button" onClick={() => setPanel('sync')} style={{ ...(panel === 'sync' ? primaryButtonStyle : secondaryButtonStyle), height: 32, padding: '0 16px', borderRadius: 8 }}>
+            同步
+          </button>
+          <button type="button" onClick={() => setPanel('offline')} style={{ ...(panel === 'offline' ? primaryButtonStyle : secondaryButtonStyle), height: 32, padding: '0 12px', borderRadius: 8 }}>
+            导入/导出
+          </button>
+        </div>
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+      {panel === 'sync' ? <>
+        <div role="note" style={{ padding: '10px 12px', marginBottom: 12, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-1)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>节点与会话同步</div>
+          <div style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+            通过 SSH 在 DSHB 实例间同步远端节点配置，支持单向拉取和双向同步；也可选择同步已映射工作区的会话与附件。首次连接需确认 SSH 主机指纹。
+          </div>
+        </div>
+        <SyncPeersSection />
+      </> : panel === 'offline' ? <SyncOfflineSection onImported={reload} /> : <div style={{ flex: 1, maxWidth: 480, minWidth: 0, overflow: 'hidden' }}>
         {sshConfigEntries.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <label style={{ fontSize: 12, opacity: 0.75, display: 'block', marginBottom: 4 }}>从 ~/.ssh/config 导入</label>
@@ -577,6 +609,8 @@ export function NodeSection(_props: PropsRuntime<'settings.section'>): ReactElem
             {notice && <span style={{ fontSize: 13, alignSelf: 'center', color: notice.kind === 'ok' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' }}>{notice.text}</span>}
           </div>
         </div>
+      </div>}
+      </div>
       </div>
     </div>
     </>

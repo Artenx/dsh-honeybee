@@ -23,18 +23,32 @@ describe('single-package distribution', () => {
     const pkg = JSON.parse(read('../package.json')) as {
       version: string
       engines: { dsh: string }
-      dsh: { compatibility: { dshReleases: Record<string, string> } }
+      dsh: { compatibility: { dshReleases: string; nodeVersions: string } }
       peerDependencies: Record<string, string>
       devDependencies: Record<string, string>
     }
 
-    expect(pkg.version).toBe('0.1.16')
-    expect(pkg.engines.dsh).toBe('=0.1.7-rc.1 || =0.2.1-rc.2')
-    expect(pkg.dsh.compatibility.dshReleases).toEqual({
-      '0.1.7-rc.1': 'compatible',
-      '0.2.1-rc.2': 'compatible',
-    })
+    expect(pkg.version).toBe('0.1.18')
+    expect(pkg.engines.dsh).toBe('>=0.1.7-rc.1 <0.2.2-rc.1')
+    expect(pkg.dsh.compatibility.dshReleases).toBe(pkg.engines.dsh)
+    expect(pkg.dsh.compatibility.nodeVersions).toBe('>=22.13')
     expect(pkg.peerDependencies).not.toHaveProperty('@deepseek-ai/dsh-client-runtime')
     expect(pkg.devDependencies).toHaveProperty('@deepseek-ai/dsh-client-runtime')
+  })
+
+  it('exports the bundled plugin entry points and client patch metadata', () => {
+    const pkg = JSON.parse(read('../package.json')) as {
+      exports: Record<string, string>
+      files: string[]
+      dsh: { bundle: { patch: string }; client: { platform: string; inject: string[] } }
+    }
+
+    expect(pkg.exports['.']).toBe('./lib/index.js')
+    expect(pkg.exports['./core']).toBe('./lib/core/index.js')
+    expect(pkg.exports['./client']).toBe('./lib/client.js')
+    expect(pkg.files).toContain('lib')
+    expect(pkg.dsh.bundle.patch).toBe('./cordis.patch.yml')
+    expect(pkg.dsh.client.platform).toBe('web')
+    expect(pkg.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-settings')
   })
 })

@@ -230,6 +230,22 @@ export class SessionInstructionSnapshotStore {
     return { ...snapshot }
   }
 
+  restore(snapshot: SessionInstructionSnapshot): SessionInstructionSnapshot {
+    this.load()
+    if (utf8Bytes(snapshot.text) > INSTRUCTION_MAX_BYTES) throw new InstructionSizeError(utf8Bytes(snapshot.text))
+    if (snapshot.digest !== undefined && snapshot.digest !== computeDigest(snapshot.text)) {
+      throw new Error('session instruction snapshot digest mismatch')
+    }
+    const existing = this.data.records[snapshot.sessionId]
+    if (existing) {
+      if (JSON.stringify(existing) !== JSON.stringify(snapshot)) throw new Error('session instruction snapshot already differs')
+      return { ...existing }
+    }
+    this.data.records[snapshot.sessionId] = { ...snapshot }
+    this.save()
+    return { ...snapshot }
+  }
+
   remove(sessionId: string): void {
     this.load()
     if (!this.data.records[sessionId]) return

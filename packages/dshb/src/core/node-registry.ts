@@ -200,13 +200,25 @@ export class NodeRegistry {
   }
 
   async create(input: NodeCreateInput): Promise<NodeProfile> {
+    return this.createProfile(input, false)
+  }
+
+  async createImported(input: NodeCreateInput, preferredId?: string): Promise<NodeProfile> {
+    if (input.type === 'local-host' || input.type === 'local-docker') {
+      throw new Error('sync imports only support remote nodes')
+    }
+    return this.createProfile(input, true, preferredId)
+  }
+
+  private async createProfile(input: NodeCreateInput, allowDuplicateName: boolean, preferredId?: string): Promise<NodeProfile> {
     this.load()
     const name = slugifyName(input.name)
-    if (this.profiles.some((p) => sameName(p.name, name))) {
+    if (!allowDuplicateName && this.profiles.some((p) => sameName(p.name, name))) {
       throw new Error(`node name "${name}" already exists`)
     }
-    const id = newId()
+    const id = preferredId ?? newId()
     if (!isLowerHyphenatedId(id)) throw new Error('internal: invalid generated id')
+    if (this.profiles.some((profile) => profile.id === id)) throw new Error(`node ${id} already exists`)
     const now = new Date().toISOString()
     const profile: NodeProfile = {
       id,
@@ -223,6 +235,32 @@ export class NodeRegistry {
     this.profiles.push(profile)
     this.save()
     return { ...profile }
+  }
+
+  async updateImported(id: string, input: NodeCreateInput): Promise<NodeProfile> {
+    if (id === LOCAL_NODE_ID || input.type === 'local-host' || input.type === 'local-docker') {
+      throw new Error('sync imports only support remote nodes')
+    }
+    this.load()
+    const idx = this.profiles.findIndex((profile) => profile.id === id)
+    if (idx < 0) throw new Error(`node ${id} not found`)
+    const current = this.profiles[idx]
+    const next: NodeProfile = {
+      id,
+      name: slugifyName(input.name),
+      type: input.type,
+      ssh: input.ssh as NodeSsh | undefined,
+      docker: input.docker,
+      createdAt: current.createdAt,
+      updatedAt: new Date().toISOString(),
+    }
+    if (input.secrets && (input.secrets.password || input.secrets.privateKey || input.secrets.passphrase)) {
+      await this.writeSecrets(id, input.secrets)
+    }
+    this.profiles[idx] = next
+    this.statuses.delete(id)
+    this.save()
+    return { ...next }
   }
 
   async update(id: string, input: NodeUpdateInput): Promise<NodeProfile> {
@@ -250,6 +288,19 @@ export class NodeRegistry {
     this.profiles.splice(idx, 1)
     this.statuses.delete(id)
     this.save()
+    const key = this.credKey(id)
+    if (key) await this.creds.deleteRecord(key)
+  }
+
+  async removeImported(id: string): Promise<void> {
+    if (id === LOCAL_NODE_ID) throw new Error('默认环境节点不可删除')
+    this.load()
+    const idx = this.profiles.findIndex((p) => p.id === id)
+    if (idx >= 0) {
+      this.profiles.splice(idx, 1)
+      this.save()
+    }
+    this.statuses.delete(id)
     const key = this.credKey(id)
     if (key) await this.creds.deleteRecord(key)
   }

@@ -5,6 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { NodeRegistry } from './node-registry.js'
 import type { WorkspaceBindingsStore } from './workspace-bindings.js'
+import type { SyncNodeService } from './sync/node-sync.js'
 
 const MAX_BODY = 64 * 1024
 
@@ -62,7 +63,12 @@ function slugify(name: string): string {
     .slice(0, 40) || 'workspace'
 }
 
-export function registerWorkspaceRoutes(ctx: Context, registry: NodeRegistry, bindings: WorkspaceBindingsStore): void {
+export function registerWorkspaceRoutes(
+  ctx: Context,
+  registry: NodeRegistry,
+  bindings: WorkspaceBindingsStore,
+  syncNodes?: SyncNodeService,
+): void {
   const webServer = ctx.webServer
 
   ctx.effect(() =>
@@ -83,6 +89,10 @@ export function registerWorkspaceRoutes(ctx: Context, registry: NodeRegistry, bi
           const node = registry.get(body.nodeId)
           if (!node) {
             sendJson(res, 404, { ok: false, error: 'node not found' })
+            return
+          }
+          if (syncNodes?.isPendingRemoval(node.id)) {
+            sendJson(res, 409, { ok: false, code: 'node/pending-removal', error: '节点等待工作区解绑后清理' })
             return
           }
           const remotePath = String(body.remotePath)
@@ -117,6 +127,10 @@ export function registerWorkspaceRoutes(ctx: Context, registry: NodeRegistry, bi
                 return
               }
               await world.ensureDir(remotePath)
+            }
+            if (syncNodes?.isPendingRemoval(node.id)) {
+              sendJson(res, 409, { ok: false, code: 'node/pending-removal', error: '节点等待工作区解绑后清理' })
+              return
             }
             mkdirSync(mirrorPath, { recursive: true })
             bindings.add({ mirrorPath, nodeId: node.id, remotePath })

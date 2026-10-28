@@ -8,6 +8,7 @@ import { readSshConfig, resolveSshConfigEntry } from './ssh-config.js'
 import type { KnownHostsStore } from './known-hosts.js'
 import { testNode, type SshHandshakeTester, type DockerNodeTester } from './test.js'
 import type { WorkspaceBindingsStore } from './workspace-bindings.js'
+import { SyncNodeInUseError, type SyncNodeService } from './sync/node-sync.js'
 
 interface WorldsLike {
   ensure(nodeId: string): Promise<{
@@ -88,6 +89,7 @@ export async function registerNodeRoutes(
   registry: NodeRegistry,
   bindings: WorkspaceBindingsStore,
   getWorkspaceRegistry?: () => WorkspaceRegistryLike | undefined,
+  syncNodes?: SyncNodeService,
 ): Promise<void> {
   const webServer = ctx.webServer
   ctx.effect(() =>
@@ -102,6 +104,10 @@ export async function registerNodeRoutes(
           const node = registry.get(resourceId)
           if (!node) {
             sendJson(res, 404, { ok: false, error: 'node not found' })
+            return
+          }
+          if (syncNodes?.isPendingRemoval(resourceId)) {
+            sendJson(res, 409, { ok: false, code: 'node/pending-removal', error: '节点等待工作区解绑后清理' })
             return
           }
           const path = new URL(req.url ?? '/', 'http://x').searchParams.get('path') ?? (node.type === 'local-host' ? process.env.HOME ?? '/' : '/')
@@ -140,6 +146,10 @@ export async function registerNodeRoutes(
             sendJson(res, 404, { ok: false, error: 'node not found' })
             return
           }
+          if (syncNodes?.isPendingRemoval(resourceId)) {
+            sendJson(res, 409, { ok: false, code: 'node/pending-removal', error: '节点等待工作区解绑后清理' })
+            return
+          }
           const body = await readBody(req)
           const path = body && typeof body.path === 'string' ? body.path : undefined
           if (!path) {
@@ -172,14 +182,25 @@ export async function registerNodeRoutes(
 
         if (req.method === 'GET' && resourceId === undefined) {
           const provisioner = ctx.get('dshbDockerProvisioner') as DockerProvisionerLike | undefined
+          try {
+            await syncNodes?.reconcilePendingRemovals()
+          } catch {
+            sendJson(res, 503, { ok: false, error: '同步删除状态暂不可用' })
+            return
+          }
           const nodes = registry.list()
+          const syncViews = syncNodes?.views(nodes.map((node) => node.id))
           const withFlags = await Promise.all(
-            nodes.map(async (n) => ({
-              ...n,
-              hasSecret: await registry.hasSecret(n.id),
-              status: registry.status(n.id),
-              provision: provisioner?.status(n.id),
-            })),
+            nodes.map(async (n) => {
+              const sync = syncViews?.get(n.id)
+              return {
+                ...n,
+                hasSecret: await registry.hasSecret(n.id),
+                status: registry.status(n.id),
+                provision: provisioner?.status(n.id),
+                ...(sync ? { sync } : {}),
+              }
+            }),
           )
           sendJson(res, 200, { ok: true, nodes: withFlags })
           return
@@ -290,19 +311,32 @@ export async function registerNodeRoutes(
           }
 
           try {
-            if ((node.type === 'local-docker' || node.type === 'remote-docker') && node.docker?.containerId) {
-              const runner = await resolveHostRunner(ctx, node)
-              if (!runner) throw new Error('Docker 节点执行环境不可用，节点未删除')
-              const result = await runner.run(['docker', 'rm', '-f', node.docker.containerId])
-              if (result.code !== 0) throw new Error((result.stderr || result.stdout).trim() || '删除容器失败，节点未删除')
+            const removeNode = async (): Promise<void> => {
+              if ((node.type === 'local-docker' || node.type === 'remote-docker') && node.docker?.containerId) {
+                const runner = await resolveHostRunner(ctx, node)
+                if (!runner) throw new Error('Docker 节点执行环境不可用，节点未删除')
+                const result = await runner.run(['docker', 'rm', '-f', node.docker.containerId])
+                if (result.code !== 0) throw new Error((result.stderr || result.stdout).trim() || '删除容器失败，节点未删除')
+              }
+              await registry.remove(resourceId)
+              const sshWorlds = ctx.get('dshbSshWorlds') as { remove?: (id: string) => void } | undefined
+              const dockerWorlds = ctx.get('dshbDockerWorlds') as { remove?: (id: string) => void } | undefined
+              sshWorlds?.remove?.(resourceId)
+              dockerWorlds?.remove?.(resourceId)
             }
-            await registry.remove(resourceId)
-            const sshWorlds = ctx.get('dshbSshWorlds') as { remove?: (id: string) => void } | undefined
-            const dockerWorlds = ctx.get('dshbDockerWorlds') as { remove?: (id: string) => void } | undefined
-            sshWorlds?.remove?.(resourceId)
-            dockerWorlds?.remove?.(resourceId)
+            if (syncNodes) await syncNodes.removeLocalNode(resourceId, removeNode)
+            else await removeNode()
             sendJson(res, 200, { ok: true })
           } catch (err) {
+            if (err instanceof SyncNodeInUseError) {
+              sendJson(res, 409, {
+                ok: false,
+                code: 'node/in-use',
+                error: '节点仍被工作区使用，请先移除或迁移这些工作区。',
+                workspaces: err.workspaces,
+              })
+              return
+            }
             sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) })
           }
           return

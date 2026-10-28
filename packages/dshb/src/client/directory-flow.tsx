@@ -8,6 +8,7 @@ interface NodeProfileView {
   name: string
   type: 'local-host' | 'local-docker' | 'remote-ssh' | 'remote-docker'
   status?: { reachable?: boolean }
+  sync?: { importedVia?: 'peer' | 'offline'; sourceName?: string; pendingRemoval?: boolean }
 }
 
 interface DirEntry {
@@ -195,6 +196,7 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
   if (!props.open) return null
 
   const node = nodes.find((n) => n.id === nodeId)
+  const selectableNodes = nodes.filter((item) => !item.sync?.pendingRemoval)
 
   return (
     <div style={overlayStyle} role="dialog" aria-label="添加工作区">
@@ -209,12 +211,12 @@ export function DirectoryFlowOccupant(props: DirectoryFlowOwnerProps): ReactElem
         <label style={{ display: 'block', fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>工作节点</label>
         <select style={{ ...inputStyle, marginBottom: 14 }} value={nodeId} onChange={(e) => selectNode(e.target.value)} disabled={props.busy || busy}>
           <option value="">选择节点…</option>
-          {nodes.map((n) => {
+          {selectableNodes.map((n) => {
             const typeLabel =
               n.type === 'local-host' ? '本地' : n.type === 'remote-ssh' ? '远程 SSH' : n.type === 'local-docker' ? '本地 Docker' : n.type === 'remote-docker' ? '远程 Docker' : n.type
             return (
               <option key={n.id} value={n.id}>
-                {n.name}（{typeLabel}）
+                {n.name}（{typeLabel}{n.sync?.importedVia === 'peer' && n.sync.sourceName ? ` · 同步自 ${n.sync.sourceName}` : ''}）
               </option>
             )
           })}
