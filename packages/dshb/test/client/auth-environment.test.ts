@@ -7,8 +7,8 @@ afterEach(() => {
 })
 
 describe('auth settings section environment', () => {
-  it('does not install the auth section in the Desktop file shell', () => {
-    vi.stubGlobal('location', { protocol: 'file:' })
+  it.each(['dsh-app:', 'file:'])('does not install the auth section in the Desktop shell (%s)', (protocol) => {
+    vi.stubGlobal('location', { protocol })
     const plugin = vi.fn()
     const ctx = { get: () => ({}), plugin } as unknown as ClientContext
 
@@ -17,8 +17,8 @@ describe('auth settings section environment', () => {
     expect(plugin).not.toHaveBeenCalled()
   })
 
-  it('registers the auth section in the web app', () => {
-    vi.stubGlobal('location', { protocol: 'https:' })
+  it.each(['http:', 'https:'])('registers the auth section in the web app (%s)', (protocol) => {
+    vi.stubGlobal('location', { protocol })
     const plugins: Array<{ apply: (ctx: ClientContext) => void }> = []
     const ctx = {
       get: () => ({}),

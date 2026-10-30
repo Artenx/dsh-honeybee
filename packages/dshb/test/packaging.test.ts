@@ -28,7 +28,7 @@ describe('single-package distribution', () => {
       devDependencies: Record<string, string>
     }
 
-    expect(pkg.version).toBe('0.1.21')
+    expect(pkg.version).toBe('0.1.22')
     expect(pkg.engines.dsh).toBe('>=0.1.7-rc.1 <0.2.2-rc.1')
     expect(pkg.dsh.compatibility.dshReleases).toBe(pkg.engines.dsh)
     expect(pkg.dsh.compatibility.nodeVersions).toBe('>=22.13')

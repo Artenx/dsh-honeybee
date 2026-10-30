@@ -12,7 +12,7 @@ Restart the corresponding DSH Web profile after installation.
 
 Desktop app: install from **Settings → Plugins → More** in the DSH desktop app; the plugin takes effect on next startup.
 
-The Authentication settings entry appears in the browser-based Web app. The DSH desktop shell loads through `file://` and omits this entry; its loopback requests are admitted automatically.
+The Authentication settings entry appears in the browser-based Web app. The DSH desktop shell uses the `dsh-app://` protocol and omits this entry; its loopback requests are admitted automatically.
 
 ## Requirements
 

@@ -76,6 +76,33 @@ describe('webserver auth decoration', () => {
     dispose()
   })
 
+  it('restores webserver hooks when disposed', () => {
+    const fixture = createWebServer()
+    const dispose = decorateWebServer(fixture.webServer, new CredentialStore())
+    const decorated = {
+      register: fixture.webServer.register,
+      registerFallback: (fixture.webServer as unknown as { registerFallback: unknown }).registerFallback,
+      registerUpgrade: fixture.webServer.registerUpgrade,
+    }
+
+    dispose()
+
+    expect(fixture.webServer.register).not.toBe(decorated.register)
+    expect((fixture.webServer as unknown as { registerFallback: unknown }).registerFallback).not.toBe(decorated.registerFallback)
+    expect(fixture.webServer.registerUpgrade).not.toBe(decorated.registerUpgrade)
+
+    const handler = vi.fn()
+    fixture.webServer.register({ kind: 'exact', path: '/plain', handler })
+    expect(fixture.route()?.handler).toBe(handler)
+
+    const fallback = vi.fn()
+    const compatibleServer = fixture.webServer as unknown as {
+      registerFallback: (handler: unknown) => () => void
+    }
+    compatibleServer.registerFallback(fallback)
+    expect(fixture.fallback()).toBe(fallback)
+  })
+
   it('continues to guard function fallbacks', async () => {
     const fixture = createWebServer()
     const dispose = decorateWebServer(fixture.webServer, new CredentialStore())

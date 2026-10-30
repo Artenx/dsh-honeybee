@@ -244,7 +244,7 @@ export function apply(ctx: ClientContext): void {
   if (connection !== undefined) {
     Object.defineProperty(connection, 'isLoopback', { configurable: true, get: () => true })
   }
-  if (typeof location !== 'undefined' && location.protocol === 'file:') return
+  if (typeof location !== 'undefined' && ['dsh-app:', 'file:'].includes(location.protocol)) return
 
   ctx.plugin({
     inject: ['slots'],
