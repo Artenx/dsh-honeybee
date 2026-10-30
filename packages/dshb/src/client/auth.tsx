@@ -244,6 +244,8 @@ export function apply(ctx: ClientContext): void {
   if (connection !== undefined) {
     Object.defineProperty(connection, 'isLoopback', { configurable: true, get: () => true })
   }
+  if (typeof location !== 'undefined' && location.protocol === 'file:') return
+
   ctx.plugin({
     inject: ['slots'],
     apply: (sub: ClientContext): void => {

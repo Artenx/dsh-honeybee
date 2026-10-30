@@ -21,7 +21,7 @@
 
 A single web entry drives execution environments across multiple cloud hosts or Docker containers. The agent loop, LLM calls, sessions, and persistence stay centralized in the management side, while file, command, and terminal operations are transparently dispatched to local or remote nodes. Delivered as plugins with no changes to upstream source. Adapted for mobile browsers so operations are always at hand.
 
-> Desktop note: the DSH desktop app boots the `web` profile internally, so dsh-honeybee installs directly from the desktop **Plugins** page. The WebServer still binds `127.0.0.1`, and the auth gate admits loopback requests, so the desktop client needs no login.
+> Desktop note: the DSH desktop app boots the `web` profile internally, so dsh-honeybee installs directly from the desktop **Plugins** page. The WebServer still binds `127.0.0.1`, and the auth gate admits loopback requests, so the desktop client needs no login. The Authentication settings entry appears only in the browser-based Web app.
 
 ---
 
@@ -81,7 +81,7 @@ dsh --profile web
 
 ## Usage
 
-1. Start `dsh web` (browser) or open the DSH desktop app and complete first login (desktop loopback is admitted automatically)
+1. Start `dsh web` (browser) and complete first login, or open the DSH desktop app and use it directly (desktop loopback requests are admitted automatically)
 2. Go to **Settings → Work Nodes** and add a node (SSH or Docker); you can "Test Connection" first
 3. Click "Add Workspace" in the session area, choose an online node, and pick a remote directory from the tree
 4. Read/write files and run commands on the workspace from the session — operations are routed to the node automatically
