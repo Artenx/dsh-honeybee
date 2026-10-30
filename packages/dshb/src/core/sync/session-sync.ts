@@ -691,10 +691,30 @@ export function planSessionTransfers(
 ): SyncSessionTransferPlan {
   const toLocal: SyncSessionEntry[] = []
   const toRemote: SyncSessionEntry[] = []
-  if (direction === 'pull') return { toLocal: [...remoteEntries], toRemote, skipped: 0 }
   const keyOf = (entry: SyncSessionEntry): string => entry.branchId ?? sessionOriginKey(entry.metadata)
   const localByKey = new Map(localEntries.map((entry) => [keyOf(entry), entry]))
   const remoteByKey = new Map(remoteEntries.map((entry) => [keyOf(entry), entry]))
+  if (direction === 'pull') {
+    let skipped = 0
+    for (const [key, remote] of remoteByKey) {
+      const local = localByKey.get(key)
+      if (!local) {
+        toLocal.push(remote)
+        continue
+      }
+      const comparison = compareSyncRevision(local.metadata.revision, remote.metadata.revision)
+      if (comparison < 0) toLocal.push(remote)
+      else if (comparison === 0) {
+        if (
+          local.metadata.contentDigest !== remote.metadata.contentDigest ||
+          local.metadata.stateDigest !== remote.metadata.stateDigest ||
+          Boolean(local.metadata.deleted) !== Boolean(remote.metadata.deleted)
+        ) throw new SyncSessionError('revision-conflict', 'Equal session revisions contain different content')
+        skipped += 1
+      } else skipped += 1
+    }
+    return { toLocal, toRemote, skipped }
+  }
   const keys = new Set([...localByKey.keys(), ...remoteByKey.keys()])
   let skipped = 0
   for (const key of keys) {
@@ -1195,6 +1215,7 @@ export class SyncSessionService {
         const sessionId = String(workspace.sessionIds[position])
         if (archivedBranchSessionIds.has(sessionId)) continue
         const currentSession = findSessionRecordByLocalId(this.state.read(), sessionId)
+        if (currentSession?.deleted) continue
         const descriptor = this.workspaceDescriptor(workspace, binding, nodeOrigin, currentSession?.workspaceOrigin)
         const snapshot = await persistence.stat(makeSessionId(sessionId))
         if (!snapshot) continue
@@ -1221,9 +1242,13 @@ export class SyncSessionService {
     const initial = this.state.read()
     for (const metadata of Object.values(initial.records)) {
       if (
-        metadata.kind !== 'session' || metadata.deleted || eligibleLocalIds.has(metadata.localEntityId) ||
-        archivedBranchSessionIds.has(metadata.localEntityId)
+        metadata.kind !== 'session' || archivedBranchSessionIds.has(metadata.localEntityId)
       ) continue
+      if (metadata.deleted) {
+        entries.push({ metadata })
+        continue
+      }
+      if (eligibleLocalIds.has(metadata.localEntityId)) continue
       const tombstone: SyncRecordMetadata = {
         ...metadata,
         revision: this.state.nextRevision(this.now()),
@@ -1387,14 +1412,14 @@ export class SyncSessionService {
           continue
         }
         const current = entry.branchId ? undefined : currentState.records[sessionOriginKey(entry.metadata)]
-        if (current && !current.deleted) {
+        if (current) {
           const comparison = compareSyncRevision(entry.metadata.revision, current.revision)
           if (comparison < 0) {
             result.skipped += 1
             continue
           }
           if (comparison === 0) {
-            if (entry.metadata.contentDigest !== current.contentDigest || entry.metadata.stateDigest !== current.stateDigest) {
+            if (current.deleted || entry.metadata.contentDigest !== current.contentDigest || entry.metadata.stateDigest !== current.stateDigest) {
               throw new SyncSessionError('revision-conflict', 'Equal session revisions contain different content')
             }
             const sessionId = makeSessionId(current.localEntityId)
@@ -1406,7 +1431,7 @@ export class SyncSessionService {
             result.skipped += 1
             continue
           }
-          if (entry.metadata.contentDigest === current.contentDigest && (await this.requirePersistence().stat(makeSessionId(current.localEntityId)))) {
+          if (!current.deleted && entry.metadata.contentDigest === current.contentDigest && (await this.requirePersistence().stat(makeSessionId(current.localEntityId)))) {
             await this.applyMembershipOnly(entry, current, safeSourceName, entryWorkspace, importedVia)
             result.updated += 1
             queueWorkspaceOrder(entryWorkspace.id, makeSessionId(current.localEntityId), entry.workspacePosition ?? 0)
@@ -1470,9 +1495,9 @@ export class SyncSessionService {
     delete headerWithoutLocalFields.id
     delete headerWithoutLocalFields.cwd
     delete headerWithoutLocalFields.parentSession
-    const parentSession = entry.parentOrigin
+    const parentSession = (entry.parentOrigin
       ? plannedSessionIds.get(syncRecordKey('session', entry.parentOrigin)) ?? this.localSessionIdForOrigin(entry.parentOrigin)
-      : undefined
+      : undefined) ?? sourceHeader.parentSession
     const header: SessionHeader = {
       ...headerWithoutLocalFields,
       id: sessionId,
@@ -1492,7 +1517,7 @@ export class SyncSessionService {
       }
     }
     const objectMap = await this.importObjects(entry.objects, sessionId)
-    const events = this.rewriteEvents(entry.events, entry.objects, objectMap, sessionId)
+    const events = this.rewriteEvents(entry.events, entry.objects, objectMap, sessionId, String(entry.header.id))
     const validatedEvents = validateStoredEvents(header, events)
     assertContiguous(sessionId, validatedEvents, 0)
     const instructionWorkspaceId = entry.instructionSnapshot?.workspaceOrigin
@@ -1639,6 +1664,7 @@ export class SyncSessionService {
     objects: readonly SyncSessionObject[],
     importedRefs: ReadonlyMap<string, ImportedSessionObjectRef>,
     sessionId: SessionId,
+    sourceSessionId: string,
   ): SessionEvent[] {
     const spillReferencesByLocator = new Map<string, { source: SpillTransferReference; target?: SpillTransferReference['ref'] }>()
     for (const object of objects) {
@@ -1664,6 +1690,10 @@ export class SyncSessionService {
         const target = importedRefs.get(attachmentKey('file', value.attachment))
         if (!target || !('name' in target)) throw new SyncSessionError('attachment-reference-missing', '目标文件附件未创建')
         return { ...value, attachment: target }
+      }
+      if (value.type === 'session-log-deepseek/delivery-accepted' && isRecord(value.data) && value.data.sessionId === sourceSessionId) {
+        // Inherited markers keep their ancestor ID; current-session markers follow the imported header ID.
+        return { ...value, data: { ...value.data, sessionId } }
       }
       const output: Record<string, unknown> = {}
       for (const [key, child] of Object.entries(value)) {
@@ -2052,10 +2082,10 @@ export class SyncSessionService {
         offset += page.events.length
         if (page.events.length < SESSION_READ_PAGE_SIZE) break
       }
-      if (existing.length > prepared.events.length) throw new SyncSessionError('session-prefix-conflict', '目标 session 前缀比导入记录更长')
+      if (existing.length > prepared.events.length) throw new SyncSessionError('session-prefix-conflict', `目标 session ${prepared.localSessionId} 前缀比导入记录更长（本地 ${existing.length}，导入 ${prepared.events.length}）`)
       for (let index = 0; index < existing.length; index += 1) {
         if (canonicalJson(existing[index]) !== canonicalJson(prepared.events[index])) {
-          throw new SyncSessionError('session-prefix-conflict', '目标 session 的已提交事件与导入前缀不同')
+          throw new SyncSessionError('session-prefix-conflict', `目标 session ${prepared.localSessionId} 的已提交事件与导入前缀不同（首个差异位置 seq=${existing[index]?.seq}，本地 ${existing.length} 事件，导入 ${prepared.events.length} 事件）`)
         }
       }
       for (let offset = existing.length; offset < prepared.events.length; offset += SESSION_READ_PAGE_SIZE) {

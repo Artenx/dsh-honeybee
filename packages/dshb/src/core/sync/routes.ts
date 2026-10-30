@@ -199,7 +199,17 @@ export function registerSyncPeerRoutes(
               return
             }
             try {
-              sendJson(res, 200, { ok: true, result: await coordinator.run(peerId) })
+              const peer = await manager.get(peerId)
+              if (!peer) {
+                sendJson(res, 404, { ok: false, error: 'sync peer not found' })
+                return
+              }
+              if (!peer.enabled) {
+                sendJson(res, 409, { ok: false, code: 'peer-disabled', error: '此同步节点已停用' })
+                return
+              }
+              void coordinator.run(peerId).catch(() => undefined)
+              sendJson(res, 202, { ok: true, accepted: true })
             } catch (error) {
               sendRunFailure(res, error)
             }

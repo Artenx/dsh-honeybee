@@ -48,7 +48,8 @@ export function SyncOfflineSection(props: { onImported?: () => void }): ReactEle
   const [includeSessions, setIncludeSessions] = useState(false)
   const [importPassword, setImportPassword] = useState('')
   const [file, setFile] = useState<File | undefined>(undefined)
-  const [busy, setBusy] = useState(false)
+  const [fileInputKey, setFileInputKey] = useState(0)
+  const [busy, setBusy] = useState<'export' | 'import' | undefined>(undefined)
   const [status, setStatus] = useState('')
   const [notice, setNotice] = useState<Notice>(undefined)
 
@@ -56,7 +57,7 @@ export function SyncOfflineSection(props: { onImported?: () => void }): ReactEle
     const error = passwordError(exportPassword)
     if (error) { setNotice({ kind: 'error', text: error }); return }
     if (exportPassword !== confirmPassword) { setNotice({ kind: 'error', text: '两次输入的包密码不一致' }); return }
-    setBusy(true)
+    setBusy('export')
     setStatus('正在生成并加密归档…')
     setNotice(undefined)
     try {
@@ -81,7 +82,7 @@ export function SyncOfflineSection(props: { onImported?: () => void }): ReactEle
     } catch (caught) {
       setNotice({ kind: 'error', text: caught instanceof Error ? caught.message : '导出离线配置失败' })
     } finally {
-      setBusy(false)
+      setBusy(undefined)
       setStatus('')
       setExportPassword('')
       setConfirmPassword('')
@@ -93,7 +94,7 @@ export function SyncOfflineSection(props: { onImported?: () => void }): ReactEle
     if (error) { setNotice({ kind: 'error', text: error }); return }
     if (!file) { setNotice({ kind: 'error', text: '请选择 .dshb-sync 文件' }); return }
     if (file.size > 128 * 1024 * 1024) { setNotice({ kind: 'error', text: '归档文件超过 128 MiB 上限' }); return }
-    setBusy(true)
+    setBusy('import')
     setStatus('正在准备安全上传…')
     setNotice(undefined)
     try {
@@ -126,60 +127,72 @@ export function SyncOfflineSection(props: { onImported?: () => void }): ReactEle
       })
       setImportPassword('')
       setFile(undefined)
+      setFileInputKey((key) => key + 1)
       props.onImported?.()
     } catch (caught) {
       setNotice({ kind: 'error', text: caught instanceof Error ? caught.message : '导入离线配置失败' })
     } finally {
-      setBusy(false)
+      setBusy(undefined)
       setStatus('')
       setImportPassword('')
     }
   }
 
   return (
-    <div style={{ flex: 1, minWidth: 0, maxWidth: 620 }}>
-      <div style={{ marginBottom: 18 }}>
-        <h3 style={{ margin: '0 0 6px', fontSize: 16 }}>导出加密配置包</h3>
-        <p style={{ margin: '0 0 12px', fontSize: 12, opacity: 0.72, lineHeight: 1.5 }}>
-          包含远程节点配置与节点凭据。默认排除会话、同步 peer 凭据和本地节点；包密码只用于本次导出。
-        </p>
-        <div style={{ display: 'grid', gap: 10 }}>
-          <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
-            包密码
-            <input style={fieldStyle} type="password" autoComplete="new-password" value={exportPassword} onChange={(event) => setExportPassword(event.target.value)} />
-          </label>
-          <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
-            确认包密码
-            <input style={fieldStyle} type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-            <input type="checkbox" checked={includeSessions} onChange={(event) => setIncludeSessions(event.target.checked)} />
-            包含可映射的远程工作区会话
-          </label>
-          <div><button type="button" style={buttonStyle} disabled={busy} onClick={() => void exportArchive()}>{busy ? '处理中…' : '导出 .dshb-sync'}</button></div>
-        </div>
+    <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: 900 }}>
+      <style>{`.dshb-sync-offline-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px;align-items:start}.dshb-sync-offline-card{border:1px solid var(--dsw-alias-border-l2);border-radius:12px;padding:16px;background:var(--dsw-alias-bg-layer-1);min-width:0}.dshb-sync-offline-hint{font-size:12px;line-height:1.5;opacity:.68;margin:0 0 12px}.dshb-sync-offline-actions{margin-top:2px}.dshb-sync-offline-actions button{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dshb-sync-offline-file{max-width:100%;width:100%;box-sizing:border-box;font-size:12px;line-height:1.5}.dshb-sync-offline-file::file-selector-button{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}@media(max-width:600px){.dshb-sync-offline-grid{grid-template-columns:1fr;gap:12px}.dshb-sync-offline-actions{display:flex}.dshb-sync-offline-actions button{width:100%}}`}</style>
+      <div style={{ marginBottom: 14, fontSize: 13, lineHeight: 1.55, opacity: 0.75, maxWidth: '72ch' }}>
+        通过加密文件在实例间迁移远程节点和可选会话，适用于网络隔离或备份恢复。
       </div>
+      <div className="dshb-sync-offline-grid">
+        <section className="dshb-sync-offline-card" style={{ borderTop: '3px solid var(--dsw-alias-button-primary-fill)' }}>
+          <h3 style={{ margin: '0 0 6px', fontSize: 16 }}>导出加密配置包</h3>
+          <p className="dshb-sync-offline-hint">
+            默认导出远程节点配置与凭据；勾选后可包含可映射的工作区会话。同步 peer 凭据和本地节点不会进入导出包。
+          </p>
+          <div style={{ display: 'grid', gap: 10 }}>
+            <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+              包密码
+              <input style={fieldStyle} type="password" autoComplete="new-password" value={exportPassword} disabled={busy !== undefined} onChange={(event) => setExportPassword(event.target.value)} />
+            </label>
+            <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+              确认包密码
+              <input style={fieldStyle} type="password" autoComplete="new-password" value={confirmPassword} disabled={busy !== undefined} onChange={(event) => setConfirmPassword(event.target.value)} />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13 }}>
+              <input type="checkbox" checked={includeSessions} disabled={busy !== undefined} onChange={(event) => setIncludeSessions(event.target.checked)} />
+              <span>包含可映射的远程工作区会话<span style={{ display: 'block', fontSize: 11, opacity: 0.65, marginTop: 3 }}>包含会话日志与附件，导出文件可能较大。</span></span>
+            </label>
+            <div className="dshb-sync-offline-actions"><button type="button" style={buttonStyle} disabled={busy !== undefined} onClick={() => void exportArchive()}>{busy === 'export' ? '正在导出…' : '导出 .dshb-sync'}</button></div>
+          </div>
+        </section>
 
-      <div style={{ borderTop: '1px solid var(--dsw-alias-border-l2)', paddingTop: 18 }}>
-        <h3 style={{ margin: '0 0 6px', fontSize: 16 }}>导入加密配置包</h3>
-        <p style={{ margin: '0 0 12px', fontSize: 12, opacity: 0.72, lineHeight: 1.5 }}>
-          系统会先验证密码、格式、摘要、路径和空间，再应用配置。相同来源的重复导入会按来源身份去重。
-        </p>
-        <div style={{ display: 'grid', gap: 10 }}>
-          <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
-            选择文件
-            <input type="file" accept=".dshb-sync,application/octet-stream" disabled={busy} onChange={(event) => setFile(event.target.files?.[0])} />
-          </label>
-          {file && <span style={{ fontSize: 12, opacity: 0.72 }}>{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MiB</span>}
-          <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
-            包密码
-            <input style={fieldStyle} type="password" autoComplete="current-password" value={importPassword} onChange={(event) => setImportPassword(event.target.value)} />
-          </label>
-          <div><button type="button" style={buttonStyle} disabled={busy || !file} onClick={() => void importArchive()}>{busy ? '正在导入…' : '验证并导入'}</button></div>
-        </div>
+        <section className="dshb-sync-offline-card" style={{ borderTop: '3px solid var(--dsw-alias-border-l2)' }}>
+          <h3 style={{ margin: '0 0 6px', fontSize: 16 }}>导入加密配置包</h3>
+          <p className="dshb-sync-offline-hint">
+            先验证密码、格式、摘要、路径和空间，再应用配置。同一来源的重复导入会按身份去重。
+          </p>
+          <div style={{ display: 'grid', gap: 10 }}>
+            <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+              归档文件
+              <input className="dshb-sync-offline-file" key={fileInputKey} type="file" accept=".dshb-sync,application/octet-stream" disabled={busy !== undefined} onChange={(event) => setFile(event.target.files?.[0])} />
+            </label>
+            <div style={{ fontSize: 12, opacity: 0.7, minHeight: 18, wordBreak: 'break-all' }}>
+              {file ? <><strong>{file.name}</strong><span style={{ marginLeft: 6 }}>{(file.size / 1024 / 1024).toFixed(2)} MiB / 上限 128 MiB</span></> : '尚未选择文件，支持 .dshb-sync，最大 128 MiB'}
+            </div>
+            <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+              包密码
+              <input style={fieldStyle} type="password" autoComplete="current-password" value={importPassword} disabled={busy !== undefined} onChange={(event) => setImportPassword(event.target.value)} />
+            </label>
+            <div className="dshb-sync-offline-actions"><button type="button" style={buttonStyle} disabled={busy !== undefined || !file} onClick={() => void importArchive()}>{busy === 'import' ? '正在导入…' : '验证并导入'}</button></div>
+          </div>
+        </section>
       </div>
-      {status && <div role="status" style={{ marginTop: 14, fontSize: 13, opacity: 0.8 }}>{status}</div>}
-      {notice && <div role="status" style={{ marginTop: 14, fontSize: 13, color: notice.kind === 'ok' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' }}>{notice.text}</div>}
+      {status && <div role="status" style={{ marginTop: 14, padding: '10px 12px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, fontSize: 13, opacity: 0.8 }}>{status}</div>}
+      {notice && <div role="status" style={{ marginTop: 14, padding: '10px 12px', borderRadius: 8, fontSize: 13, background: notice.kind === 'ok' ? 'var(--dsw-alias-state-success-bg, rgba(34,197,94,.1))' : 'var(--dsw-alias-state-error-bg, rgba(248,113,113,.1))', color: notice.kind === 'ok' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' }}>{notice.text}</div>}
+      <div style={{ marginTop: 14, fontSize: 11, lineHeight: 1.6, opacity: 0.55 }}>
+        加密配置包包含敏感凭据，请妥善保存并仅在可信实例间传输。
+      </div>
     </div>
   )
 }

@@ -37,6 +37,21 @@ interface SyncSessionArchiveView {
   archivedAt: string
 }
 
+function shortenSessionId(id: string): string {
+  const suffix = id.replace(/^session-sync-/, '')
+  return `${suffix.slice(0, 8)}…${suffix.slice(-4)}`
+}
+
+function copyText(value: string): void {
+  void navigator.clipboard?.writeText(value)
+}
+
+function resultSummary(peer: SyncPeerView): string | undefined {
+  const result = peer.progress?.lastResult
+  if (!result) return undefined
+  return `节点导入 ${result.imported}、导出 ${result.exported}；会话导入 ${result.importedSessions}、导出 ${result.exportedSessions}；跳过 ${result.skipped}`
+}
+
 interface HostKeyChallenge {
   code: 'host-key-untrusted' | 'host-key-changed'
   fingerprint: string
@@ -172,12 +187,23 @@ export function SyncPeersSection(): ReactElement {
   }, [reloadKey])
 
   useEffect(() => {
-    const timer = setInterval(() => setReloadKey((key) => key + 1), 15_000)
+    const interval = syncing || peers.some((peer) => peer.progress?.lastRunStatus === 'running') ? 3_000 : 15_000
+    const timer = setInterval(() => setReloadKey((key) => key + 1), interval)
     return () => clearInterval(timer)
-  }, [])
+  }, [peers, syncing])
 
   const reload = (): void => setReloadKey((key) => key + 1)
   const selectedPeer = selectedId === 'new' ? undefined : peers.find((peer) => peer.id === selectedId)
+  const runningCount = peers.filter((peer) => peer.progress?.lastRunStatus === 'running').length
+
+  const statusLabel = (peer: SyncPeerView): string => {
+    const status = peer.progress?.lastRunStatus
+    if (!peer.enabled) return '已停用'
+    if (status === 'running') return '同步中'
+    if (status === 'failed') return '上次失败'
+    if (status === 'succeeded') return '上次成功'
+    return '尚未同步'
+  }
 
   const select = (id: string | 'new'): void => {
     setSelectedId(id)
@@ -277,26 +303,18 @@ export function SyncPeersSection(): ReactElement {
       const response = await fetch(`/api/dshb/sync/peers/${selectedId}/run`, { method: 'POST' })
       const data = await readJsonResponse<{
         ok?: boolean
+        accepted?: boolean
         error?: string
-        result?: {
-          imported: number
-          exported: number
-          skipped: number
-          pendingRemoval: number
-          importedSessions: number
-          exportedSessions: number
-          skippedSessions: number
-        }
       }>(response, '同步失败')
-      if (!response.ok || !data.ok || !data.result) throw new Error(data.error ?? '同步失败')
-      setNotice({
-        kind: 'ok',
-        text: `同步完成：节点导入 ${data.result.imported}，导出 ${data.result.exported}，会话导入 ${data.result.importedSessions}，导出 ${data.result.exportedSessions}，跳过 ${data.result.skipped}（会话 ${data.result.skippedSessions}）`,
-      })
-      reload()
+      if (!response.ok || !data.ok || !data.accepted) throw new Error(data.error ?? '同步失败')
+      const startedAt = new Date().toISOString()
+      setPeers((current) => current.map((peer) => peer.id === selectedId ? {
+        ...peer,
+        progress: { ...peer.progress, lastRunAt: startedAt, lastRunStatus: 'running' },
+      } : peer))
+      setNotice({ kind: 'ok', text: '同步作业已启动，状态会自动更新' })
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : '同步失败' })
-      reload()
     } finally {
       setSyncing(false)
     }
@@ -345,6 +363,8 @@ export function SyncPeersSection(): ReactElement {
   }
 
   const isNew = selectedId === 'new'
+  const syncInProgress = syncing || selectedPeer?.progress?.lastRunStatus === 'running'
+  const selectedSummary = selectedPeer ? resultSummary(selectedPeer) : undefined
 
   return (
     <>
@@ -356,8 +376,15 @@ export function SyncPeersSection(): ReactElement {
         .dshb-sync-peer-add{width:28px;height:28px;padding:0;border-radius:50%;font-size:16px;line-height:1;opacity:.65}
         .dshb-sync-peer-add:hover{opacity:1}
         .dshb-sync-peer-status{font-size:11px;opacity:.6;margin-top:2px;display:block}
+        .dshb-sync-peer-tab{max-width:220px;overflow:hidden;text-overflow:ellipsis}
+        .dshb-sync-peer-tab.running{border-color:var(--dsw-alias-button-primary-fill)}
+        .dshb-sync-peer-tab.failed{border-color:var(--dsw-alias-state-error-primary, #f87171)}
+        .dshb-sync-peer-add{width:28px;height:28px;padding:0;border-radius:50%;font-size:16px;line-height:1;opacity:.65}
+        .dshb-sync-peer-add:hover{opacity:1}
+        .dshb-sync-peer-status{font-size:11px;opacity:.6;margin-top:2px;display:block}
         .dshb-sync-two-col{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
         @media(max-width:600px){.dshb-sync-two-col{grid-template-columns:1fr}}
+
       `}</style>
 
       {/* 节点切换标签页 */}
@@ -375,20 +402,38 @@ export function SyncPeersSection(): ReactElement {
           <button
             key={peer.id}
             type="button"
-            className={`dshb-sync-peer-tab${selectedId === peer.id ? ' active' : ''}`}
+            className={`dshb-sync-peer-tab${selectedId === peer.id ? ' active' : ''}${peer.progress?.lastRunStatus === 'running' ? ' running' : ''}${peer.progress?.lastRunStatus === 'failed' ? ' failed' : ''}`}
             onClick={() => select(peer.id)}
+            title={`${peer.name} · ${statusLabel(peer)}`}
+            aria-label={`同步节点 ${peer.name}，${statusLabel(peer)}`}
           >
             {peer.name}
-            {!peer.enabled && <span style={{ opacity: 0.5, marginLeft: 4 }}>(停用)</span>}
+            <span className="dshb-sync-peer-status">{statusLabel(peer)}</span>
           </button>
         ))}
-        {peers.length === 0 && !isNew && (
-          <span style={{ fontSize: 12, opacity: 0.5, alignSelf: 'center' }}>尚未配置同步节点</span>
+        {runningCount > 0 && <span style={{ fontSize: 11, alignSelf: 'center', opacity: 0.65 }}>{runningCount} 个同步作业进行中</span>}
+        {peers.length === 0 && (
+          <span style={{ fontSize: 12, opacity: 0.5, alignSelf: 'center' }}>点击“+”添加第一个同步节点</span>
         )}
       </div>
 
-      {/* 表单 */}
-      <div style={{ maxWidth: 560 }}>
+        {/* 表单 */}
+        {selectedPeer && (
+          <div role="status" style={{
+            maxWidth: 560, marginBottom: 16, padding: '12px 14px',
+            border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 10,
+            background: 'var(--dsw-alias-bg-layer-1)', fontSize: 12,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
+              <strong>{progressLabel(selectedPeer)}</strong>
+              <button type="button" onClick={reload} style={{ ...secondaryBtn, height: 26, fontSize: 11 }}>刷新</button>
+            </div>
+            {selectedSummary && <div style={{ marginTop: 6, opacity: 0.72, lineHeight: 1.55 }}>{selectedSummary}</div>}
+            {selectedPeer.progress?.lastErrorMessage && <div style={{ marginTop: 6, color: 'var(--dsw-alias-state-error-primary, #f87171)', lineHeight: 1.55 }}>{selectedPeer.progress.lastErrorMessage}</div>}
+            {syncInProgress && <div style={{ marginTop: 6, opacity: 0.6 }}>大工作区或大量会话可能需要数分钟，页面每 3 秒更新进度。</div>}
+          </div>
+        )}
+        <div style={{ maxWidth: 560 }}>
 
         {/* 连接信息 */}
         <div style={groupTitle}>连接信息</div>
@@ -594,8 +639,8 @@ export function SyncPeersSection(): ReactElement {
             </button>
           )}
           {!isNew && (
-            <button type="button" onClick={() => void runSync()} disabled={busy || probing || syncing || !selectedPeer?.enabled} style={secondaryBtn}>
-              {syncing ? '同步中…' : '立即同步'}
+            <button type="button" onClick={() => void runSync()} disabled={busy || probing || syncInProgress || !selectedPeer?.enabled} style={secondaryBtn}>
+              {syncInProgress ? '同步中…' : '立即同步'}
             </button>
           )}
           {!isNew && (
@@ -613,7 +658,10 @@ export function SyncPeersSection(): ReactElement {
 
       {/* 会话冲突归档 */}
       <div style={{ borderTop: '1px solid var(--dsw-alias-border-l2)', paddingTop: 16, maxWidth: 560 }}>
-        <h3 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, opacity: 0.7 }}>会话冲突归档</h3>
+        <h3 style={{ margin: '0 0 6px', fontSize: 13, fontWeight: 600, opacity: 0.7 }}>会话冲突归档</h3>
+        <div style={{ fontSize: 11, opacity: 0.55, lineHeight: 1.55, marginBottom: 12 }}>
+          冲突的旧版本会保留在这里；恢复版本后，原当前版本也会进入归档。
+        </div>
         {archives.length === 0 ? (
           <div style={{ fontSize: 12, opacity: 0.5 }}>暂无待恢复的会话分支</div>
         ) : (
@@ -629,8 +677,11 @@ export function SyncPeersSection(): ReactElement {
               marginBottom: 8,
             }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{archive.originSessionId}</div>
-                <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>{new Date(archive.archivedAt).toLocaleString()}</div>
+                <div style={{ fontSize: 13, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <code title={archive.originSessionId}>{shortenSessionId(archive.originSessionId)}</code>
+                  <button type="button" title="复制完整会话 ID" aria-label="复制完整会话 ID" onClick={() => copyText(archive.originSessionId)} style={{ ...secondaryBtn, height: 22, padding: '0 6px', fontSize: 10 }}>复制 ID</button>
+                </div>
+                <div style={{ fontSize: 11, opacity: 0.5, marginTop: 3 }}>归档于 {new Date(archive.archivedAt).toLocaleString()}</div>
               </div>
               <button type="button" onClick={() => void restoreArchive(archive.branchId)} disabled={busy} style={secondaryBtn}>
                 恢复版本

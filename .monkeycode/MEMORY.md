@@ -124,3 +124,14 @@ Entries discovered by the Agent during task execution should follow this format:
   - 桌面版下 `isLoopbackRequest` 判定通过（本机回环），认证门自动放行，桌面端无需登录；login 页在桌面壳下不会被触发
   - dshb 在桌面应用通过 **Settings → Plugins → More** 安装，npm 包名 `@artenx/dshb`，安装后下次启动生效；桌面应用本身不通过 CLI 启动 profile
   - 适配桌面版的真实工作只在文档层：README 说明桌面版安装方式与认证行为、startup 帮助文本去掉"浏览器"硬编码；插件代码（auth/core/router/exec-ssh/exec-docker/ui）无需改动
+
+[Project Knowledge Summary]
+- Date: 2026-10-29
+- Context: Agent 按用户要求用本地最新代码更新远端 193（193.112.17.199）上的 DSHB
+- Category: Operations & Deployment
+- Instructions:
+  - 193 上活跃的 DSHB 在宿主 `/home/mt/.dsh/profiles/web/node_modules/@artenx/dshb`（宿主 `/home/mt/.dsh` 以 bind 挂载进 `dsh` 容器同路径，两侧同一份；owner 为 `mt`(uid 1001)）。`/root/.dsh/profiles/web/...`（0.1.3）是闲置旧安装，勿更新到那里
+  - `dsh` 容器主进程即 DSH web：`node /usr/local/bin/dsh web --host 127.0.0.1 --port 3079`，宿主 9080（docker-proxy）映射到容器 3079；更新后 `docker restart dsh` 生效，web banner 日志出现 `dsh web: http://127.0.0.1:3079/?token=...` 即已恢复
+  - 部署步骤（本地无构建环境的远端，全部本地构建后传文件）：本地 `pnpm build` → `tar czf dshb-latest.tar.gz lib cordis.patch.yml package.json`（在 packages/dshb 下）→ scp 到 193 `/tmp` → 备份旧目录后 `rm -rf <target>/lib && tar xzf -C <target>` → `chown -R 1001:1001 <target>/lib package.json cordis.patch.yml` → `docker restart dsh`；用 `sha256sum` 对 index.js 与 session-sync chunk 做字节级核对
+  - 远端同步 peer p-16dc7e8241fa9de58cbe4533（name=193）的 SSH 凭据存于本地预览 `dshv19preview/.credentials.yaml` 与 `dshb/sync-peers.json`，host=193.112.17.199 port=22 user=root authKind=password；访问时用该 password（值保密，勿写入文档/代码/聊天），验证 DSHB 已加载可 `curl -H "Host: 193.112.17.199:9080" 127.0.0.1:9080/api/dshb/sync/peers`，返回 401 unauthorized 即 DSHB core 已注册该路由
+  - 当前远端 DSHB 版本号 0.1.18 与本地相同（本地含未提交的 delivery marker 修复与 202 异步受理修复），故验证靠 lib 文件哈希而非版本号

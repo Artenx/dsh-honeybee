@@ -524,6 +524,108 @@ describe('session sync', () => {
       .resolves.toMatchObject({ created: 1 })
   })
 
+  it('rewrites current delivery markers and preserves inherited markers across origin IDs', async () => {
+    const source = createEnvironment('source')
+    const workspace = source.workspaces.add('workspace-source', `${source.home}/mirror/source`, 'Source project')
+    source.bindings.add({ mirrorPath: workspace.path, nodeId: 'node-source', remotePath: '/remote/project', workspaceId: workspace.id })
+    const parentId = addPlainSession(source, workspace.id, 'session-parent')
+    const parent = source.persistence.sessions.get(String(parentId))!
+    const deliveryMarker = (seq: number, sessionId: SessionId, throughSeq: number): SessionEvent => ({
+      type: 'session-log-deepseek/delivery-accepted',
+      seq,
+      time: Date.now(),
+      data: { sessionId, throughSeq },
+    } as unknown as SessionEvent)
+    parent.events.push(deliveryMarker(parent.events.length, parentId, parent.events.length - 1))
+    parent.revision += 1
+
+    const childId = SessionId('session-child')
+    const inheritedEvents = structuredClone(parent.events)
+    const childEvents = [...inheritedEvents, deliveryMarker(inheritedEvents.length, childId, inheritedEvents.length - 1)]
+    source.persistence.sessions.set(String(childId), {
+      header: { ...parent.header, id: childId, parentSession: parentId, isSeeded: true },
+      inheritedEventCount: inheritedEvents.length,
+      events: childEvents,
+      revision: 1,
+    })
+    workspace.sessionIds.push(childId)
+
+    const target = createEnvironment('target')
+    const exported = await source.service.exportBundle()
+    const bundle = makeSyncSessionBundle(exported.instanceId, exported.entries.map((entry) => ({
+      ...entry,
+      ...(entry.metadata.originEntityId === String(childId)
+        ? { metadata: { ...entry.metadata, originEntityId: 'session-origin-from-another-instance' } }
+        : {}),
+    })), exported.skipped)
+    const applied = await target.service.applyBundle(bundle, 'source peer', 'p-0123456789abcdef01234567')
+    const targetChild = [...target.persistence.sessions.values()].find((session) =>
+      session.events.some((event) => event.seq === inheritedEvents.length &&
+        (event as unknown as { type: string }).type === 'session-log-deepseek/delivery-accepted'),
+    )
+    const targetMarkers = targetChild?.events.filter((event) =>
+      (event as unknown as { type: string }).type === 'session-log-deepseek/delivery-accepted',
+    ).map((event) => event as unknown as { seq: number; data: { sessionId: string } })
+
+    expect(applied.created).toBe(2)
+    expect(targetChild).toBeDefined()
+    expect(targetChild?.header.parentSession).not.toBe(parentId)
+    expect(targetChild?.inheritedEventCount).toBe(inheritedEvents.length)
+    expect(targetMarkers?.map((event) => ({ seq: event.seq, sessionId: event.data.sessionId }))).toEqual([
+      { seq: inheritedEvents.length - 1, sessionId: String(parentId) },
+      { seq: inheritedEvents.length, sessionId: String(targetChild?.header.id) },
+    ])
+  })
+
+  it('retains source parentSession when the parent has no sync-origin mapping', async () => {
+    const source = createEnvironment('source')
+    const workspace = source.workspaces.add('workspace-source', `${source.home}/mirror/source`, 'Source project')
+    source.bindings.add({ mirrorPath: workspace.path, nodeId: 'node-source', remotePath: '/remote/project', workspaceId: workspace.id })
+    const sourceSessionId = SessionId('session-child-with-unmapped-parent')
+    const parentSessionId = SessionId('session-unmapped-parent')
+    const deliveryMarker = (seq: number, sessionId: SessionId, throughSeq: number): SessionEvent => ({
+      type: 'session-log-deepseek/delivery-accepted',
+      seq,
+      time: Date.now(),
+      data: { sessionId, throughSeq },
+    } as unknown as SessionEvent)
+    source.persistence.sessions.set(String(sourceSessionId), {
+      header: {
+        id: sourceSessionId,
+        version: SESSION_FORMAT_VERSION,
+        createdAt: Date.now(),
+        cwd: workspace.path,
+        parentSession: parentSessionId,
+        isSeeded: true,
+      },
+      inheritedEventCount: 2,
+      events: [
+        { type: 'turn/start', seq: 0, time: Date.now(), data: { turn: 1 } } as SessionEvent,
+        deliveryMarker(1, parentSessionId, 0),
+        deliveryMarker(2, sourceSessionId, 1),
+      ],
+      revision: 1,
+    })
+    workspace.sessionIds.push(sourceSessionId)
+
+    const bundle = await source.service.exportBundle()
+    const target = createEnvironment('target')
+    const applied = await target.service.applyBundle(bundle, 'source peer', 'p-0123456789abcdef01234567')
+    const targetId = target.workspaces.list()[0]?.sessionIds[0]
+    const targetSession = targetId && target.persistence.sessions.get(String(targetId))
+    const markers = targetSession?.events.filter((event) =>
+      (event as unknown as { type: string }).type === 'session-log-deepseek/delivery-accepted',
+    ).map((event) => event as unknown as { seq: number; data: { sessionId: string } })
+
+    expect(bundle.entries[0]?.parentOrigin).toBeUndefined()
+    expect(applied.created).toBe(1)
+    expect(targetSession?.header.parentSession).toBe(parentSessionId)
+    expect(markers?.map((event) => ({ seq: event.seq, sessionId: event.data.sessionId }))).toEqual([
+      { seq: 1, sessionId: String(parentSessionId) },
+      { seq: 2, sessionId: String(targetId) },
+    ])
+  })
+
   it('flushes remote-workspace sessions and includes referenced image and spill objects', async () => {
     const source = createEnvironment('source')
     const sessionId = addSourceSession(source)
@@ -738,6 +840,39 @@ describe('session sync', () => {
       allowSameInstance: true,
     })
     expect(replay.skipped).toBe(1)
+  })
+
+  it('preserves a newer local tombstone when a pull bundle contains an older live session', async () => {
+    const source = createEnvironment('source')
+    addSourceSession(source)
+    const liveBundle = await source.service.exportBundle()
+    const liveMetadata = liveBundle.entries[0]!.metadata
+    const target = createEnvironment('target')
+    const tombstoneMetadata = {
+      ...liveMetadata,
+      revision: { ...liveMetadata.revision, physicalTimeMs: liveMetadata.revision.physicalTimeMs + 1 },
+      contentDigest: digest(JSON.stringify({
+        deleted: true,
+        kind: 'session',
+        originEntityId: liveMetadata.originEntityId,
+        originInstanceId: liveMetadata.originInstanceId,
+      })),
+      deleted: true,
+    }
+    const tombstoneBundle = makeSyncSessionBundle(liveBundle.instanceId, [{ metadata: tombstoneMetadata }])
+
+    await target.service.applyBundle(tombstoneBundle, 'source peer', 'p-0123456789abcdef01234567')
+    const localBundle = await target.service.exportBundle()
+    const plan = planSessionTransfers('pull', localBundle.entries, liveBundle.entries)
+    const applied = await target.service.applyBundle(liveBundle, 'source peer', 'p-0123456789abcdef01234567')
+
+    expect(localBundle.entries).toMatchObject([{ metadata: { deleted: true, originEntityId: liveMetadata.originEntityId } }])
+    expect(plan.toLocal).toHaveLength(0)
+    expect(plan.skipped).toBe(1)
+    expect(applied.skipped).toBe(1)
+    expect(target.persistence.sessions.size).toBe(0)
+    expect(Object.values(target.state.read().records).find((record) => record.originEntityId === liveMetadata.originEntityId)?.deleted).toBe(true)
+    expect(target.service.pendingPeerIds()).toEqual([])
   })
 
   it('skips sessions whose remote workspace has no local node mapping', async () => {

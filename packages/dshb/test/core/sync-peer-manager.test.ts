@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SyncHostKeyChallengeError } from '../../src/core/sync/host-key.js'
 import { SyncPeerManager } from '../../src/core/sync/peer-manager.js'
 import { registerSyncPeerRoutes } from '../../src/core/sync/routes.js'
-import { SyncCoordinatorError } from '../../src/core/sync/coordinator.js'
 import { SyncPeerStore, SyncStateStore } from '../../src/core/sync/stores.js'
 
 const homes: string[] = []
@@ -244,10 +243,10 @@ describe('sync peer HTTP routes', () => {
     expect((trust.body.peer as { hostKeyFingerprint?: string }).hostKeyFingerprint).toBe(fingerprint)
   })
 
-  it('exposes the manual sync run and maps coordinator errors to stable API codes', async () => {
+  it('accepts manual sync jobs without awaiting completion and rejects disabled peers', async () => {
     const { manager } = createManager()
     const peer = await manager.create(peerDraft, { privateKey: 'PRIVATE KEY' })
-    const coordinator = { run: vi.fn(async () => { throw new SyncCoordinatorError('sessions-unavailable', '会话同步尚未启用') }) }
+    const coordinator = { run: vi.fn(() => new Promise<void>(() => {})) }
     const transport = { probe: async () => ({}), trustObservedHostKey: async () => ({}) }
     const routes: CapturedRoute[] = []
     const ctx = {
@@ -256,10 +255,15 @@ describe('sync peer HTTP routes', () => {
     }
     registerSyncPeerRoutes(ctx as never, manager, transport as never, coordinator as never)
 
-    const response = await callRoute(routes[0], 'POST', `/api/dshb/sync/peers/${peer.id}/run`)
+    const accepted = await callRoute(routes[0], 'POST', `/api/dshb/sync/peers/${peer.id}/run`)
+    await manager.update(peer.id, { enabled: false })
+    const disabled = await callRoute(routes[0], 'POST', `/api/dshb/sync/peers/${peer.id}/run`)
 
     expect(coordinator.run).toHaveBeenCalledWith(peer.id)
-    expect(response.status).toBe(409)
-    expect(response.body).toMatchObject({ ok: false, code: 'sessions-unavailable' })
+    expect(coordinator.run).toHaveBeenCalledTimes(1)
+    expect(accepted.status).toBe(202)
+    expect(accepted.body).toMatchObject({ ok: true, accepted: true })
+    expect(disabled.status).toBe(409)
+    expect(disabled.body).toMatchObject({ ok: false, code: 'peer-disabled' })
   })
 })
