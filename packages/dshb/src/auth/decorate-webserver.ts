@@ -5,14 +5,27 @@ import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import { AuthGate, rewriteToLoopback } from './gate.js'
 import type { CredentialStore } from './credentials.js'
 
+type ResourceFallback = { resource: unknown }
+type CompatibleFallback = WebRoute['handler'] | ResourceFallback
+
+function isResourceFallback(fallback: CompatibleFallback): fallback is ResourceFallback {
+  return typeof fallback === 'object'
+    && fallback !== null
+    && 'resource' in fallback
+    && typeof fallback.resource === 'function'
+}
+
 export function decorateWebServer(
   webServer: WebServer,
   store: CredentialStore,
+  gate = new AuthGate(store),
 ): () => void {
-  const gate = new AuthGate(store)
-
   const origRegister = webServer.register.bind(webServer)
-  const origRegisterFallback = webServer.registerFallback.bind(webServer)
+  const fallbackServer = webServer as unknown as {
+    registerFallback: (fallback: CompatibleFallback) => () => void
+    fallback?: CompatibleFallback & { __dshbGated?: true }
+  }
+  const origRegisterFallback = fallbackServer.registerFallback.bind(webServer)
   const origRegisterUpgrade = webServer.registerUpgrade.bind(webServer)
 
   webServer.register = (route: WebRoute): (() => void) => {
@@ -22,7 +35,10 @@ export function decorateWebServer(
     })
   }
 
-  webServer.registerFallback = (handler: WebRoute['handler']): (() => void) => {
+  fallbackServer.registerFallback = (handler: CompatibleFallback): (() => void) => {
+    // Newer DSH releases register SPA fallbacks as resources. Their resource
+    // callback owns index authorization and must keep its original contract.
+    if (isResourceFallback(handler)) return origRegisterFallback(handler)
     return origRegisterFallback((req, res) =>
       guarded({ kind: 'exact', path: '/', handler }, req, res),
     )
@@ -39,13 +55,12 @@ export function decorateWebServer(
   // *before* this decoration runs (plugin apply order is not guaranteed). The
   // registerFallback wrap above only gates fallbacks registered later, so also
   // wrap an already-claimed seat in place. Idempotent via the __dshbGated mark.
-  const ws = webServer as unknown as { fallback?: WebRoute['handler'] & { __dshbGated?: true } }
-  const origFallback = ws.fallback
+  const origFallback = fallbackServer.fallback
   if (typeof origFallback === 'function' && !origFallback.__dshbGated) {
     const wrapped: WebRoute['handler'] & { __dshbGated?: true } = (req, res) =>
       guarded({ kind: 'exact', path: '/', handler: origFallback }, req, res)
     wrapped.__dshbGated = true
-    ws.fallback = wrapped
+    fallbackServer.fallback = wrapped
   }
 
   function guarded(
@@ -66,6 +81,11 @@ export function decorateWebServer(
       res.end()
       return
     }
+    if (decision === 'forbidden') {
+      res.writeHead(403, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'forbidden' }))
+      return
+    }
     res.writeHead(401, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: false, error: 'unauthorized' }))
   }
@@ -81,14 +101,16 @@ export function decorateWebServer(
       if (decision === 'allow') rewriteToLoopback(req, webServer.port)
       return route.handler(req, socket, head)
     }
-    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+    socket.write(decision === 'forbidden'
+      ? 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'
+      : 'HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
     socket.destroy()
   }
 
   return () => {
     webServer.register = origRegister
-    webServer.registerFallback = origRegisterFallback
+    fallbackServer.registerFallback = origRegisterFallback
     webServer.registerUpgrade = origRegisterUpgrade
-    ws.fallback = origFallback
+    fallbackServer.fallback = origFallback
   }
 }

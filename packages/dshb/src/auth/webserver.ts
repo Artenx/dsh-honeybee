@@ -17,9 +17,15 @@ export default class AuthedWebServer extends WebServer {
     return super.register({ ...route, handler: (req, res) => this.guarded(route, req, res) })
   }
 
-  override registerFallback(handler: WebRoute['handler']): () => void {
+  override registerFallback(handler: WebRoute['handler'] | { resource: unknown }): () => void {
+    if (typeof handler === 'object'
+      && handler !== null
+      && 'resource' in handler
+      && typeof handler.resource === 'function') {
+      return super.registerFallback(handler as unknown as WebRoute['handler'])
+    }
     return super.registerFallback((req, res) =>
-      this.guarded({ kind: 'exact', path: '/', handler }, req, res),
+      this.guarded({ kind: 'exact', path: '/', handler: handler as WebRoute['handler'] }, req, res),
     )
   }
 
@@ -44,6 +50,11 @@ export default class AuthedWebServer extends WebServer {
       res.end()
       return
     }
+    if (decision === 'forbidden') {
+      res.writeHead(403, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'forbidden' }))
+      return
+    }
     res.writeHead(401, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: false, error: 'unauthorized' }))
   }
@@ -59,7 +70,9 @@ export default class AuthedWebServer extends WebServer {
       if (decision === 'allow') rewriteToLoopback(req, this.port)
       return route.handler(req, socket, head)
     }
-    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+    socket.write(decision === 'forbidden'
+      ? 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'
+      : 'HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
     socket.destroy()
   }
 }

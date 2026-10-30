@@ -1,9 +1,11 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
+import type { IncomingMessage } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { sharedCredentialStore } from './credentials.js'
 import { decorateWebServer } from './decorate-webserver.js'
+import { AuthGate } from './gate.js'
 import { installLoopbackCompat } from './loopback-compat.js'
 import { LoginRateLimiter } from './ratelimit.js'
 import { registerAuthRoutes } from './routes.js'
@@ -70,10 +72,12 @@ function registerFrontendBootRaceWorkaround(ctx: Context): void {
 }
 
 export function apply(ctx: Context): void {
-  decorateWebServer(ctx.webServer, sharedCredentialStore())
+  const store = sharedCredentialStore()
+  const gate = new AuthGate(store)
+  decorateWebServer(ctx.webServer, store, gate)
   registerFrontendBootRaceWorkaround(ctx)
   ctx.webServer.tapIndex(installLoopbackCompat)
-  registerAuthRoutes(ctx, sharedCredentialStore(), new LoginRateLimiter())
+  registerAuthRoutes(ctx, store, new LoginRateLimiter())
 
   // DSH 0.1.5 introduced a browser-auth fence on the connection package: the SPA
   // fallback calls connection.authorizeIndex() on "/" (mints/checks DSH's own
@@ -85,11 +89,23 @@ export function apply(ctx: Context): void {
   // rejects unauthenticated access to gated routes. Property is read at request
   // time, so installing it once after connection is ready suffices.
   ctx.inject(['connection'], (connCtx: Context) => {
-    const conn = (connCtx as unknown as { connection?: { browserAuth?: { isAuthenticated?: (...a: unknown[]) => unknown; __dshbNeutralized?: true } } }).connection
+    const conn = (connCtx as unknown as {
+      connection?: {
+        browserAuth?: { isAuthenticated?: (...a: unknown[]) => unknown; __dshbNeutralized?: true }
+        requestRejection?: (request: IncomingMessage) => number | undefined
+      }
+    }).connection
     const auth = conn?.browserAuth
     if (auth && typeof auth.isAuthenticated === 'function' && !auth.__dshbNeutralized) {
       auth.isAuthenticated = () => true
       auth.__dshbNeutralized = true
+    }
+    if (conn && typeof conn.requestRejection === 'function') {
+      gate.setAuthRequestTrustCheck((req) => {
+        const rejection = conn.requestRejection!(req)
+        // DSH 401 is its browser-cookie gate; DSHB owns that check for these routes.
+        return rejection === undefined || rejection === 401
+      })
     }
   })
 }
