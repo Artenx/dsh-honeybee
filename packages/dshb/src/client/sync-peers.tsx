@@ -679,7 +679,7 @@ export function SyncPeersSection(): ReactElement {
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 13, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
                   <code title={archive.originSessionId}>{shortenSessionId(archive.originSessionId)}</code>
-                  <button type="button" title="复制完整会话 ID" aria-label="复制完整会话 ID" onClick={() => copyText(archive.originSessionId)} style={{ ...secondaryBtn, height: 22, padding: '0 6px', fontSize: 10 }}>复制 ID</button>
+                  <button type="button" title="复制完整会话 ID" aria-label="复制完整会话 ID" onClick={() => copyText(archive.originSessionId)} style={{ ...secondaryBtn, height: 30, padding: '0 10px', fontSize: 11 }}>复制 ID</button>
                 </div>
                 <div style={{ fontSize: 11, opacity: 0.5, marginTop: 3 }}>归档于 {new Date(archive.archivedAt).toLocaleString()}</div>
               </div>

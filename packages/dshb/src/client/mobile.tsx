@@ -94,7 +94,7 @@ const MOBILE_CSS = `
   /* footer 容器各项间距 16px 偏松 */
   [data-phase] [class*="_root"][class*="osXY9a"] { gap: 8px !important; }
   /* footer 统计行窄屏可横向滑动看全，不溢出页面 */
-  [data-phase] [class*="_actions"] { max-width: 100% !important; overflow-x: auto !important; scrollbar-width: none; touch-action: pan-x pan-y !important; }
+  [data-phase] [class*="_actions"] { max-width: 100% !important; overflow-x: auto !important; scrollbar-width: none; touch-action: pan-x pan-y pinch-zoom !important; }
   [data-phase] [class*="_actions"]::-webkit-scrollbar { display: none; }
 
   /* 模型切换菜单：名称完整展示，长名称在菜单项内换行。 */
@@ -148,7 +148,7 @@ const MOBILE_CSS = `
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    touch-action: pan-x pan-y !important;
+    touch-action: pan-x pan-y pinch-zoom !important;
   }
   [data-phase] [class*="resultBlockText"]::-webkit-scrollbar,
   [data-phase] [class*="payload"]::-webkit-scrollbar,
@@ -166,7 +166,7 @@ const MOBILE_CSS = `
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    touch-action: pan-x pan-y !important;
+    touch-action: pan-x pan-y pinch-zoom !important;
   }
   [data-phase] [class*="jsonPayload"]::-webkit-scrollbar,
   [data-phase] [class*="jsonPreview"]::-webkit-scrollbar,
@@ -189,7 +189,7 @@ const MOBILE_CSS = `
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    touch-action: pan-x pan-y !important;
+    touch-action: pan-x pan-y pinch-zoom !important;
   }
   /* xterm uses a transparent helper textarea for all terminal input. Keep it
      focusable and non-zero-sized so mobile browsers can present their keyboard. */
@@ -216,7 +216,7 @@ const MOBILE_CSS = `
     max-width: 100% !important;
     overflow-x: auto !important;
     overscroll-behavior-x: contain;
-    touch-action: pan-x pan-y !important;
+    touch-action: pan-x pan-y pinch-zoom !important;
   }
   [data-phase] [class*="_prompt_1gdtu_"],
   [data-phase] [class*="_promptLine_1gdtu_"],
@@ -238,7 +238,7 @@ const MOBILE_CSS = `
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    touch-action: pan-x pan-y !important;
+    touch-action: pan-x pan-y pinch-zoom !important;
   }
   [data-phase] [class*="_output_1gdtu_"]::-webkit-scrollbar { display: none !important; }
   [data-phase] [class*="_line_1gdtu_"] {
@@ -251,7 +251,7 @@ const MOBILE_CSS = `
   [data-phase] [class*="_copyButton_"] { touch-action: manipulation !important; }
   [data-phase] [class*="_copyAnchor_"],
   [data-phase] [class*="_body_1ye18_"],
-  [data-phase] [class*="_root_4qrvp_"] { touch-action: pan-x pan-y !important; }
+  [data-phase] [class*="_root_4qrvp_"] { touch-action: pan-x pan-y pinch-zoom !important; }
 
   /* 上下文用量弹窗（ContextMeter .JObwrW_panel）：上游 dsh-client-ui-trajectory 的
      [class*="panel"] 全局规则给它加了 max-width:100%!important，命中本弹窗，使宽度
@@ -305,10 +305,19 @@ const MOBILE_CSS = `
     z-index: 2 !important;
     display: inline-flex !important;
     align-items: center; justify-content: center;
-    width: 28px; height: 28px;
+    width: 32px; height: 32px;
     padding: 0; border: none; background: none; cursor: pointer; color: inherit;
     -webkit-tap-highlight-color: transparent;
   }
+  /* 触控命中区扩展：视觉尺寸不变，可点区域扩到 ~44px（Apple HIG 建议值） */
+  [${FRAME_ATTR}="toggle"]::after,
+  [${FRAME_ATTR}="fab"]::after,
+  [class*="_iconButton"]::after {
+    content: "";
+    position: absolute;
+    inset: -7px;
+  }
+  [class*="_iconButton"] { position: relative !important; }
 
   /* 首页/hero（无活跃会话，session header 不存在）的抽屉切换 FAB：
      浮在顶部相机带下方，避免与 hero 头部内容重叠 */
@@ -319,7 +328,7 @@ const MOBILE_CSS = `
     z-index: 21 !important;
     display: inline-flex !important;
     align-items: center; justify-content: center;
-    width: 38px; height: 38px;
+    width: 44px; height: 44px;
     padding: 0;
     border: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, .12)) !important;
     border-radius: 50% !important;
@@ -329,6 +338,30 @@ const MOBILE_CSS = `
     box-shadow: 0 2px 12px rgba(0, 0, 0, .18) !important;
     -webkit-tap-highlight-color: transparent;
   }
+
+  /* iOS 对 computed font-size <16px 的可编辑元素聚焦时自动放大视口；
+     表单与 composer 提到 16px（消息正文不受影响），聚焦后页面不再错位。 */
+  input, textarea, select, [contenteditable="true"] {
+    font-size: max(16px, 1em) !important;
+  }
+
+  /* 底部安全区（iPhone home 条）：viewport-fit=cover 后浏览器 UI 退出底部，
+     home 指示条叠在 composer / 抽屉 / 设置 sheet 上，遮挡发送按钮与会话列表末项。 */
+  [class*="composerSeat"], [data-composer-seat] {
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 4px) !important;
+  }
+  [${FRAME_ATTR}="frame"] > :first-child {
+    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+  }
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) {
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) !important;
+  }
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > :last-child {
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 24px) !important;
+  }
+
+  /* 会话行触控高度 */
+  [class*="sessionRow"] { min-height: 44px !important; }
 }
 
 /* 宽屏 / 鼠标指针：隐藏切换按钮 */
@@ -353,9 +386,9 @@ function installViewport(ctx: ClientContext): void {
     if (viewport === null) return () => {}
     const original = viewport.content
     const sync = (): void => {
-      viewport.content = narrow.matches
-        ? 'width=device-width, initial-scale=1, viewport-fit=cover'
-        : original
+    viewport.content = narrow.matches
+      ? 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content'
+      : original
     }
     sync()
     narrow.addEventListener('change', sync)
@@ -843,6 +876,52 @@ function installMobileTerminalInputFocus(ctx: ClientContext): void {
   }, 'dshb-mobile: terminal input focus')
 }
 
+/**
+ * iOS 键盘只缩小 visualViewport，布局视口不动，sticky 在滚动容器底部的
+ * composer 会整个留在键盘后面（发送按钮不可达、最新消息被遮）。监听
+ * visualViewport，键盘开启时把 composer seat 上移键盘高度并在下一帧把
+ * 会话滚动补到最底；Android 由 meta 的 interactive-widget=resizes-content
+ * 让布局视口直接收缩，无需此补偿。
+ */
+function installComposerKeyboardLift(ctx: ClientContext): void {
+  ctx.effect(() => {
+    const mobile = window.matchMedia(MOBILE_QUERY)
+    const vv = window.visualViewport
+    if (!vv) return () => {}
+    let raf = 0
+    const seat = (): HTMLElement | null =>
+      document.querySelector<HTMLElement>('[class*="composerSeat"]') ??
+      document.querySelector<HTMLElement>('[data-composer-seat]')
+    const sync = (): void => {
+      if (raf !== 0) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        if (!mobile.matches) return
+        const el = seat()
+        if (el === null) return
+        const occluded = window.innerHeight - vv.height - vv.offsetTop
+        if (occluded > 150) {
+          el.style.transform = `translateY(${-occluded}px)`
+          const body = document.querySelector<HTMLElement>('[class*="scrollBody"]')
+          body?.scrollTo({ top: body.scrollHeight })
+        } else if (el.style.transform !== '') {
+          el.style.transform = ''
+        }
+      })
+    }
+    sync()
+    vv.addEventListener('resize', sync)
+    vv.addEventListener('scroll', sync)
+    return () => {
+      if (raf !== 0) cancelAnimationFrame(raf)
+      const el = seat()
+      if (el !== null) el.style.transform = ''
+      vv.removeEventListener('resize', sync)
+      vv.removeEventListener('scroll', sync)
+    }
+  }, 'dshb-mobile: composer keyboard lift')
+}
+
 interface LayoutLike { toggleSidebar(): void }
 interface SlotsLike {
   inject(name: string, fn: () => unknown): unknown
@@ -923,6 +1002,7 @@ function installFab(ctx: ClientContext, toggleSidebar: () => void): void {
 export function installMobile(ctx: ClientContext): void {
   installStyles(ctx)
   installMobileTerminalInputFocus(ctx)
+  installComposerKeyboardLift(ctx)
   installViewport(ctx)
   installFrameMarker(ctx)
   installStatsLine(ctx)

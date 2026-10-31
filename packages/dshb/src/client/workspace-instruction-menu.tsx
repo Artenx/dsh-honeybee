@@ -43,7 +43,7 @@ function mountInstructionDialog(workspaceId: string, workspaceTitle: string): vo
   const dialog = document.createElement('div')
   dialog.setAttribute('role', 'dialog')
   dialog.setAttribute('aria-label', `修改 ${workspaceTitle} 的项目指令`)
-  dialog.style.cssText = 'box-sizing:border-box;width:min(92vw,600px);max-height:85vh;overflow:auto;padding:20px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)'
+  dialog.style.cssText = 'box-sizing:border-box;width:min(92vw,600px);max-height:85dvh;overflow:auto;padding:20px;padding-bottom:max(env(safe-area-inset-bottom),20px);border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)'
 
   const title = document.createElement('h2')
   title.textContent = `项目指令 - ${workspaceTitle}`

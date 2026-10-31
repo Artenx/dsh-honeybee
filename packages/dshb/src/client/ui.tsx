@@ -624,7 +624,10 @@ export function apply(ctx: ClientContext): void {
        依赖祖先 overflow:visible 才能展开到输入框之外，禁止给任何中间祖先加裁剪。 */
     html, body { overflow-x: hidden !important; max-width: 100vw !important }
     * { min-width: 0 !important; }
-    table { display: block !important; overflow-x: auto !important; }
+    /* 表格不设 display:block：上游 markdown 表格已自带滚动容器（tableScroll），
+       display:block 会破坏 caption/sticky 语义且与上游 width:max-content 冲突；
+       这里仅保留溢出约束，宽表由上游 wrapper 横向滚动。 */
+    table { max-width: 100% !important; overflow-x: auto !important; }
     img, video, canvas, svg { max-width: 100% !important; height: auto !important }
     pre, code { white-space: pre-wrap !important; word-break: break-all !important }
     input, select, textarea { max-width: 100% !important; }

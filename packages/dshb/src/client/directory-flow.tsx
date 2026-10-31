@@ -68,7 +68,7 @@ const overlayStyle: CSSProperties = {
 const dialogStyle: CSSProperties = {
   width: 'min(92vw, 560px)',
   maxWidth: '100%',
-  maxHeight: '80vh',
+  maxHeight: '80dvh', paddingBottom: 'max(env(safe-area-inset-bottom), 12px)',
   overflow: 'auto',
   overflowX: 'hidden',
   background: 'var(--dsw-alias-bg-layer-1)',
@@ -357,7 +357,7 @@ function InstructionPreviewDialog(props: {
   const dialogStyle: CSSProperties = {
     width: 'min(92vw, 600px)',
     maxWidth: '100%',
-    maxHeight: '85vh',
+    maxHeight: '85dvh', paddingBottom: 'max(env(safe-area-inset-bottom), 12px)',
     overflow: 'auto',
     overflowX: 'hidden',
     background: 'var(--dsw-alias-bg-layer-1)',
