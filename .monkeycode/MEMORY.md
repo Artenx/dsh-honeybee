@@ -135,3 +135,14 @@ Entries discovered by the Agent during task execution should follow this format:
   - 部署步骤（本地无构建环境的远端，全部本地构建后传文件）：本地 `pnpm build` → `tar czf dshb-latest.tar.gz lib cordis.patch.yml package.json`（在 packages/dshb 下）→ scp 到 193 `/tmp` → 备份旧目录后 `rm -rf <target>/lib && tar xzf -C <target>` → `chown -R 1001:1001 <target>/lib package.json cordis.patch.yml` → `docker restart dsh`；用 `sha256sum` 对 index.js 与 session-sync chunk 做字节级核对
   - 远端同步 peer p-16dc7e8241fa9de58cbe4533（name=193）的 SSH 凭据存于本地预览 `dshv19preview/.credentials.yaml` 与 `dshb/sync-peers.json`，host=193.112.17.199 port=22 user=root authKind=password；访问时用该 password（值保密，勿写入文档/代码/聊天），验证 DSHB 已加载可 `curl -H "Host: 193.112.17.199:9080" 127.0.0.1:9080/api/dshb/sync/peers`，返回 401 unauthorized 即 DSHB core 已注册该路由
   - 当前远端 DSHB 版本号 0.1.18 与本地相同（本地含未提交的 delivery marker 修复与 202 异步受理修复），故验证靠 lib 文件哈希而非版本号
+
+[Project Knowledge Summary]
+- Date: 2026-10-31
+- Context: Agent 为 0.1.23/0.1.24 同步优化做双实例 SSH 同步实测时排查沙箱网络冻结
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 沙箱内 dsh 进程（尤其 background_terminal 启动的 3204 预览）到 193:22 的 SSH 长连接会被平台透明代理（对端显示为 36.137.140.188）间歇性冻结：握手/auth/exec 均成功，但之后双向数据停止转发（TCP 发送字节数冻结在 ~4958）。CLI sshpass ssh 走直连 193.112.17.199 不受影响
+  - 判断方法：`ss -tin | grep 36.137` 出现即走了代理路径；`ss -tin | grep 193.112.17.199` 为直连。node 内 ssh2 直连用 `node --input-type=module -e "import {Client} from 'ssh2' ..."` 可验证（在 packages/dshb 目录下运行才有依赖）
+  - 该冻结下同步会一直卡在 running；0.1.24 起有 connect/exec 硬超时（30s/60s）+ readFrames 空闲超时（60s，每帧重置）+ keepalive(15s)，冻结会转为 ssh-timeout 干净失败并重试一次；实测偶发重试后可成功收敛，多次失败属环境问题非插件缺陷
+  - SSH 传输诊断：临时在 packages/dshb/lib/core/sync/ssh-transport.js 注入 `__trace` console.error 追踪 openSession/ready/exec/readFrames（node --check 校验语法），事后 `pnpm build` 覆盖即可；进程 JS 栈采样可用 kill -USR1 + /tmp/opencode/wseval.mjs（inspector WebSocket 手写客户端）
+  - 3204 预览 profile 的 `profiles/web/package.json` 的 `dsh.profile.bundles` 曾丢失 `@artenx/dshb` 导致插件不激活（/login 404、内部路由 401 unauthorized 来自 DSH 自身围栏）；修复为手补 bundles 数组并重启
