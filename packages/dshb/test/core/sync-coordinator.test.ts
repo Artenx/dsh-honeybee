@@ -1,12 +1,14 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { planNodeTransfers, SyncCoordinator, SyncCoordinatorError } from '../../src/core/sync/coordinator.js'
 import { SyncPeerManager } from '../../src/core/sync/peer-manager.js'
-import { SyncSshProbeError, SyncSshTransport } from '../../src/core/sync/ssh-transport.js'
+import { SyncSessionDeltaPrefixError, SyncSshProbeError, SyncSshTransport } from '../../src/core/sync/ssh-transport.js'
 import { SyncNodeService, type SyncNodeEntry, type SyncNodeManifest } from '../../src/core/sync/node-sync.js'
 import { SyncStateStore } from '../../src/core/sync/stores.js'
 import type { SyncPeer, SyncPeerView } from '../../src/core/sync/model.js'
-import { makeSyncSessionBundle } from '../../src/core/sync/session-sync.js'
-import type { SyncSessionEntry, SyncSessionService } from '../../src/core/sync/session-sync.js'
+import { makeSyncSessionBundle, makeSyncSessionManifest, SyncSessionError, syncSessionEntryKey } from '../../src/core/sync/session-sync.js'
+import type { SyncSessionBundle, SyncSessionEntry, SyncSessionService } from '../../src/core/sync/session-sync.js'
+import { SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY } from '../../src/core/sync/protocol.js'
 
 const localInstanceId = 'i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const remoteInstanceId = 'i-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -40,6 +42,25 @@ function nodeEntry(originInstanceId: string, entityId: string, physicalTimeMs: n
       ssh: { host: `${entityId}.example.com`, port: 22, username: 'sync', auth: { kind: 'agent' } },
     },
   }
+}
+
+function deletedSessionEntry(originInstanceId: string, originEntityId: string): SyncSessionEntry {
+  const metadata: SyncSessionEntry['metadata'] = {
+    kind: 'session',
+    originInstanceId,
+    originEntityId,
+    localEntityId: originEntityId,
+    revision: { physicalTimeMs: 100, logicalCounter: 0, writerInstanceId: originInstanceId },
+    contentDigest: '',
+    deleted: true,
+  }
+  metadata.contentDigest = `sha256:${createHash('sha256').update(JSON.stringify({
+    deleted: true,
+    kind: 'session',
+    originEntityId,
+    originInstanceId,
+  })).digest('hex')}`
+  return { metadata }
 }
 
 function fakeCoordinator(
@@ -162,6 +183,253 @@ describe('sync coordinator', () => {
     expect(sessions.applyBundle).toHaveBeenCalledOnce()
     expect(test.transport.applySessionBundle).toHaveBeenCalledOnce()
     expect(test.progress.at(-1)?.lastResult).toMatchObject({ importedSessions: 0, exportedSessions: 1, skippedSessions: 1 })
+  })
+
+  it('uses session manifests and fetches only entries selected for transfer', async () => {
+    const sessionPeer = { ...peer, syncSessions: true }
+    const remoteEntry = deletedSessionEntry(remoteInstanceId, 'remote-deleted')
+    const localEntry = deletedSessionEntry(localInstanceId, 'local-deleted')
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [remoteEntry])
+    const localManifest = makeSyncSessionManifest(localInstanceId, [localEntry])
+    const remoteBundle = makeSyncSessionBundle(remoteInstanceId, [remoteEntry])
+    const localBundle = makeSyncSessionBundle(localInstanceId, [localEntry])
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries: vi.fn(async () => localBundle),
+      applyBundle: vi.fn(async () => ({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })),
+    }
+    const fetchSessionEntries = vi.fn(async () => remoteBundle)
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+      fetchSessionBundle: vi.fn(),
+      applySessionBundle: vi.fn(async () => ({ created: 0, updated: 1, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(result).toMatchObject({ importedSessions: 1, exportedSessions: 1, skippedSessions: 0 })
+    expect(sessions.exportManifest).toHaveBeenCalledOnce()
+    expect(sessions.exportEntries).toHaveBeenCalledWith([syncSessionEntryKey(localEntry)], localManifest.digest, [], { sharedObjects: false })
+    expect(fetchSessionEntries).toHaveBeenCalledWith(
+      peer.id,
+      [syncSessionEntryKey(remoteEntry)],
+      remoteManifest.digest,
+      [],
+    )
+    expect(test.transport.fetchSessionBundle).not.toHaveBeenCalled()
+  })
+
+  it('negotiates the shared-object wire format when both sides declare the capability', async () => {
+    const sessionPeer = { ...peer, syncSessions: true }
+    const remoteEntry = deletedSessionEntry(remoteInstanceId, 'remote-deleted')
+    const localEntry = deletedSessionEntry(localInstanceId, 'local-deleted')
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [remoteEntry])
+    const localManifest = makeSyncSessionManifest(localInstanceId, [localEntry])
+    const remoteBundle = makeSyncSessionBundle(remoteInstanceId, [remoteEntry])
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries: vi.fn(async (_keys: string[], _digest: string, _prefixes: unknown[], options: { sharedObjects?: boolean }) =>
+        options.sharedObjects === true
+          ? makeSyncSessionBundle(localInstanceId, [localEntry], [], [])
+          : makeSyncSessionBundle(localInstanceId, [localEntry]),
+      ),
+      applyBundle: vi.fn(async () => ({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })),
+    }
+    const fetchSessionEntries = vi.fn(async () => remoteBundle)
+    const applySessionBundle = vi.fn(async (_id: string, bundle: SyncSessionBundle) => {
+      expect(bundle.objects).toBeUndefined()
+      expect(bundle.entries[0]?.sharedObjectIds).toBeUndefined()
+      return { created: 0, updated: 1, archived: 0, deleted: 0, skipped: 0, unmapped: 0 }
+    })
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+      fetchSessionBundle: vi.fn(),
+      applySessionBundle,
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(result).toMatchObject({ importedSessions: 1, exportedSessions: 1 })
+    expect(sessions.exportEntries).toHaveBeenCalledWith(
+      [syncSessionEntryKey(localEntry)],
+      localManifest.digest,
+      [],
+      { sharedObjects: true },
+    )
+    expect(applySessionBundle).toHaveBeenCalledOnce()
+  })
+
+  it('re-fetches a full bundle when the local event prefix changed', async () => {
+    const sessionPeer = { ...peer, direction: 'pull' as const, syncSessions: true }
+    const remoteEntry = deletedSessionEntry(remoteInstanceId, 'remote-deleted')
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [remoteEntry])
+    const localManifest = makeSyncSessionManifest(localInstanceId, [])
+    const remoteBundle = makeSyncSessionBundle(remoteInstanceId, [remoteEntry])
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries: vi.fn(),
+      applyBundle: vi.fn()
+        .mockRejectedValueOnce(new SyncSessionError('session-delta-prefix', 'prefix changed'))
+        .mockResolvedValue({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 }),
+    }
+    const fetchSessionEntries = vi.fn(async () => remoteBundle)
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+      fetchSessionBundle: vi.fn(),
+      applySessionBundle: vi.fn(),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    await expect(test.coordinator.run(peer.id)).resolves.toMatchObject({ importedSessions: 1 })
+    expect(fetchSessionEntries).toHaveBeenCalledTimes(2)
+    expect(sessions.applyBundle).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-exports a full local bundle when the remote rejects its event prefix', async () => {
+    const sessionPeer = { ...peer, direction: 'bidirectional' as const, syncSessions: true }
+    const localEntry = deletedSessionEntry(localInstanceId, 'local-deleted')
+    const localManifest = makeSyncSessionManifest(localInstanceId, [localEntry])
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [])
+    const localBundle = makeSyncSessionBundle(localInstanceId, [localEntry])
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries: vi.fn(async () => localBundle),
+      applyBundle: vi.fn(),
+    }
+    const applySessionBundle = vi.fn()
+      .mockRejectedValueOnce(new SyncSessionDeltaPrefixError())
+      .mockResolvedValue({ created: 0, updated: 1, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries: vi.fn(),
+      fetchSessionBundle: vi.fn(),
+      applySessionBundle,
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    await expect(test.coordinator.run(peer.id)).resolves.toMatchObject({ exportedSessions: 1 })
+    expect(sessions.exportEntries).toHaveBeenCalledTimes(2)
+    expect(applySessionBundle).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the previous watermark when selected session content misses manifest entries', async () => {
+    const sessionPeer = { ...peer, direction: 'pull' as const, syncSessions: true }
+    const remoteEntry = deletedSessionEntry(remoteInstanceId, 'remote-deleted')
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [remoteEntry])
+    const localManifest = makeSyncSessionManifest(localInstanceId, [])
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries: vi.fn(),
+      applyBundle: vi.fn(async () => ({ created: 0, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })),
+    }
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries: vi.fn(async () => makeSyncSessionBundle(remoteInstanceId, [])),
+      applySessionBundle: vi.fn(),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    await expect(test.coordinator.run(peer.id)).rejects.toMatchObject({ code: 'session-manifest-stale' })
+
+    expect(sessions.applyBundle).not.toHaveBeenCalled()
+    expect(test.transport.applySessionBundle).not.toHaveBeenCalled()
+    expect(test.progress.at(-1)).toMatchObject({ lastRunStatus: 'failed', watermark: 'previous-watermark' })
+  })
+
+  it('retries a local delta prefix mismatch with complete selected entries', async () => {
+    const sessionPeer = { ...peer, direction: 'pull' as const, syncSessions: true }
+    const remoteEntry = deletedSessionEntry(remoteInstanceId, 'remote-deleted')
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [remoteEntry])
+    const localManifest = makeSyncSessionManifest(localInstanceId, [])
+    const remoteBundle = makeSyncSessionBundle(remoteInstanceId, [remoteEntry])
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries: vi.fn(),
+      applyBundle: vi.fn()
+        .mockRejectedValueOnce(new SyncSessionError('session-delta-prefix', 'prefix changed'))
+        .mockResolvedValue({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 }),
+    }
+    const fetchSessionEntries = vi.fn(async () => remoteBundle)
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+      fetchSessionBundle: vi.fn(),
+      applySessionBundle: vi.fn(),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    await expect(test.coordinator.run(peer.id)).resolves.toMatchObject({ importedSessions: 1 })
+
+    expect(fetchSessionEntries).toHaveBeenCalledTimes(2)
+    expect(sessions.applyBundle).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries a remote delta prefix mismatch with complete local entries', async () => {
+    const sessionPeer = { ...peer, direction: 'bidirectional' as const, syncSessions: true }
+    const localEntry = deletedSessionEntry(localInstanceId, 'local-deleted')
+    const localManifest = makeSyncSessionManifest(localInstanceId, [localEntry])
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [])
+    const localBundle = makeSyncSessionBundle(localInstanceId, [localEntry])
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries: vi.fn(async () => localBundle),
+      applyBundle: vi.fn(),
+    }
+    const applySessionBundle = vi.fn()
+      .mockRejectedValueOnce(new SyncSessionDeltaPrefixError())
+      .mockResolvedValue({ created: 0, updated: 1, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries: vi.fn(),
+      fetchSessionBundle: vi.fn(),
+      applySessionBundle,
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    await expect(test.coordinator.run(peer.id)).resolves.toMatchObject({ exportedSessions: 1 })
+
+    expect(sessions.exportEntries).toHaveBeenCalledTimes(2)
+    expect(applySessionBundle).toHaveBeenCalledTimes(2)
   })
 
   it('shares one in-flight operation per peer', async () => {

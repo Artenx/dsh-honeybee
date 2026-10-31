@@ -29,10 +29,15 @@ import type {
 } from './model.js'
 import { SyncStateStore } from './stores.js'
 import { SyncSessionJournalStore } from './session-journal.js'
+import { SyncSessionExportCacheStore } from './export-cache.js'
 import { MAX_SYNC_TRANSFER_BYTES } from './protocol.js'
 
 const SESSION_READ_PAGE_SIZE = 256
 const MAX_SYNC_SESSIONS = 10_000
+const MAX_MANIFEST_PAYLOAD_CACHE_BYTES = 4 * 1024 * 1024
+const MAX_MANIFEST_PAYLOAD_CACHE_COUNT = 8
+// Bump when sessionEventDigest's normalization changes.
+const SESSION_EXPORT_CACHE_VERSION = 1
 const SPILL_META_VERSION = 1
 const SPILL_ARTIFACT_META_KEY = '@deepseek-ai/dsh-spill'
 
@@ -67,6 +72,14 @@ export interface SyncSessionInstructionSnapshot {
   inheritedFromOrigin?: SyncOrigin
 }
 
+export interface SyncSessionEventDelta {
+  baseEventCount: number
+  baseEventDigest: string
+  baseInheritedEventCount: number
+  fullEventCount: number
+  fullEventDigest: string
+}
+
 export type SyncSessionObject =
   | { id: string; kind: 'image'; ref: ImageAttachmentRef; bytes: number; digest: string; data: string }
   | { id: string; kind: 'file'; ref: FileAttachmentRef; bytes: number; digest: string; data: string }
@@ -94,12 +107,38 @@ export interface SyncSessionEntry {
   instructionSnapshot?: SyncSessionInstructionSnapshot
   events?: SessionEvent[]
   objects?: SyncSessionObject[]
+  sharedObjectIds?: string[]
+  eventDelta?: SyncSessionEventDelta
+  eventCount?: number
+  eventDigest?: string
 }
 
 export interface SyncSessionBundle {
   protocolVersion: 1
   instanceId: string
   entries: SyncSessionEntry[]
+  skipped: Array<{ sessionId: string; reason: string }>
+  objects?: SyncSessionObject[]
+  digest: string
+}
+
+export type SyncSessionManifestEntry = Pick<SyncSessionEntry, 'metadata' | 'branchId'> & {
+  eventCount?: number
+  eventDigest?: string
+  inheritedEventCount?: number
+}
+
+export interface SyncSessionEventPrefix {
+  key: string
+  eventCount: number
+  eventDigest: string
+  inheritedEventCount: number
+}
+
+export interface SyncSessionManifest {
+  protocolVersion: 1
+  instanceId: string
+  entries: SyncSessionManifestEntry[]
   skipped: Array<{ sessionId: string; reason: string }>
   digest: string
 }
@@ -140,6 +179,40 @@ type SyncSessionJournalBatch = ReturnType<SyncSessionJournalStore['pendingBatche
 
 type ImportedSessionObjectRef = ImageAttachmentRef | FileAttachmentRef | SpillTransferReference['ref']
 
+interface SessionExportCacheEntry {
+  fingerprint: string
+  metadata: SyncRecordMetadata
+  eventCount: number
+  eventDigest: string
+  inheritedEventCount: number
+}
+
+interface SessionExportResult {
+  entry: SyncSessionEntry
+  eventCount: number
+  eventDigest: string
+  inheritedEventCount: number
+}
+
+interface SessionExportOptions {
+  manifestOnly?: boolean
+  selectedKeys?: ReadonlySet<string>
+  payloadCache?: SessionManifestPayloadCache
+  sharedObjects?: boolean
+}
+
+interface ExportObjectCacheEntry {
+  object: SyncSessionObject
+}
+
+type ExportObjectCache = Map<string, ExportObjectCacheEntry>
+
+interface SessionManifestPayloadCache {
+  instanceId: string
+  entries: Map<string, SyncSessionEntry>
+  bytes: number
+}
+
 export interface SyncSessionTransferPlan {
   toLocal: SyncSessionEntry[]
   toRemote: SyncSessionEntry[]
@@ -160,6 +233,12 @@ interface SessionSnapshotLike {
   eventCount?: number
 }
 
+interface SessionMetadataSnapshot {
+  snapshot: SessionSnapshotLike
+  header: SessionHeader
+  inheritedEventCount: number
+}
+
 interface SessionHandleLike {
   readonly id: SessionId
   readonly header: SessionHeader
@@ -176,6 +255,32 @@ interface SessionPersistenceLike {
   stat(id: SessionId): Promise<SessionSnapshotLike | undefined>
   open(id: SessionId, access: 'read' | 'write'): Promise<SessionHandleLike>
   create(header: SessionHeader, options?: { inheritedEventCount?: number }): Promise<SessionHandleLike>
+}
+
+async function readStableSessionMetadata(
+  persistence: SessionPersistenceLike,
+  sessionId: SessionId,
+  firstSnapshot: SessionSnapshotLike,
+): Promise<SessionMetadataSnapshot | undefined> {
+  const handle = await persistence.open(sessionId, 'read')
+  try {
+    const snapshot = await persistence.stat(sessionId)
+    if (!snapshot || snapshot.formatStatus === 'migration-required') return undefined
+    try {
+      if (
+        canonicalJson(firstSnapshot.revision) !== canonicalJson(snapshot.revision) ||
+        canonicalJson(firstSnapshot.header) !== canonicalJson(snapshot.header) ||
+        canonicalJson(handle.header) !== canonicalJson(snapshot.header)
+      ) return undefined
+    } catch {
+      return undefined
+    }
+    const inheritedEventCount = Number(handle.inheritedEventCount)
+    if (!Number.isSafeInteger(inheritedEventCount) || inheritedEventCount < 0) return undefined
+    return { snapshot, header: handle.header, inheritedEventCount }
+  } finally {
+    await handle.close()
+  }
 }
 
 interface WorkspaceLike {
@@ -662,6 +767,10 @@ function sessionEventDigest(
   }))
 }
 
+export function sessionEventListDigest(events: readonly SessionEvent[]): string {
+  return sha256(canonicalJson(events))
+}
+
 function sessionStateDigest(
   workspace: SyncSessionWorkspace,
   workspacePosition: number,
@@ -682,6 +791,77 @@ function sessionStateDigest(
     archived,
     pinned,
   }))
+}
+
+function sessionExportFingerprint(input: {
+  revision: unknown
+  header: SessionHeader
+  inheritedEventCount: number
+  workspace: SyncSessionWorkspace
+  instructionSnapshot?: SyncSessionInstructionSnapshot
+  parentOrigin?: SyncOrigin
+}): string | undefined {
+  if (input.revision === undefined) return undefined
+  try {
+    return sha256(canonicalJson({ version: SESSION_EXPORT_CACHE_VERSION, ...input }))
+  } catch {
+    return undefined
+  }
+}
+
+function sessionExportCacheKey(sessionId: string, branchId?: string): string {
+  return JSON.stringify([sessionId, branchId ?? null])
+}
+
+function estimateJsonBytes(value: unknown, limit: number): number | undefined {
+  const active = new WeakSet<object>()
+  const measure = (item: unknown): number => {
+    if (item === null) return 4
+    if (typeof item === 'string') {
+      const bytes = Buffer.byteLength(item, 'utf8')
+      return bytes > limit / 6 ? limit + 1 : bytes * 6 + 2
+    }
+    if (typeof item === 'number') return Number.isFinite(item) ? String(item).length : 4
+    if (typeof item === 'boolean') return item ? 4 : 5
+    if (item === undefined || typeof item === 'function' || typeof item === 'symbol') return 4
+    if (typeof item === 'bigint') return limit + 1
+    if (Array.isArray(item)) {
+      if (active.has(item)) return limit + 1
+      active.add(item)
+      let bytes = 2
+      for (let index = 0; index < item.length; index += 1) {
+        if (index > 0) bytes += 1
+        bytes += measure(item[index])
+        if (bytes > limit) break
+      }
+      active.delete(item)
+      return bytes
+    }
+    if (typeof item === 'object') {
+      if (active.has(item)) return limit + 1
+      const prototype = Object.getPrototypeOf(item)
+      if (prototype !== Object.prototype && prototype !== null) return limit + 1
+      active.add(item)
+      let bytes = 2
+      let first = true
+      for (const [key, child] of Object.entries(item)) {
+        if (child === undefined || typeof child === 'function' || typeof child === 'symbol') continue
+        if (!first) bytes += 1
+        first = false
+        bytes += Buffer.byteLength(key, 'utf8') * 6 + 3 + measure(child)
+        if (bytes > limit) break
+      }
+      active.delete(item)
+      return bytes
+    }
+    return limit + 1
+  }
+  try {
+    const bytes = measure(value)
+    return bytes <= limit ? bytes : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export function planSessionTransfers(
@@ -757,6 +937,94 @@ function findSessionRecordByLocalId(state: SyncState, localSessionId: string): S
     .sort((a, b) => compareSyncRevision(b.revision, a.revision))[0]
 }
 
+interface SessionStateIndex {
+  state: SyncState
+  recordsByLocalId: Map<string, SyncRecordMetadata>
+  workspacesByLocalId: Map<string, SyncWorkspaceMapping[]>
+  archivesByLocalSessionId: Map<string, SyncSessionArchive>
+}
+
+function createSessionStateIndex(state: SyncState): SessionStateIndex {
+  const index: SessionStateIndex = {
+    state,
+    recordsByLocalId: new Map(),
+    workspacesByLocalId: new Map(),
+    archivesByLocalSessionId: new Map(),
+  }
+  for (const metadata of Object.values(state.records)) {
+    if (metadata.kind !== 'session') continue
+    const current = index.recordsByLocalId.get(metadata.localEntityId)
+    if (!current || compareSyncRevision(metadata.revision, current.revision) > 0) {
+      index.recordsByLocalId.set(metadata.localEntityId, metadata)
+    }
+  }
+  for (const mapping of Object.values(state.workspaces)) {
+    const mappings = index.workspacesByLocalId.get(mapping.localWorkspaceId) ?? []
+    mappings.push(mapping)
+    index.workspacesByLocalId.set(mapping.localWorkspaceId, mappings)
+  }
+  for (const archive of Object.values(state.archives)) {
+    if (!index.archivesByLocalSessionId.has(archive.localSessionId)) {
+      index.archivesByLocalSessionId.set(archive.localSessionId, archive)
+    }
+  }
+  return index
+}
+
+function indexSessionRecord(index: SessionStateIndex, metadata: SyncRecordMetadata): void {
+  const key = sessionOriginKey(metadata)
+  const previous = index.state.records[key]
+  if (previous && previous.localEntityId !== metadata.localEntityId &&
+    index.recordsByLocalId.get(previous.localEntityId) === previous) {
+    delete index.state.records[key]
+    index.recordsByLocalId.delete(previous.localEntityId)
+    for (const candidate of Object.values(index.state.records)) {
+      if (candidate.kind !== 'session' || candidate.localEntityId !== previous.localEntityId) continue
+      const current = index.recordsByLocalId.get(previous.localEntityId)
+      if (!current || compareSyncRevision(candidate.revision, current.revision) > 0) {
+        index.recordsByLocalId.set(previous.localEntityId, candidate)
+      }
+    }
+  }
+  index.state.records[key] = metadata
+  const current = index.recordsByLocalId.get(metadata.localEntityId)
+  if (current === previous || !current || compareSyncRevision(metadata.revision, current.revision) > 0) {
+    index.recordsByLocalId.set(metadata.localEntityId, metadata)
+  }
+}
+
+function indexWorkspaceMapping(index: SessionStateIndex, key: string, mapping: SyncWorkspaceMapping): void {
+  const previous = index.state.workspaces[key]
+  if (previous) {
+    const mappings = index.workspacesByLocalId.get(previous.localWorkspaceId)
+    const previousIndex = mappings?.findIndex((item) =>
+      syncWorkspaceKey(item.originInstanceId, item.originWorkspaceId, item.remotePath) === key,
+    ) ?? -1
+    if (mappings && previousIndex !== -1 && previous.localWorkspaceId === mapping.localWorkspaceId) {
+      index.state.workspaces[key] = mapping
+      mappings[previousIndex] = mapping
+      return
+    }
+    if (mappings && previousIndex !== -1) mappings.splice(previousIndex, 1)
+    if (mappings?.length === 0) index.workspacesByLocalId.delete(previous.localWorkspaceId)
+  }
+  index.state.workspaces[key] = mapping
+  const mappings = index.workspacesByLocalId.get(mapping.localWorkspaceId) ?? []
+  mappings.push(mapping)
+  index.workspacesByLocalId.set(mapping.localWorkspaceId, mappings)
+}
+
+function indexArchive(index: SessionStateIndex, previousBranchId: string, archive: SyncSessionArchive): void {
+  delete index.state.archives[previousBranchId]
+  index.state.archives[archive.branchId] = archive
+  index.archivesByLocalSessionId.clear()
+  for (const entry of Object.values(index.state.archives)) {
+    if (!index.archivesByLocalSessionId.has(entry.localSessionId)) {
+      index.archivesByLocalSessionId.set(entry.localSessionId, entry)
+    }
+  }
+}
+
 function findSessionRecordByOrigin(state: SyncState, origin: SyncOrigin): SyncRecordMetadata | undefined {
   return state.records[syncRecordKey('session', origin)]
 }
@@ -802,6 +1070,23 @@ function validateObjectPayload(object: unknown): SyncSessionObject {
   throw new SyncSessionError('object-invalid', 'session object kind or reference is invalid')
 }
 
+function validateEventDelta(value: unknown): SyncSessionEventDelta {
+  if (!isRecord(value) || !isNonNegativeSafeInteger(value.baseEventCount) ||
+    typeof value.baseEventDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(value.baseEventDigest) ||
+    !isNonNegativeSafeInteger(value.baseInheritedEventCount) ||
+    !isNonNegativeSafeInteger(value.fullEventCount) || value.fullEventCount < value.baseEventCount ||
+    typeof value.fullEventDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(value.fullEventDigest)) {
+    throw new SyncSessionError('manifest-invalid', 'session event delta metadata is invalid')
+  }
+  return {
+    baseEventCount: value.baseEventCount,
+    baseEventDigest: value.baseEventDigest,
+    baseInheritedEventCount: value.baseInheritedEventCount,
+    fullEventCount: value.fullEventCount,
+    fullEventDigest: value.fullEventDigest,
+  }
+}
+
 function validateEntry(entry: unknown): SyncSessionEntry {
   if (!isRecord(entry) || !isRecord(entry.metadata) || entry.metadata.kind !== 'session') {
     throw new SyncSessionError('manifest-invalid', 'session entry metadata is invalid')
@@ -820,11 +1105,16 @@ function validateEntry(entry: unknown): SyncSessionEntry {
   if (metadata.stateDigest !== undefined && !/^sha256:[a-f0-9]{64}$/.test(metadata.stateDigest)) {
     throw new SyncSessionError('manifest-invalid', 'session state digest is invalid')
   }
+  if (metadata.deleted !== undefined && typeof metadata.deleted !== 'boolean') {
+    throw new SyncSessionError('manifest-invalid', 'session tombstone flag is invalid')
+  }
   if (entry.branchId !== undefined && (typeof entry.branchId !== 'string' || !/^b-[a-f0-9]{32}$/.test(entry.branchId))) {
     throw new SyncSessionError('manifest-invalid', 'session branch ID is invalid')
   }
   if (metadata.workspaceOrigin !== undefined) validateOrigin(metadata.workspaceOrigin)
+  const eventDelta = entry.eventDelta === undefined ? undefined : validateEventDelta(entry.eventDelta)
   if (metadata.deleted) {
+    if (eventDelta) throw new SyncSessionError('manifest-invalid', 'session tombstones cannot carry event deltas')
     if (metadata.contentDigest !== sessionTombstoneDigest(metadata)) throw new SyncSessionError('manifest-invalid', 'session tombstone digest is invalid')
     return { metadata, ...(entry.branchId ? { branchId: entry.branchId as string } : {}) }
   }
@@ -846,13 +1136,31 @@ function validateEntry(entry: unknown): SyncSessionEntry {
     typeof entry.workspacePosition !== 'number' || !Number.isSafeInteger(entry.workspacePosition) || entry.workspacePosition < 0 ||
     typeof entry.archived !== 'boolean' || typeof entry.pinned !== 'boolean'
   ) throw new SyncSessionError('manifest-invalid', 'active session entry fields are invalid')
+  if (eventDelta && (entry.branchId !== undefined || entry.archived)) {
+    throw new SyncSessionError('manifest-invalid', 'archives cannot use event tail deltas')
+  }
   if (entry.events.length > MAX_SYNC_SESSIONS * 100) throw new SyncSessionError('manifest-invalid', 'session event count exceeds limit')
   const header = entry.header as unknown as SessionHeader
   if (header.version !== SESSION_FORMAT_VERSION || header.id !== entry.sourceLocalSessionId) {
     throw new SyncSessionError('session-format', 'session header format or id is invalid')
   }
-  const events = validateStoredEvents(header, structuredClone(entry.events) as SessionEvent[])
-  assertContiguous(header.id, events, 0)
+  let events: SessionEvent[]
+  if (eventDelta) {
+    if (eventDelta.baseInheritedEventCount !== entry.inheritedEventCount ||
+      eventDelta.fullEventCount > MAX_SYNC_SESSIONS * 100 ||
+      eventDelta.fullEventCount - eventDelta.baseEventCount !== entry.events.length) {
+      throw new SyncSessionError('manifest-invalid', 'session event delta counts are inconsistent')
+    }
+    events = structuredClone(entry.events) as SessionEvent[]
+    for (let index = 0; index < events.length; index += 1) {
+      if (!isNonNegativeSafeInteger(events[index]?.seq) || events[index]?.seq !== eventDelta.baseEventCount + index) {
+        throw new SyncSessionError('manifest-invalid', 'session event delta sequence is invalid')
+      }
+    }
+  } else {
+    events = validateStoredEvents(header, structuredClone(entry.events) as SessionEvent[])
+    assertContiguous(header.id, events, 0)
+  }
   const objects = entry.objects.map(validateObjectPayload)
   if (new Set(objects.map((object) => object.id)).size !== objects.length) {
     throw new SyncSessionError('manifest-invalid', 'session entry contains duplicate objects')
@@ -879,20 +1187,23 @@ function validateEntry(entry: unknown): SyncSessionEntry {
     referencedObjects.add(spillKey(reference))
   }
   const objectIds = new Set(objects.map((object) => object.id))
-  if ([...referencedObjects].some((id) => !objectIds.has(id)) || [...objectIds].some((id) => !referencedObjects.has(id))) {
+  if ([...referencedObjects].some((id) => !objectIds.has(id)) ||
+    (!eventDelta && [...objectIds].some((id) => !referencedObjects.has(id)))) {
     throw new SyncSessionError('manifest-invalid', 'session object references and payloads do not match')
   }
   const parentOrigin = entry.parentOrigin === undefined ? undefined : validateOrigin(entry.parentOrigin)
-  const contentDigest = sessionEventDigest(
-    header,
-    entry.inheritedEventCount as number,
-    events,
-    workspaceValue,
-    instructionSnapshot,
-    objects,
-    parentOrigin,
-  )
-  if (contentDigest !== metadata.contentDigest) throw new SyncSessionError('manifest-invalid', 'session content digest is invalid')
+  if (!eventDelta) {
+    const contentDigest = sessionEventDigest(
+      header,
+      entry.inheritedEventCount as number,
+      events,
+      workspaceValue,
+      instructionSnapshot,
+      objects,
+      parentOrigin,
+    )
+    if (contentDigest !== metadata.contentDigest) throw new SyncSessionError('manifest-invalid', 'session content digest is invalid')
+  }
   if (metadata.stateDigest !== sessionStateDigest(workspaceValue, entry.workspacePosition as number, entry.archived as boolean, entry.pinned as boolean)) {
     throw new SyncSessionError('manifest-invalid', 'session state digest is invalid')
   }
@@ -910,22 +1221,103 @@ function validateEntry(entry: unknown): SyncSessionEntry {
     ...(instructionSnapshot ? { instructionSnapshot } : {}),
     events,
     objects,
+    ...(eventDelta ? { eventDelta } : {}),
   }
 }
 
-function bundleDigest(bundle: Pick<SyncSessionBundle, 'instanceId' | 'entries' | 'skipped'>): string {
+function validateManifestEntry(entry: unknown): SyncSessionManifestEntry {
+  if (!isRecord(entry) || !isRecord(entry.metadata) || entry.metadata.kind !== 'session') {
+    throw new SyncSessionError('manifest-invalid', 'session manifest entry metadata is invalid')
+  }
+  const metadata = entry.metadata as unknown as SyncRecordMetadata
+  if (
+    typeof metadata.originInstanceId !== 'string' || !metadata.originInstanceId || metadata.originInstanceId.length > 512 || /[\u0000-\u001f\u007f]/.test(metadata.originInstanceId) ||
+    typeof metadata.originEntityId !== 'string' || !metadata.originEntityId || metadata.originEntityId.length > 512 || /[\u0000-\u001f\u007f]/.test(metadata.originEntityId) ||
+    typeof metadata.localEntityId !== 'string' || !metadata.localEntityId || metadata.localEntityId.length > 512 || /[\u0000-\u001f\u007f]/.test(metadata.localEntityId) ||
+    typeof metadata.contentDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(metadata.contentDigest) || !metadata.revision ||
+    !isNonNegativeSafeInteger(metadata.revision.physicalTimeMs) ||
+    !isNonNegativeSafeInteger(metadata.revision.logicalCounter) || typeof metadata.revision.writerInstanceId !== 'string' ||
+    !metadata.revision.writerInstanceId || /[\u0000-\u001f\u007f]/.test(metadata.revision.writerInstanceId)
+  ) throw new SyncSessionError('manifest-invalid', 'session manifest metadata fields are invalid')
+  if (metadata.stateDigest !== undefined && !/^sha256:[a-f0-9]{64}$/.test(metadata.stateDigest)) {
+    throw new SyncSessionError('manifest-invalid', 'session manifest state digest is invalid')
+  }
+  if (metadata.deleted !== undefined && typeof metadata.deleted !== 'boolean') {
+    throw new SyncSessionError('manifest-invalid', 'session manifest tombstone flag is invalid')
+  }
+  const hasEventCount = entry.eventCount !== undefined
+  const hasEventDigest = entry.eventDigest !== undefined
+  const hasInheritedEventCount = entry.inheritedEventCount !== undefined
+  if (hasEventCount || hasEventDigest || hasInheritedEventCount) {
+    if (!hasEventCount || !hasEventDigest || !hasInheritedEventCount || metadata.deleted ||
+      !isNonNegativeSafeInteger(entry.eventCount) || entry.eventCount > MAX_SYNC_SESSIONS * 100 ||
+      typeof entry.eventDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(entry.eventDigest) ||
+      !isNonNegativeSafeInteger(entry.inheritedEventCount) || entry.inheritedEventCount > entry.eventCount) {
+      throw new SyncSessionError('manifest-invalid', 'session event summary is invalid')
+    }
+  }
+  if (entry.branchId !== undefined && (typeof entry.branchId !== 'string' || !/^b-[a-f0-9]{32}$/.test(entry.branchId))) {
+    throw new SyncSessionError('manifest-invalid', 'session manifest branch ID is invalid')
+  }
+  if (metadata.workspaceOrigin !== undefined) validateOrigin(metadata.workspaceOrigin)
+  if (metadata.deleted && metadata.contentDigest !== sessionTombstoneDigest(metadata)) {
+    throw new SyncSessionError('manifest-invalid', 'session manifest tombstone digest is invalid')
+  }
+  return {
+    metadata,
+    ...(entry.branchId ? { branchId: entry.branchId as string } : {}),
+    ...(hasEventCount ? { eventCount: entry.eventCount as number } : {}),
+    ...(hasEventDigest ? { eventDigest: entry.eventDigest as string } : {}),
+    ...(hasInheritedEventCount ? { inheritedEventCount: entry.inheritedEventCount as number } : {}),
+  }
+}
+
+function bundleDigest(bundle: Pick<SyncSessionBundle, 'instanceId' | 'entries' | 'skipped' | 'objects'>): string {
+  const sharedObjects = new Map((bundle.objects ?? []).map((object) => [object.id, object]))
   const manifest = bundle.entries.map((entry) => ({
     key: entry.branchId ?? sessionOriginKey(entry.metadata),
     revision: entry.metadata.revision,
     contentDigest: entry.metadata.contentDigest,
     stateDigest: entry.metadata.stateDigest,
     deleted: Boolean(entry.metadata.deleted),
-    objects: (entry.objects ?? []).map((object) => ({ id: object.id, digest: object.digest, bytes: object.bytes }))
+    objects: (entry.objects ?? (entry.sharedObjectIds ?? []).map((id) => {
+      const object = sharedObjects.get(id)
+      if (!object) throw new SyncSessionError('manifest-invalid', 'session shared object id is unknown')
+      return object
+    })).map((object) => ({ id: object.id, digest: object.digest, bytes: object.bytes }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    eventDelta: entry.eventDelta === undefined ? undefined : {
+      ...entry.eventDelta,
+      suffixDigest: sessionEventListDigest(entry.events ?? []),
+    },
   })).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
   const skipped = bundle.skipped.map((entry) => ({ sessionId: entry.sessionId, reason: entry.reason }))
     .sort((a, b) => a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0)
   return sha256(canonicalJson({ instanceId: bundle.instanceId, entries: manifest, skipped }))
+}
+
+function materializeSharedObjects(bundle: {
+  objects?: SyncSessionObject[]
+  entries: Array<Pick<SyncSessionEntry, 'sharedObjectIds'>>
+}): Map<string, SyncSessionObject> {
+  const shared = bundle.objects === undefined ? new Map<string, SyncSessionObject>() : new Map(
+    bundle.objects.map((object) => {
+      const validated = validateObjectPayload(object)
+      return [validated.id, validated] as const
+    }),
+  )
+  if (shared.size !== (bundle.objects?.length ?? 0)) {
+    throw new SyncSessionError('manifest-invalid', 'session bundle contains duplicate shared objects')
+  }
+  for (const entry of bundle.entries) {
+    if (!entry || typeof entry !== 'object') continue
+    if (entry.sharedObjectIds !== undefined && (!Array.isArray(entry.sharedObjectIds) ||
+      new Set(entry.sharedObjectIds).size !== entry.sharedObjectIds.length ||
+      entry.sharedObjectIds.some((id) => !shared.has(id)))) {
+      throw new SyncSessionError('manifest-invalid', 'session entry shared object references are invalid')
+    }
+  }
+  return shared
 }
 
 export function validateSyncSessionBundle(value: unknown): SyncSessionBundle {
@@ -933,15 +1325,38 @@ export function validateSyncSessionBundle(value: unknown): SyncSessionBundle {
     !/^i-[a-f0-9]{32}$/.test(value.instanceId) || !Array.isArray(value.entries) || typeof value.digest !== 'string') {
     throw new SyncSessionError('manifest-invalid', 'session bundle header is invalid')
   }
+  if (value.objects !== undefined && (!Array.isArray(value.objects) || value.objects.some((object) => !isRecord(object)))) {
+    throw new SyncSessionError('manifest-invalid', 'session bundle shared object table is invalid')
+  }
+  const sharedObjects = materializeSharedObjects({
+    ...(value.objects === undefined ? {} : { objects: value.objects as SyncSessionObject[] }),
+    entries: value.entries as Array<Pick<SyncSessionEntry, 'sharedObjectIds'>>,
+  })
   const skipped = value.skipped === undefined ? [] : value.skipped
   if (!Array.isArray(skipped) || skipped.some((item) =>
     !isRecord(item) || typeof item.sessionId !== 'string' || typeof item.reason !== 'string'
   )) throw new SyncSessionError('manifest-invalid', 'session bundle skip report is invalid')
   if (value.entries.length > MAX_SYNC_SESSIONS) throw new SyncSessionError('manifest-invalid', 'session bundle contains too many records')
-  const entries = value.entries.map(validateEntry)
+  const entries = value.entries.map((entry) => {
+    const materialized: SyncSessionEntry = { ...entry } as SyncSessionEntry
+    if (materialized.sharedObjectIds !== undefined) {
+      if (materialized.objects !== undefined) {
+        throw new SyncSessionError('manifest-invalid', 'session entry cannot carry inline and shared objects')
+      }
+      materialized.objects = materialized.sharedObjectIds.map((id) => sharedObjects.get(id)!)
+    }
+    return validateEntry(materialized)
+  })
   const keys = entries.map((entry) => entry.branchId ?? sessionOriginKey(entry.metadata))
   if (new Set(keys).size !== keys.length) throw new SyncSessionError('manifest-invalid', 'session bundle contains duplicate records')
-  const bundle: SyncSessionBundle = { protocolVersion: 1, instanceId: value.instanceId, entries, skipped: skipped as Array<{ sessionId: string; reason: string }>, digest: value.digest }
+  const bundle: SyncSessionBundle = {
+    protocolVersion: 1,
+    instanceId: value.instanceId,
+    entries,
+    skipped: skipped as Array<{ sessionId: string; reason: string }>,
+    ...(value.objects === undefined ? {} : { objects: value.objects as SyncSessionObject[] }),
+    digest: value.digest,
+  }
   if (bundleDigest(bundle) !== bundle.digest) throw new SyncSessionError('manifest-digest', 'session bundle digest does not match')
   if (Buffer.byteLength(JSON.stringify(bundle), 'utf8') > MAX_SYNC_TRANSFER_BYTES) {
     throw new SyncSessionError('bundle-too-large', 'session bundle exceeds the transfer limit')
@@ -953,13 +1368,132 @@ export function makeSyncSessionBundle(
   instanceId: string,
   entries: SyncSessionEntry[],
   skipped: Array<{ sessionId: string; reason: string }> = [],
+  sharedObjects?: SyncSessionObject[],
 ): SyncSessionBundle {
+  if (sharedObjects !== undefined) {
+    const referencesShared = entries.some((entry) => (entry.objects?.length ?? 0) > 0 || entry.sharedObjectIds !== undefined)
+    const inlineEntries = referencesShared
+      ? entries.map((entry) => {
+          if (entry.objects === undefined) return entry
+          const { objects, ...rest } = entry
+          void objects
+          return { ...rest, sharedObjectIds: objects.map((object) => object.id) }
+        })
+      : entries
+    const bundle: SyncSessionBundle = {
+      protocolVersion: 1,
+      instanceId,
+      entries: inlineEntries,
+      skipped,
+      ...(referencesShared ? { objects: sharedObjects } : {}),
+      digest: '',
+    }
+    bundle.digest = bundleDigest(bundle)
+    if (Buffer.byteLength(JSON.stringify(bundle), 'utf8') > MAX_SYNC_TRANSFER_BYTES) {
+      throw new SyncSessionError('bundle-too-large', 'session bundle exceeds the transfer limit')
+    }
+    return bundle
+  }
   const bundle: SyncSessionBundle = { protocolVersion: 1, instanceId, entries, skipped, digest: '' }
   bundle.digest = bundleDigest(bundle)
   if (Buffer.byteLength(JSON.stringify(bundle), 'utf8') > MAX_SYNC_TRANSFER_BYTES) {
     throw new SyncSessionError('bundle-too-large', 'session bundle exceeds the transfer limit')
   }
   return bundle
+}
+
+export function syncSessionEntryKey(entry: Pick<SyncSessionManifestEntry, 'metadata' | 'branchId'>): string {
+  return entry.branchId ?? sessionOriginKey(entry.metadata)
+}
+
+function withEventTail(entry: SyncSessionEntry, prefix?: SyncSessionEventPrefix): SyncSessionEntry {
+  if (!prefix || entry.metadata.deleted || entry.branchId || !entry.events || entry.events.length === 0 ||
+    prefix.eventCount === 0 || prefix.eventCount > entry.events.length ||
+    prefix.inheritedEventCount !== entry.inheritedEventCount) return entry
+  const baseEvents = entry.events.slice(0, prefix.eventCount)
+  if (sessionEventListDigest(baseEvents) !== prefix.eventDigest) return entry
+  const fullEventDigest = entry.eventDigest !== undefined && entry.eventCount === entry.events.length
+    ? entry.eventDigest
+    : sessionEventListDigest(entry.events)
+  return {
+    ...entry,
+    eventDelta: {
+      baseEventCount: prefix.eventCount,
+      baseEventDigest: prefix.eventDigest,
+      baseInheritedEventCount: prefix.inheritedEventCount,
+      fullEventCount: entry.events.length,
+      fullEventDigest,
+    },
+    events: entry.events.slice(prefix.eventCount),
+  }
+}
+
+function sessionManifestDigest(manifest: Pick<SyncSessionManifest, 'instanceId' | 'entries' | 'skipped'>): string {
+  const entries = manifest.entries.map((entry) => ({
+    key: syncSessionEntryKey(entry),
+    metadata: entry.metadata,
+    eventCount: entry.eventCount,
+    eventDigest: entry.eventDigest,
+    inheritedEventCount: entry.inheritedEventCount,
+  }))
+    .sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  const skipped = manifest.skipped.map((entry) => ({ sessionId: entry.sessionId, reason: entry.reason }))
+    .sort((a, b) => a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0)
+  return sha256(canonicalJson({ instanceId: manifest.instanceId, entries, skipped }))
+}
+
+export function makeSyncSessionManifest(
+  instanceId: string,
+  entries: readonly SyncSessionManifestEntry[],
+  skipped: Array<{ sessionId: string; reason: string }> = [],
+): SyncSessionManifest {
+  const manifest: SyncSessionManifest = {
+    protocolVersion: 1,
+    instanceId,
+    entries: entries.map((entry) => ({
+      metadata: entry.metadata,
+      ...(entry.branchId ? { branchId: entry.branchId } : {}),
+      ...(entry.eventCount === undefined ? {} : { eventCount: entry.eventCount }),
+      ...(entry.eventDigest === undefined ? {} : { eventDigest: entry.eventDigest }),
+      ...(entry.inheritedEventCount === undefined ? {} : { inheritedEventCount: entry.inheritedEventCount }),
+    })),
+    skipped,
+    digest: '',
+  }
+  manifest.digest = sessionManifestDigest(manifest)
+  if (Buffer.byteLength(JSON.stringify(manifest), 'utf8') > MAX_SYNC_TRANSFER_BYTES) {
+    throw new SyncSessionError('bundle-too-large', 'session manifest exceeds the transfer limit')
+  }
+  return manifest
+}
+
+export function validateSyncSessionManifest(value: unknown): SyncSessionManifest {
+  if (!isRecord(value) || value.protocolVersion !== 1 || typeof value.instanceId !== 'string' ||
+    !/^i-[a-f0-9]{32}$/.test(value.instanceId) || !Array.isArray(value.entries) || typeof value.digest !== 'string') {
+    throw new SyncSessionError('manifest-invalid', 'session manifest header is invalid')
+  }
+  const skipped = value.skipped === undefined ? [] : value.skipped
+  if (!Array.isArray(skipped) || skipped.some((item) =>
+    !isRecord(item) || typeof item.sessionId !== 'string' || typeof item.reason !== 'string'
+  )) throw new SyncSessionError('manifest-invalid', 'session manifest skip report is invalid')
+  if (value.entries.length > MAX_SYNC_SESSIONS) throw new SyncSessionError('manifest-invalid', 'session manifest contains too many records')
+  const entries = value.entries.map(validateManifestEntry)
+  const keys = entries.map(syncSessionEntryKey)
+  if (new Set(keys).size !== keys.length) throw new SyncSessionError('manifest-invalid', 'session manifest contains duplicate records')
+  const manifest: SyncSessionManifest = {
+    protocolVersion: 1,
+    instanceId: value.instanceId,
+    entries,
+    skipped: skipped as Array<{ sessionId: string; reason: string }>,
+    digest: value.digest,
+  }
+  if (sessionManifestDigest(manifest) !== manifest.digest) {
+    throw new SyncSessionError('manifest-digest', 'session manifest digest does not match')
+  }
+  if (Buffer.byteLength(JSON.stringify(manifest), 'utf8') > MAX_SYNC_TRANSFER_BYTES) {
+    throw new SyncSessionError('bundle-too-large', 'session manifest exceeds the transfer limit')
+  }
+  return manifest
 }
 
 function emptyApplyResult(): SyncSessionApplyResult {
@@ -1050,21 +1584,24 @@ function arrayBuffer(data: string): Buffer {
 function instructionsForSession(
   store: SessionInstructionSnapshotStore,
   sessionId: string,
-  state: SyncState,
+  stateIndex: SessionStateIndex,
   preferredWorkspaceOrigin?: SyncOrigin,
 ): SyncSessionInstructionSnapshot | undefined {
   const snapshot = store.get(sessionId)
   if (!snapshot) return undefined
   const workspaceMappings = snapshot.workspaceId
-    ? Object.values(state.workspaces).filter((mapping) => mapping.localWorkspaceId === snapshot.workspaceId)
+    ? stateIndex.workspacesByLocalId.get(snapshot.workspaceId) ?? []
     : []
   const workspaceMapping = preferredWorkspaceOrigin
     ? workspaceMappings.find((mapping) => mapping.originInstanceId === preferredWorkspaceOrigin.originInstanceId &&
       mapping.originWorkspaceId === preferredWorkspaceOrigin.originEntityId) ??
       (workspaceMappings.length === 1 ? workspaceMappings[0] : undefined)
     : workspaceMappings.length === 1 ? workspaceMappings[0] : undefined
-  const inheritedFromOrigin = snapshot.inheritedFromSessionId
-    ? findSessionOriginByLocalId(state, snapshot.inheritedFromSessionId)
+  const inheritedFrom = snapshot.inheritedFromSessionId
+    ? stateIndex.recordsByLocalId.get(snapshot.inheritedFromSessionId)
+    : undefined
+  const inheritedFromOrigin = inheritedFrom
+    ? { originInstanceId: inheritedFrom.originInstanceId, originEntityId: inheritedFrom.originEntityId }
     : undefined
   return {
     text: snapshot.text,
@@ -1081,6 +1618,10 @@ function instructionsForSession(
 
 export class SyncSessionService {
   private operationTail: Promise<void> = Promise.resolve()
+  private readonly exportCache = new Map<string, SessionExportCacheEntry>()
+  private readonly exportCacheStore: SyncSessionExportCacheStore
+  private readonly manifestPayloadCache = new Map<string, SessionManifestPayloadCache>()
+  private manifestPayloadCacheBytes = 0
 
   constructor(
     private readonly state: SyncStateStore,
@@ -1094,10 +1635,106 @@ export class SyncSessionService {
     private readonly instructions: SessionInstructionSnapshotStore,
     private readonly journal = new SyncSessionJournalStore(),
     private readonly now: () => number = Date.now,
-  ) {}
+    home?: string,
+  ) {
+    this.exportCacheStore = new SyncSessionExportCacheStore(home)
+    for (const [key, entry] of this.exportCacheStore.entries()) {
+      if (!this.exportCache.has(key)) {
+        this.exportCache.set(key, entry)
+      }
+    }
+  }
 
   exportBundle(): Promise<SyncSessionBundle> {
     return this.serializeMutation(() => this.exportBundleNow())
+  }
+
+  exportManifest(): Promise<SyncSessionManifest> {
+    return this.serializeMutation(async () => {
+      const payloadCache: SessionManifestPayloadCache = {
+        instanceId: this.state.instanceId(),
+        entries: new Map(),
+        bytes: 0,
+      }
+      const bundle = await this.exportBundleNow({ manifestOnly: true, payloadCache })
+      const manifest = makeSyncSessionManifest(bundle.instanceId, bundle.entries, bundle.skipped)
+      this.rememberManifestPayloads(manifest.digest, payloadCache)
+      return manifest
+    })
+  }
+
+  exportEntries(
+    keys: readonly string[],
+    manifestDigest?: string,
+    prefixes: readonly SyncSessionEventPrefix[] = [],
+    options: { sharedObjects?: boolean } = {},
+  ): Promise<SyncSessionBundle> {
+    return this.serializeMutation(async () => {
+      if (keys.length > MAX_SYNC_SESSIONS || keys.some((key) => typeof key !== 'string' || key.length > 2048) ||
+        new Set(keys).size !== keys.length) {
+        throw new SyncSessionError('manifest-invalid', 'session entry selection is invalid')
+      }
+      if (manifestDigest !== undefined && !/^sha256:[a-f0-9]{64}$/.test(manifestDigest)) {
+        throw new SyncSessionError('manifest-invalid', 'session manifest digest is invalid')
+      }
+      const selectedKeys = new Set(keys)
+      const prefixesByKey = new Map<string, SyncSessionEventPrefix>()
+      for (const prefix of prefixes) {
+        if (!selectedKeys.has(prefix.key) || prefixesByKey.has(prefix.key) ||
+          !isNonNegativeSafeInteger(prefix.eventCount) || prefix.eventCount > MAX_SYNC_SESSIONS * 100 ||
+          !/^sha256:[a-f0-9]{64}$/.test(prefix.eventDigest) ||
+          !isNonNegativeSafeInteger(prefix.inheritedEventCount) || prefix.inheritedEventCount > prefix.eventCount) {
+          throw new SyncSessionError('manifest-invalid', 'session event prefix is invalid')
+        }
+        prefixesByKey.set(prefix.key, prefix)
+      }
+      let bundle: SyncSessionBundle
+      const payloadCache = manifestDigest ? this.manifestPayloadCache.get(manifestDigest) : undefined
+      if (payloadCache) {
+        const cachedEntries = keys.flatMap((key) => {
+          const entry = payloadCache.entries.get(key)
+          return entry ? [entry] : []
+        })
+        const cachedKeys = new Set(cachedEntries.map(syncSessionEntryKey))
+        const missingKeys = keys.filter((key) => !cachedKeys.has(key))
+        const additional = missingKeys.length > 0
+          ? await this.exportBundleNow({ selectedKeys: new Set(missingKeys) })
+          : makeSyncSessionBundle(payloadCache.instanceId, [])
+        bundle = makeSyncSessionBundle(payloadCache.instanceId, [...cachedEntries, ...additional.entries], additional.skipped)
+      } else {
+        bundle = await this.exportBundleNow({ selectedKeys, sharedObjects: options.sharedObjects === true })
+      }
+      const withTails = bundle.entries.map((entry) => withEventTail(entry, prefixesByKey.get(syncSessionEntryKey(entry))))
+      if (bundle.objects !== undefined) {
+        return makeSyncSessionBundle(bundle.instanceId, withTails, bundle.skipped, bundle.objects)
+      }
+      const inlineEntries = withTails.map((entry) => {
+        if (entry.sharedObjectIds === undefined) return entry
+        const { sharedObjectIds, ...rest } = entry
+        void sharedObjectIds
+        return rest
+      })
+      const sharedObjects = options.sharedObjects === true ? this.dedupeBundleObjects(inlineEntries) : undefined
+      return makeSyncSessionBundle(bundle.instanceId, inlineEntries, bundle.skipped, sharedObjects)
+    })
+  }
+
+  private rememberManifestPayloads(digest: string, payloads: SessionManifestPayloadCache): void {
+    if (payloads.entries.size === 0 || payloads.bytes > MAX_MANIFEST_PAYLOAD_CACHE_BYTES) return
+    const previous = this.manifestPayloadCache.get(digest)
+    if (previous) {
+      this.manifestPayloadCacheBytes -= previous.bytes
+      this.manifestPayloadCache.delete(digest)
+    }
+    while (this.manifestPayloadCache.size >= MAX_MANIFEST_PAYLOAD_CACHE_COUNT ||
+      this.manifestPayloadCacheBytes + payloads.bytes > MAX_MANIFEST_PAYLOAD_CACHE_BYTES) {
+      const oldest = this.manifestPayloadCache.entries().next().value as [string, SessionManifestPayloadCache] | undefined
+      if (!oldest) return
+      this.manifestPayloadCache.delete(oldest[0])
+      this.manifestPayloadCacheBytes -= oldest[1].bytes
+    }
+    this.manifestPayloadCache.set(digest, payloads)
+    this.manifestPayloadCacheBytes += payloads.bytes
   }
 
   applyBundle(
@@ -1185,14 +1822,71 @@ export class SyncSessionService {
     return this.serializeMutation(() => this.restoreArchiveNow(branchId))
   }
 
-  private async exportBundleNow(): Promise<SyncSessionBundle> {
+  private async reuseCachedManifestEntry(
+    persistence: SessionPersistenceLike,
+    workspace: WorkspaceLike,
+    descriptor: SyncSessionWorkspace,
+    workspacePosition: number,
+    sessionId: SessionId,
+    firstSnapshot: SessionSnapshotLike,
+    pinned: boolean,
+    current: SyncRecordMetadata | undefined,
+    stateIndex: SessionStateIndex,
+  ): Promise<SyncSessionEntry | undefined> {
+    if (!current || current.deleted || !current.workspaceOrigin) return undefined
+    const cache = this.exportCache.get(sessionExportCacheKey(String(sessionId)))
+    if (!cache || cache.metadata.contentDigest !== current.contentDigest ||
+      cache.metadata.originInstanceId !== current.originInstanceId || cache.metadata.originEntityId !== current.originEntityId ||
+      current.workspaceOrigin.originInstanceId !== descriptor.originInstanceId ||
+      current.workspaceOrigin.originEntityId !== descriptor.originWorkspaceId ||
+      current.stateDigest !== sessionStateDigest(descriptor, workspacePosition, false, pinned)) return undefined
+
+    const stable = await readStableSessionMetadata(persistence, sessionId, firstSnapshot)
+    if (!stable || !stable.header.cwd || posix.normalize(stable.header.cwd) !== posix.normalize(workspace.path)) return undefined
+    const parentMetadata = stable.header.parentSession
+      ? stateIndex.recordsByLocalId.get(String(stable.header.parentSession))
+      : undefined
+    const parentOrigin = parentMetadata
+      ? { originInstanceId: parentMetadata.originInstanceId, originEntityId: parentMetadata.originEntityId }
+      : undefined
+    const instructionSnapshot = instructionsForSession(
+      this.instructions,
+      String(sessionId),
+      stateIndex,
+      { originInstanceId: descriptor.originInstanceId, originEntityId: descriptor.originWorkspaceId },
+    )
+    const fingerprint = sessionExportFingerprint({
+      revision: stable.snapshot.revision,
+      header: stable.header,
+      inheritedEventCount: stable.inheritedEventCount,
+      workspace: descriptor,
+      instructionSnapshot,
+      parentOrigin,
+    })
+    if (!fingerprint || fingerprint !== cache.fingerprint) return undefined
+    return {
+      metadata: current,
+      eventCount: cache.eventCount,
+      eventDigest: cache.eventDigest,
+      inheritedEventCount: cache.inheritedEventCount,
+    }
+  }
+
+  private async exportBundleNow(options: SessionExportOptions = {}): Promise<SyncSessionBundle> {
+    const { manifestOnly = false, selectedKeys, sharedObjects: useSharedObjects = false } = options
     const persistence = this.requirePersistence()
     const workspaceRegistry = this.getWorkspaces()
     if (!workspaceRegistry) throw new SyncSessionError('workspace-unavailable', '工作区注册表不可用')
     await persistence.flush()
 
+    const stateIndex = createSessionStateIndex(this.state.read())
     const instanceId = this.state.instanceId()
     const bindings = this.bindings.list()
+    const bindingByMirrorPath = new Map<string, (typeof bindings)[number]>()
+    for (const binding of bindings) {
+      const key = normalizeHostPath(binding.mirrorPath)
+      if (!bindingByMirrorPath.has(key)) bindingByMirrorPath.set(key, binding)
+    }
     const workspaces = workspaceRegistry.list()
     const archivedIds = new Set(workspaceRegistry.archivedSessionIds.map(String))
     const pinnedIds = new Set((workspaceRegistry.pinnedSessionIds ?? []).map(String))
@@ -1200,11 +1894,31 @@ export class SyncSessionService {
     const skipped: Array<{ sessionId: string; reason: string }> = []
     const eligibleLocalIds = new Set<string>()
     const workspaceById = new Map<string, WorkspaceLike>()
-    const archivedBranchSessionIds = new Set(Object.values(this.state.read().archives).map((archive) => archive.localSessionId))
+    const archivedBranchSessionIds = new Set(Object.values(stateIndex.state.archives).map((archive) => archive.localSessionId))
+    const objectCache: ExportObjectCache = new Map()
+    const descriptorCache = new Map<string, SyncSessionWorkspace>()
+    const getWorkspaceDescriptor = (
+      workspace: WorkspaceLike,
+      binding: (typeof bindings)[number],
+      nodeOrigin: SyncOrigin,
+      preferredOrigin?: SyncOrigin,
+    ): SyncSessionWorkspace => {
+      const key = canonicalJson({
+        workspace: { id: String(workspace.id), path: workspace.path, title: workspace.title },
+        binding: { mirrorPath: normalizeHostPath(binding.mirrorPath), nodeId: binding.nodeId, remotePath: posix.normalize(binding.remotePath) },
+        nodeOrigin,
+        preferredOrigin,
+      })
+      const cached = descriptorCache.get(key)
+      if (cached) return cached
+      const descriptor = this.workspaceDescriptor(workspace, binding, nodeOrigin, preferredOrigin, stateIndex)
+      descriptorCache.set(key, descriptor)
+      return descriptor
+    }
 
     for (const workspace of workspaces) {
       workspaceById.set(String(workspace.id), workspace)
-      const binding = bindings.find((candidate) => normalizeHostPath(candidate.mirrorPath) === workspaceCandidateKey(workspace))
+      const binding = bindingByMirrorPath.get(workspaceCandidateKey(workspace))
       if (!binding) continue
       const node = this.registry.get(binding.nodeId)
       if (!node || !isNodeRemoteType(node.type)) continue
@@ -1214,15 +1928,37 @@ export class SyncSessionService {
       for (let position = 0; position < workspace.sessionIds.length; position += 1) {
         const sessionId = String(workspace.sessionIds[position])
         if (archivedBranchSessionIds.has(sessionId)) continue
-        const currentSession = findSessionRecordByLocalId(this.state.read(), sessionId)
+        const currentSession = stateIndex.recordsByLocalId.get(sessionId)
         if (currentSession?.deleted) continue
-        const descriptor = this.workspaceDescriptor(workspace, binding, nodeOrigin, currentSession?.workspaceOrigin)
+        const localKey = currentSession
+          ? syncSessionEntryKey({ metadata: currentSession })
+          : syncRecordKey('session', { originInstanceId: instanceId, originEntityId: sessionId })
+        if (selectedKeys && !selectedKeys.has(localKey)) continue
+        const descriptor = getWorkspaceDescriptor(workspace, binding, nodeOrigin, currentSession?.workspaceOrigin)
         const snapshot = await persistence.stat(makeSessionId(sessionId))
         if (!snapshot) continue
         if (snapshot.formatStatus === 'migration-required') {
           throw new SyncSessionError('session-format', '会话格式需要由当前 DSH 版本迁移')
         }
-        const entry = await this.exportSessionEntry(
+        if (manifestOnly) {
+          const cached = await this.reuseCachedManifestEntry(
+            persistence,
+            workspace,
+            descriptor,
+            position,
+            makeSessionId(sessionId),
+            snapshot,
+            pinnedIds.has(sessionId),
+            currentSession,
+            stateIndex,
+          )
+          if (cached) {
+            entries.push(cached)
+            eligibleLocalIds.add(sessionId)
+            continue
+          }
+        }
+        const exported = await this.exportSessionEntry(
           persistence,
           workspace,
           descriptor,
@@ -1231,21 +1967,45 @@ export class SyncSessionService {
           snapshot,
           archivedIds.has(sessionId),
           pinnedIds.has(sessionId),
+          undefined,
+          stateIndex,
+          objectCache,
         )
-        if (entry) {
-          entries.push(entry)
+        if (exported) {
+          const { entry } = exported
+          if (manifestOnly && options.payloadCache) {
+            const key = syncSessionEntryKey(entry)
+            const size = estimateJsonBytes(entry, MAX_MANIFEST_PAYLOAD_CACHE_BYTES - options.payloadCache.bytes)
+            if (size !== undefined) {
+              options.payloadCache.entries.set(key, entry)
+              options.payloadCache.bytes += size
+            }
+          }
+          entries.push(manifestOnly
+            ? {
+                metadata: entry.metadata,
+                ...(entry.branchId ? { branchId: entry.branchId } : {}),
+                eventCount: exported.eventCount,
+                eventDigest: exported.eventDigest,
+                inheritedEventCount: exported.inheritedEventCount,
+              }
+            : entry)
           eligibleLocalIds.add(sessionId)
         } else skipped.push({ sessionId, reason: 'workspace-cwd-mismatch' })
       }
     }
 
-    const initial = this.state.read()
+    const initial = stateIndex.state
     for (const metadata of Object.values(initial.records)) {
       if (
         metadata.kind !== 'session' || archivedBranchSessionIds.has(metadata.localEntityId)
       ) continue
+      if (selectedKeys && !selectedKeys.has(syncSessionEntryKey({ metadata }))) continue
       if (metadata.deleted) {
         entries.push({ metadata })
+        const tombstoneKey = sessionExportCacheKey(metadata.localEntityId)
+        this.exportCache.delete(tombstoneKey)
+        this.exportCacheStore.delete(tombstoneKey)
         continue
       }
       if (eligibleLocalIds.has(metadata.localEntityId)) continue
@@ -1258,22 +2018,27 @@ export class SyncSessionService {
       this.state.update((state) => {
         state.records[sessionOriginKey(metadata)] = tombstone
       })
+      indexSessionRecord(stateIndex, tombstone)
+      const tombstoneKey = sessionExportCacheKey(metadata.localEntityId)
+      this.exportCache.delete(tombstoneKey)
+      this.exportCacheStore.delete(tombstoneKey)
       entries.push({ metadata: tombstone })
     }
 
-    for (const archive of this.listArchives()) {
+    for (const archive of Object.values(stateIndex.state.archives)) {
+      if (selectedKeys && !selectedKeys.has(archive.branchId)) continue
       const workspace = archive.workspaceId ? workspaceById.get(archive.workspaceId) : undefined
       if (!workspace) continue
-      const binding = bindings.find((candidate) => normalizeHostPath(candidate.mirrorPath) === workspaceCandidateKey(workspace))
+      const binding = bindingByMirrorPath.get(workspaceCandidateKey(workspace))
       const node = binding ? this.registry.get(binding.nodeId) : undefined
       if (!binding || !node || !isNodeRemoteType(node.type)) continue
       const nodeOrigin = this.nodes.originForLocalNode(node.id)
       if (!nodeOrigin) continue
-      const archivedMetadata = Object.values(this.state.read().archives).find((item) => item.localSessionId === archive.localSessionId)
-      const descriptor = this.workspaceDescriptor(workspace, binding, nodeOrigin, archivedMetadata?.workspaceOrigin)
+      const archivedMetadata = stateIndex.archivesByLocalSessionId.get(archive.localSessionId)
+      const descriptor = getWorkspaceDescriptor(workspace, binding, nodeOrigin, archivedMetadata?.workspaceOrigin)
       const snapshot = await persistence.stat(makeSessionId(archive.localSessionId))
       if (!snapshot) continue
-      const entry = await this.exportSessionEntry(
+      const exported = await this.exportSessionEntry(
         persistence,
         workspace,
         descriptor,
@@ -1283,12 +2048,50 @@ export class SyncSessionService {
         true,
         false,
         archive,
+        stateIndex,
+        objectCache,
       )
-      if (entry) entries.push(entry)
-      else skipped.push({ sessionId: archive.localSessionId, reason: 'archive-workspace-cwd-mismatch' })
+      if (exported) {
+        const { entry } = exported
+        if (manifestOnly && options.payloadCache) {
+          const key = syncSessionEntryKey(entry)
+          const size = estimateJsonBytes(entry, MAX_MANIFEST_PAYLOAD_CACHE_BYTES - options.payloadCache.bytes)
+          if (size !== undefined) {
+            options.payloadCache.entries.set(key, entry)
+            options.payloadCache.bytes += size
+          }
+        }
+        entries.push(manifestOnly
+          ? {
+              metadata: entry.metadata,
+              ...(entry.branchId ? { branchId: entry.branchId } : {}),
+              eventCount: exported.eventCount,
+              eventDigest: exported.eventDigest,
+              inheritedEventCount: exported.inheritedEventCount,
+            }
+          : entry)
+      } else skipped.push({ sessionId: archive.localSessionId, reason: 'archive-workspace-cwd-mismatch' })
     }
 
-    return makeSyncSessionBundle(instanceId, entries, skipped)
+    const bundleSharedObjects = useSharedObjects && entries.some((entry) => (entry.objects?.length ?? 0) > 0)
+      ? this.dedupeBundleObjects(entries)
+      : undefined
+    this.exportCacheStore.flush()
+    return makeSyncSessionBundle(instanceId, entries, skipped, bundleSharedObjects)
+  }
+
+  private dedupeBundleObjects(entries: SyncSessionEntry[]): SyncSessionObject[] {
+    const shared = new Map<string, SyncSessionObject>()
+    for (const entry of entries) {
+      for (const object of entry.objects ?? []) {
+        const current = shared.get(object.id)
+        if (current === undefined) shared.set(object.id, object)
+        else if (current.digest !== object.digest || current.bytes !== object.bytes) {
+          throw new SyncSessionError('object-invalid', 'the same object id carries different payloads')
+        }
+      }
+    }
+    return [...shared.values()]
   }
 
   private async applyBundleNow(
@@ -1298,19 +2101,29 @@ export class SyncSessionService {
     options: SyncSessionApplyOptions,
     recoveryBatch?: SyncSessionJournalBatch,
   ): Promise<SyncSessionApplyResult> {
-    const bundle = validateSyncSessionBundle(value)
-    const pendingBatch = recoveryBatch ?? this.journal.findBatch(peerId, bundle.digest)
+    const transferredBundle = validateSyncSessionBundle(value)
+    const importedVia = recoveryBatch?.importedVia ?? options.importedVia ?? 'peer'
+    if (importedVia !== 'peer' && transferredBundle.entries.some((entry) => entry.eventDelta)) {
+      throw new SyncSessionError('manifest-invalid', 'event tail deltas are only accepted from sync peers')
+    }
+    let pendingBatch = recoveryBatch ?? this.journal.findBatch(peerId, transferredBundle.digest)
+    if (pendingBatch && !transferredBundle.entries.some((entry) => entry.eventDelta) &&
+      (pendingBatch.bundleDigest !== transferredBundle.digest || pendingBatch.peerId !== peerId)) {
+      throw new SyncSessionError('journal-bundle-mismatch', '会话 journal batch 与 bundle 不匹配')
+    }
+    if (!pendingBatch) await this.exportBundleNow({ manifestOnly: true })
+    const bundle = await this.expandEventDeltas(transferredBundle)
+    pendingBatch ??= recoveryBatch ?? this.journal.findBatch(peerId, bundle.digest)
     if (pendingBatch && (pendingBatch.bundleDigest !== bundle.digest || pendingBatch.peerId !== peerId)) {
       throw new SyncSessionError('journal-bundle-mismatch', '会话 journal batch 与 bundle 不匹配')
     }
-    const importedVia = pendingBatch?.importedVia ?? options.importedVia ?? 'peer'
+    const resolvedImportedVia = pendingBatch?.importedVia ?? importedVia
     const allowSameInstance = pendingBatch?.allowSameInstance ?? options.allowSameInstance ?? false
     const localInstanceId = this.state.instanceId()
     if (bundle.instanceId === localInstanceId && !allowSameInstance) {
       throw new SyncSessionError('same-instance', 'cannot import sessions from this instance')
     }
-    if (!pendingBatch) await this.exportBundleNow()
-    this.preflightBundle(bundle, { importedVia, allowSameInstance })
+    this.preflightBundle(bundle, { importedVia: resolvedImportedVia, allowSameInstance })
     const safeSourceName = (pendingBatch?.sourceName ?? sourceName).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 128) || 'sync peer'
     const recordKeys = bundle.entries.map((entry) => entry.branchId ?? sessionOriginKey(entry.metadata))
     const batchId = pendingBatch?.batchId ?? this.journal.beginWithBundle(
@@ -1320,10 +2133,11 @@ export class SyncSessionService {
       recordKeys,
       bundle,
       new Date(this.now()).toISOString(),
-      importedVia,
+      resolvedImportedVia,
       allowSameInstance,
     )
     const result = emptyApplyResult()
+    const attachmentImportCache = new Map<string, ImportedSessionObjectRef>()
     result.skipped += bundle.skipped.length
     result.unmapped += bundle.skipped.length
     const workspaceOrders = new Map<string, Array<{ id: SessionId; position: number }>>()
@@ -1432,7 +2246,7 @@ export class SyncSessionService {
             continue
           }
           if (!current.deleted && entry.metadata.contentDigest === current.contentDigest && (await this.requirePersistence().stat(makeSessionId(current.localEntityId)))) {
-            await this.applyMembershipOnly(entry, current, safeSourceName, entryWorkspace, importedVia)
+            await this.applyMembershipOnly(entry, current, safeSourceName, entryWorkspace, resolvedImportedVia)
             result.updated += 1
             queueWorkspaceOrder(entryWorkspace.id, makeSessionId(current.localEntityId), entry.workspacePosition ?? 0)
             continue
@@ -1443,7 +2257,7 @@ export class SyncSessionService {
         let prepared: PreparedSyncSession
         if (preparedValue === undefined) {
           try {
-            prepared = await this.prepareEntry(entry, safeSourceName, plannedSessionIds, entryWorkspace, importedVia)
+            prepared = await this.prepareEntry(entry, safeSourceName, plannedSessionIds, entryWorkspace, resolvedImportedVia, attachmentImportCache)
           } catch (error) {
             if (error instanceof SyncSessionError && error.code === 'workspace-unmapped') {
               result.skipped += 1
@@ -1472,11 +2286,44 @@ export class SyncSessionService {
 
       await this.orderWorkspaceSessions(workspaceOrders)
       this.journal.complete(batchId)
+      this.exportCacheStore.flush()
       return result
     } catch (error) {
       if (error instanceof SyncSessionError) throw error
       throw new SyncSessionError('session-apply-failed', '会话同步应用失败', error)
     }
+  }
+
+  private async expandEventDeltas(bundle: SyncSessionBundle): Promise<SyncSessionBundle> {
+    if (!bundle.entries.some((entry) => entry.eventDelta)) return bundle
+    const persistence = this.requirePersistence()
+    const state = this.state.read()
+    const entries: SyncSessionEntry[] = []
+    for (const entry of bundle.entries) {
+      const delta = entry.eventDelta
+      if (!delta) {
+        entries.push(entry)
+        continue
+      }
+      const current = state.records[sessionOriginKey(entry.metadata)]
+      if (!current || current.deleted) throw new SyncSessionError('session-delta-prefix', 'event delta base session is missing')
+      const snapshot = await persistence.stat(makeSessionId(current.localEntityId))
+      if (!snapshot) throw new SyncSessionError('session-delta-prefix', 'event delta base session is missing')
+      const stable = await this.readStableSession(persistence, makeSessionId(current.localEntityId), snapshot)
+      if (stable.events.length !== delta.baseEventCount ||
+        stable.inheritedEventCount !== delta.baseInheritedEventCount ||
+        sessionEventListDigest(stable.events) !== delta.baseEventDigest) {
+        throw new SyncSessionError('session-delta-prefix', 'event delta base prefix no longer matches')
+      }
+      const events = [...stable.events, ...(entry.events ?? [])]
+      if (events.length !== delta.fullEventCount || sessionEventListDigest(events) !== delta.fullEventDigest) {
+        throw new SyncSessionError('manifest-invalid', 'expanded event delta digest does not match')
+      }
+      const fullEntry: SyncSessionEntry = { ...entry, events }
+      delete fullEntry.eventDelta
+      entries.push(fullEntry)
+    }
+    return validateSyncSessionBundle(makeSyncSessionBundle(bundle.instanceId, entries, bundle.skipped))
   }
 
   private async prepareEntry(
@@ -1485,6 +2332,7 @@ export class SyncSessionService {
     plannedSessionIds: ReadonlyMap<string, SessionId>,
     workspace: WorkspaceLike,
     importedVia: SyncImportMethod,
+    attachmentImportCache?: Map<string, ImportedSessionObjectRef>,
   ): Promise<PreparedSyncSession> {
     if (!entry.header || !entry.events || !entry.workspace || !entry.objects) {
       throw new SyncSessionError('manifest-invalid', 'active session entry is incomplete')
@@ -1516,7 +2364,7 @@ export class SyncSessionService {
         await handle.close()
       }
     }
-    const objectMap = await this.importObjects(entry.objects, sessionId)
+    const objectMap = await this.importObjects(entry.objects, sessionId, attachmentImportCache)
     const events = this.rewriteEvents(entry.events, entry.objects, objectMap, sessionId, String(entry.header.id))
     const validatedEvents = validateStoredEvents(header, events)
     assertContiguous(sessionId, validatedEvents, 0)
@@ -1612,7 +2460,11 @@ export class SyncSessionService {
     return committedWorkspace
   }
 
-  private async importObjects(objects: readonly SyncSessionObject[], sessionId: SessionId): Promise<Map<string, ImportedSessionObjectRef>> {
+  private async importObjects(
+    objects: readonly SyncSessionObject[],
+    sessionId: SessionId,
+    attachmentImportCache?: Map<string, ImportedSessionObjectRef>,
+  ): Promise<Map<string, ImportedSessionObjectRef>> {
     const attachments = objects.some((object) => object.kind === 'image' || object.kind === 'file')
       ? this.getAttachments()
       : undefined
@@ -1626,6 +2478,10 @@ export class SyncSessionService {
     const output = new Map<string, ImportedSessionObjectRef>()
     for (const object of objects) {
       if (object.kind === 'spill' && object.unavailable) continue
+      if (object.kind !== 'spill') {
+        const cached = attachmentImportCache?.get(object.id)
+        if (cached) { output.set(object.id, cached); continue }
+      }
       const data = arrayBuffer(object.data)
       if (data.byteLength !== object.bytes || sha256(data) !== object.digest) {
         throw new SyncSessionError('object-integrity', 'session object failed digest validation')
@@ -1637,12 +2493,14 @@ export class SyncSessionService {
           ...(object.ref.name === undefined ? {} : { name: object.ref.name }),
         })
         output.set(object.id, ref)
+        attachmentImportCache?.set(object.id, ref)
       } else if (object.kind === 'file') {
         const ref = await attachments!.saveFileStream({
           data: oneChunk(data),
           name: object.ref.name,
         })
         output.set(object.id, ref)
+        attachmentImportCache?.set(object.id, ref)
       } else {
         const ref = await saveSpillTransfer(spills!, {
           owner: { sessionId },
@@ -2103,17 +2961,19 @@ export class SyncSessionService {
     binding: { mirrorPath: string; nodeId: string; remotePath: string; workspaceId?: string },
     nodeOrigin: SyncOrigin,
     preferredOrigin?: SyncOrigin,
+    stateIndex = createSessionStateIndex(this.state.read()),
   ): SyncSessionWorkspace {
-    const state = this.state.read()
-    const matchingMappings = Object.values(state.workspaces).filter((mapping) =>
-      mapping.localWorkspaceId === workspace.id && mapping.localNodeId === binding.nodeId &&
+    const state = stateIndex.state
+    const workspaceMappings = stateIndex.workspacesByLocalId.get(String(workspace.id)) ?? []
+    const matchingMappings = workspaceMappings.filter((mapping) =>
+      mapping.localNodeId === binding.nodeId &&
       posix.normalize(mapping.remotePath) === posix.normalize(binding.remotePath),
     )
     const preferredMapping = preferredOrigin
-      ? Object.values(state.workspaces).find((mapping) =>
+      ? workspaceMappings.find((mapping) =>
         mapping.originInstanceId === preferredOrigin.originInstanceId &&
         mapping.originWorkspaceId === preferredOrigin.originEntityId &&
-        mapping.localWorkspaceId === workspace.id && mapping.localNodeId === binding.nodeId,
+        mapping.localNodeId === binding.nodeId,
       )
       : undefined
     const prior = preferredMapping ?? (matchingMappings.length === 1 ? matchingMappings[0] : undefined)
@@ -2125,16 +2985,22 @@ export class SyncSessionService {
     const current = state.workspaces[key]
     const revision = current && current.contentDigest === digest ? current.revision : this.state.nextRevision(this.now())
     const mapping: SyncWorkspaceMapping = {
-      ...base,
+      originInstanceId,
+      originWorkspaceId,
       localWorkspaceId: workspace.id,
       localPath: workspace.path,
       localNodeId: binding.nodeId,
+      remotePath: base.remotePath,
+      title: workspace.title,
       revision,
       contentDigest: digest,
     }
-    this.state.update((draft) => {
-      draft.workspaces[key] = mapping
-    })
+    if (!current || canonicalJson(current) !== canonicalJson(mapping)) {
+      this.state.update((draft) => {
+        draft.workspaces[key] = mapping
+      })
+      indexWorkspaceMapping(stateIndex, key, mapping)
+    }
     return { ...base, revision, contentDigest: digest }
   }
 
@@ -2148,19 +3014,31 @@ export class SyncSessionService {
     archived: boolean,
     pinned: boolean,
     archive?: SyncSessionArchive,
-  ): Promise<SyncSessionEntry | undefined> {
-    const { header, inheritedEventCount, events } = await this.readStableSession(persistence, sessionId, firstSnapshot)
-    if (!header.cwd || posix.normalize(header.cwd) !== posix.normalize(workspace.path)) return undefined
+    stateIndex?: SessionStateIndex,
+    objectCache?: ExportObjectCache,
+  ): Promise<SessionExportResult | undefined> {
+    const { header, inheritedEventCount, events, revision: sourceRevision } = await this.readStableSession(persistence, sessionId, firstSnapshot)
     const localSessionId = String(sessionId)
-    const state = this.state.read()
-    const parentOrigin = header.parentSession ? findSessionOriginByLocalId(state, String(header.parentSession)) : undefined
+    const cacheKey = sessionExportCacheKey(localSessionId)
+    if (!header.cwd || posix.normalize(header.cwd) !== posix.normalize(workspace.path)) {
+      this.exportCache.delete(cacheKey)
+      this.exportCacheStore.delete(cacheKey)
+      return undefined
+    }
+    const index = stateIndex ?? createSessionStateIndex(this.state.read())
+    const state = index.state
+    const parentMetadata = header.parentSession ? index.recordsByLocalId.get(String(header.parentSession)) : undefined
+    const parentOrigin = parentMetadata
+      ? { originInstanceId: parentMetadata.originInstanceId, originEntityId: parentMetadata.originEntityId }
+      : undefined
     const syncInstructions = instructionsForSession(
       this.instructions,
       String(sessionId),
-      state,
+      index,
       { originInstanceId: descriptor.originInstanceId, originEntityId: descriptor.originWorkspaceId },
     )
-    const objects = await this.exportObjects(events, localSessionId)
+    const eventDigest = sessionEventListDigest(events)
+    const objects = await this.exportObjects(events, localSessionId, objectCache)
     const digest = sessionEventDigest(
       header,
       inheritedEventCount,
@@ -2172,7 +3050,7 @@ export class SyncSessionService {
     )
     const current = archive
       ? undefined
-      : findSessionRecordByLocalId(state, localSessionId) ?? state.records[syncRecordKey('session', {
+      : index.recordsByLocalId.get(localSessionId) ?? state.records[syncRecordKey('session', {
           originInstanceId: this.state.instanceId(),
           originEntityId: localSessionId,
         })]
@@ -2207,6 +3085,7 @@ export class SyncSessionService {
           delete draft.archives[archive.branchId]
           draft.archives[branchId] = updatedArchive
         })
+        indexArchive(index, archive.branchId, updatedArchive)
         outputBranchId = branchId
       } else contentDigest = archive.contentDigest
     } else if (!current || current.contentDigest !== digest || current.deleted || workspaceOriginChanged || !current.workspaceOrigin || sessionStateChanged) {
@@ -2228,21 +3107,57 @@ export class SyncSessionService {
       this.state.update((draft) => {
         draft.records[sessionOriginKey(metadata)] = metadata
       })
+      indexSessionRecord(index, metadata)
+    }
+    // Spill payloads can change outside the session log revision.
+    if (!archive && !objects.some((object) => object.kind === 'spill')) {
+      const fingerprint = sessionExportFingerprint({
+        revision: sourceRevision,
+        header,
+        inheritedEventCount,
+        workspace: descriptor,
+        instructionSnapshot: syncInstructions,
+        parentOrigin,
+      })
+      if (fingerprint) {
+        const entry: SessionExportCacheEntry = {
+          fingerprint,
+          metadata,
+          eventCount: events.length,
+          eventDigest,
+          inheritedEventCount,
+        }
+        this.exportCache.set(cacheKey, entry)
+        this.exportCacheStore.set(cacheKey, entry)
+      } else {
+        this.exportCache.delete(cacheKey)
+        this.exportCacheStore.delete(cacheKey)
+      }
+    } else {
+      this.exportCache.delete(cacheKey)
+      this.exportCacheStore.delete(cacheKey)
     }
     return {
-      metadata,
-      ...(outputBranchId ? { branchId: outputBranchId } : {}),
-      sourceLocalSessionId: localSessionId,
-      header,
+      entry: {
+        metadata,
+        ...(outputBranchId ? { branchId: outputBranchId } : {}),
+        sourceLocalSessionId: localSessionId,
+        header,
+        inheritedEventCount,
+        ...(parentOrigin ? { parentOrigin } : {}),
+        workspace: descriptor,
+        workspacePosition,
+        archived,
+        pinned,
+        ...(syncInstructions ? { instructionSnapshot: syncInstructions } : {}),
+        events: [...events],
+        objects,
+        eventCount: events.length,
+        eventDigest,
+      },
+      eventCount: events.length,
+      eventDigest,
       inheritedEventCount,
-      ...(parentOrigin ? { parentOrigin } : {}),
-      workspace: descriptor,
-      workspacePosition,
-      archived,
-      pinned,
-      ...(syncInstructions ? { instructionSnapshot: syncInstructions } : {}),
-      events: [...events],
-      objects,
     }
   }
 
@@ -2250,7 +3165,7 @@ export class SyncSessionService {
     persistence: SessionPersistenceLike,
     sessionId: SessionId,
     firstSnapshot: SessionSnapshotLike,
-  ): Promise<{ header: SessionHeader; inheritedEventCount: number; events: SessionEvent[] }> {
+  ): Promise<{ header: SessionHeader; inheritedEventCount: number; events: SessionEvent[]; revision: unknown }> {
     let snapshot = firstSnapshot
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (snapshot.formatStatus === 'migration-required') throw new SyncSessionError('session-format', '会话格式需要由当前 DSH 版本迁移')
@@ -2270,11 +3185,16 @@ export class SyncSessionService {
         assertContiguous(sessionId, validated, 0)
         const after = await persistence.stat(sessionId)
         if (!after) throw new SyncSessionError('session-missing', '会话在导出期间消失')
-        if (JSON.stringify(snapshot.revision) === JSON.stringify(after.revision)) {
+        if (
+          canonicalJson(snapshot.revision) === canonicalJson(after.revision) &&
+          canonicalJson(snapshot.header) === canonicalJson(after.header) &&
+          canonicalJson(handle.header) === canonicalJson(after.header)
+        ) {
           return {
             header: handle.header,
             inheritedEventCount: Number(handle.inheritedEventCount),
             events: [...validated],
+            revision: after.revision,
           }
         }
         snapshot = after
@@ -2285,7 +3205,11 @@ export class SyncSessionService {
     throw new SyncSessionError('session-changing', '会话在导出期间持续变化，请稍后重试')
   }
 
-  private async exportObjects(events: readonly SessionEvent[], sessionId: string): Promise<SyncSessionObject[]> {
+  private async exportObjects(
+    events: readonly SessionEvent[],
+    sessionId: string,
+    objectCache?: ExportObjectCache,
+  ): Promise<SyncSessionObject[]> {
     const attachments = attachmentReferences(events)
     const spills = spillReferences(events)
     const structuredSpills = new Set(spills.map(spillKey))
@@ -2298,33 +3222,56 @@ export class SyncSessionService {
       throw new SyncSessionError('attachments-unavailable', '附件存储服务不可用')
     }
     for (const ref of attachments.images) {
+      const key = attachmentKey('image', ref)
+      const cached = objectCache?.get(key)?.object
+      if (cached?.kind === 'image' && canonicalJson(cached.ref) === canonicalJson(ref)) {
+        payloads.set(key, cached)
+        continue
+      }
       const stored = await attachmentStore!.readImage(ref)
       const digest = sha256(stored.data)
-      payloads.set(attachmentKey('image', ref), {
-        id: attachmentKey('image', ref),
+      const object: SyncSessionObject = {
+        id: key,
         kind: 'image',
         ref: stored.ref,
         bytes: stored.data.byteLength,
         digest,
         data: Buffer.from(stored.data).toString('base64'),
-      })
+      }
+      payloads.set(key, object)
+      objectCache?.set(key, { object })
     }
     for (const ref of attachments.files) {
+      const key = attachmentKey('file', ref)
+      const cached = objectCache?.get(key)?.object
+      if (cached?.kind === 'file' && canonicalJson(cached.ref) === canonicalJson(ref)) {
+        payloads.set(key, cached)
+        continue
+      }
       const data = await collectBytes(attachmentStore!.readFileStream(ref))
-      payloads.set(attachmentKey('file', ref), {
-        id: attachmentKey('file', ref),
+      const object: SyncSessionObject = {
+        id: key,
         kind: 'file',
         ref,
         bytes: data.byteLength,
         digest: sha256(data),
         data: data.toString('base64'),
-      })
+      }
+      payloads.set(key, object)
+      objectCache?.set(key, { object })
     }
     if (spills.length > 0) {
       const store = this.getSpills()
       const untransferred: SpillTransferReference[] = []
       for (const reference of spills) {
         if (!store) { untransferred.push(reference); continue }
+        const key = spillKey(reference)
+        const cached = objectCache?.get(key)?.object
+        if (cached?.kind === 'spill' && canonicalJson(cached.reference) === canonicalJson(reference) &&
+          (reference.ref.bytes === undefined || cached.bytes === reference.ref.bytes)) {
+          payloads.set(key, cached)
+          continue
+        }
         try {
           const data = await collectBytes(readSpillStream(store, reference))
           if (reference.ref.bytes !== undefined && data.byteLength !== reference.ref.bytes) {
@@ -2335,15 +3282,16 @@ export class SyncSessionService {
           } catch {
             untransferred.push(reference); continue
           }
-          const key = spillKey(reference)
-          payloads.set(key, {
+          const object: SyncSessionObject = {
             id: key,
             kind: 'spill',
             reference,
             bytes: data.byteLength,
             digest: sha256(data),
             data: data.toString('base64'),
-          })
+          }
+          payloads.set(key, object)
+          objectCache?.set(key, { object })
         } catch {
           untransferred.push(reference)
         }

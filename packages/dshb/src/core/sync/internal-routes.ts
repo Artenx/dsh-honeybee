@@ -3,8 +3,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { isLoopbackRequest } from '../../auth/loopback.js'
 import { SyncNodeManifestError, type SyncNodeService } from './node-sync.js'
-import { SyncSessionError, type SyncSessionService } from './session-sync.js'
-import { MAX_SYNC_TRANSFER_BYTES, SYNC_PROTOCOL_VERSION } from './protocol.js'
+import { SyncSessionError, type SyncSessionEventPrefix, type SyncSessionService } from './session-sync.js'
+import {
+  MAX_SYNC_TRANSFER_BYTES,
+  SYNC_PROTOCOL_VERSION,
+  SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY,
+  SYNC_SESSION_EVENT_TAIL_CAPABILITY,
+  SYNC_SESSION_MANIFEST_CAPABILITY,
+} from './protocol.js'
 import type { SyncStateStore } from './stores.js'
 
 const MAX_APPLY_BODY_BYTES = MAX_SYNC_TRANSFER_BYTES
@@ -66,6 +72,11 @@ export function registerSyncInternalRoutes(
   nodeSync?: SyncNodeService,
   sessionSync?: SyncSessionService,
 ): void {
+  const capabilities = [
+    'peer-handshake',
+    ...(nodeSync ? ['node-sync'] : []),
+    ...(sessionSync ? ['session-sync', SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY] : []),
+  ]
   ctx.effect(() =>
     ctx.webServer.register({
       kind: 'exact',
@@ -84,11 +95,7 @@ export function registerSyncInternalRoutes(
             ok: true,
             protocolVersion: SYNC_PROTOCOL_VERSION,
             instanceId: state.instanceId(),
-            capabilities: [
-              'peer-handshake',
-              ...(nodeSync ? ['node-sync'] : []),
-              ...(sessionSync ? ['session-sync'] : []),
-            ],
+            capabilities,
           })
         } catch {
           sendJson(res, 503, { ok: false, error: 'sync identity unavailable' })
@@ -114,7 +121,7 @@ export function registerSyncInternalRoutes(
         }
         if (req.method === 'GET' && action === 'manifest') {
           try {
-            sendJson(res, 200, { ok: true, manifest: await nodeSync.exportManifest() })
+            sendJson(res, 200, { ok: true, manifest: await nodeSync.exportManifest(), capabilities })
           } catch {
             sendJson(res, 500, { ok: false, error: 'node manifest export failed' })
           }
@@ -165,6 +172,41 @@ export function registerSyncInternalRoutes(
           }
           return
         }
+        if (req.method === 'GET' && action === 'manifest') {
+          try {
+            sendJson(res, 200, { ok: true, manifest: await sessionSync.exportManifest() })
+          } catch (error) {
+            const code = error instanceof SyncSessionError ? error.code : 'session-export-failed'
+            const status = code === 'bundle-too-large' ? 413 : 500
+            sendJson(res, status, { ok: false, code, error: error instanceof SyncSessionError ? error.message : 'session manifest export failed' })
+          }
+          return
+        }
+        if (req.method === 'POST' && action === 'entries') {
+          const body = await readJsonBody(req)
+          const prefixesValid = body?.prefixes === undefined || (Array.isArray(body.prefixes) &&
+            body.prefixes.every((prefix) => prefix !== null && typeof prefix === 'object' && !Array.isArray(prefix)))
+          if (!body || !Array.isArray(body.keys) || !body.keys.every((key) => typeof key === 'string') ||
+            typeof body.manifestDigest !== 'string' || !prefixesValid) {
+            sendJson(res, 400, { ok: false, code: 'session-request-invalid', error: 'keys, manifestDigest, and valid prefixes are required' })
+            return
+          }
+          try {
+            sendJson(res, 200, {
+              ok: true,
+              bundle: await sessionSync.exportEntries(
+                body.keys as string[],
+                body.manifestDigest,
+                (body.prefixes ?? []) as SyncSessionEventPrefix[],
+              ),
+            })
+          } catch (error) {
+            const code = error instanceof SyncSessionError ? error.code : 'session-export-failed'
+            const status = code === 'bundle-too-large' ? 413 : 500
+            sendJson(res, status, { ok: false, code, error: error instanceof SyncSessionError ? error.message : 'session entries export failed' })
+          }
+          return
+        }
         if (req.method === 'POST' && action === 'apply') {
           const body = await readJsonBody(req)
           if (!body || body.bundle === null || typeof body.bundle !== 'object' ||
@@ -181,7 +223,7 @@ export function registerSyncInternalRoutes(
             const code = error instanceof SyncSessionError ? error.code : 'session-apply-failed'
             const status = code === 'bundle-too-large' ? 413
               : ['manifest-invalid', 'manifest-digest', 'object-invalid', 'session-format'].includes(code) ? 400
-                : code === 'workspace-unmapped' ? 409 : 500
+                : code === 'workspace-unmapped' || code === 'session-delta-prefix' ? 409 : 500
             sendJson(res, status, { ok: false, code, error: error instanceof SyncSessionError ? error.message : 'session bundle apply failed' })
           }
           return

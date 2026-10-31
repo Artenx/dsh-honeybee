@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Session, SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -13,6 +13,8 @@ import {
   planSessionTransfers,
   SyncSessionError,
   SyncSessionService,
+  syncSessionEntryKey,
+  validateSyncSessionManifest,
   validateSyncSessionBundle,
   type WorkspaceRegistryLike,
 } from '../../src/core/sync/session-sync.js'
@@ -80,6 +82,7 @@ class MemorySessionPersistence {
   readonly sessions = new Map<string, { header: SessionHeader; inheritedEventCount: number; events: SessionEvent[]; revision: number }>()
   readonly owned = new Set<string>()
   flushCalls = 0
+  readEventPages = 0
   failAppendOnce = false
 
   add(session: Session): void {
@@ -126,6 +129,7 @@ class MemorySessionPersistence {
       header: value.header,
       inheritedEventCount: value.inheritedEventCount,
       async read(offset = 0, length = Number.MAX_SAFE_INTEGER) {
+        persistence.readEventPages += 1
         return { events: value.events.slice(offset, offset + length) }
       },
       async append(events: readonly SessionEvent[]) {
@@ -266,8 +270,10 @@ class MemoryBindings {
 class MemoryAttachments {
   readonly objects = new Map<string, Uint8Array>()
   saves = 0
+  imageReads = 0
   addImage(ref: ImageAttachmentRef, data: Uint8Array): void { this.objects.set(ref.attachmentId, data) }
   async readImage(ref: ImageAttachmentRef): Promise<{ ref: ImageAttachmentRef; data: Uint8Array }> {
+    this.imageReads += 1
     const data = this.objects.get(ref.attachmentId)
     if (!data) throw new Error('image is missing')
     return { ref, data }
@@ -429,6 +435,7 @@ function createEnvironment(kind: 'source' | 'target', options: EnvironmentOption
     instructions as never,
     journal,
     () => 1_800_000_000_000,
+    home,
   )
   return { home, state, persistence, workspaces, bindings, attachments, spills, instructions, journal, service }
 }
@@ -485,6 +492,292 @@ afterEach(() => {
 })
 
 describe('session sync', () => {
+  it('reuses one sync-state snapshot and skips writes for unchanged workspace mappings', async () => {
+    const source = createEnvironment('source')
+    addSourceSession(source)
+    addPlainSession(source, 'workspace-source', 'session-second')
+    await source.service.exportBundle()
+    const read = vi.spyOn(source.state, 'read')
+    const update = vi.spyOn(source.state, 'update')
+
+    const bundle = await source.service.exportBundle()
+
+    expect(bundle.entries).toHaveLength(2)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('exports metadata without rereading cached sessions and leaves spill sessions uncached', async () => {
+    const source = createEnvironment('source')
+    addSourceSession(source)
+    addPlainSession(source, 'workspace-source', 'session-without-spill')
+    await source.service.exportBundle()
+    const pagesBefore = source.persistence.readEventPages
+
+    const manifest = await source.service.exportManifest()
+
+    expect(validateSyncSessionManifest(manifest)).toEqual(manifest)
+    expect(manifest.entries).toHaveLength(2)
+    expect(manifest.entries.every((entry) => !('events' in entry) && !('objects' in entry))).toBe(true)
+    expect(source.persistence.readEventPages - pagesBefore).toBe(1)
+    const invalidManifest = structuredClone(manifest)
+    const invalidMetadata = invalidManifest.entries[0]!.metadata as unknown as Record<string, unknown>
+    invalidMetadata.deleted = 'false'
+    expect(() => validateSyncSessionManifest(invalidManifest)).toThrow('tombstone flag is invalid')
+
+    const plainEntry = manifest.entries.find((entry) => entry.metadata.localEntityId === 'session-without-spill')!
+    const spillEntry = manifest.entries.find((entry) => entry.metadata.localEntityId === 'session-source')!
+    const selectedSpillPagesBefore = source.persistence.readEventPages
+    const selectedSpill = validateSyncSessionBundle(await source.service.exportEntries(
+      [syncSessionEntryKey(spillEntry)],
+      manifest.digest,
+    ))
+    expect(selectedSpill.entries[0]?.objects?.some((object) => object.kind === 'spill')).toBe(true)
+    expect(source.persistence.readEventPages).toBe(selectedSpillPagesBefore)
+
+    const selectedPagesBefore = source.persistence.readEventPages
+    const selected = validateSyncSessionBundle(await source.service.exportEntries(
+      [syncSessionEntryKey(plainEntry)],
+      manifest.digest,
+    ))
+
+    expect(selected.entries).toHaveLength(1)
+    expect(selected.entries[0]?.metadata.localEntityId).toBe('session-without-spill')
+    expect(source.persistence.readEventPages - selectedPagesBefore).toBe(1)
+  })
+
+  it('invalidates a cached digest when header changes without a revision change', async () => {
+    const source = createEnvironment('source')
+    addSourceSession(source)
+    const id = addPlainSession(source, 'workspace-source', 'session-header-change')
+    await source.service.exportBundle()
+    const firstManifest = await source.service.exportManifest()
+    const firstEntry = firstManifest.entries.find((entry) => entry.metadata.localEntityId === String(id))
+    const stored = source.persistence.sessions.get(String(id))!
+    const revision = stored.revision
+    stored.header = { ...stored.header, createdAt: stored.header.createdAt + 1 }
+    const pagesBefore = source.persistence.readEventPages
+
+    const updatedManifest = await source.service.exportManifest()
+    const updatedEntry = updatedManifest.entries.find((entry) => entry.metadata.localEntityId === String(id))
+
+    expect(stored.revision).toBe(revision)
+    expect(source.persistence.readEventPages - pagesBefore).toBe(2)
+    expect(updatedEntry?.metadata.contentDigest).not.toBe(firstEntry?.metadata.contentDigest)
+
+    const headerDigest = updatedEntry?.metadata.contentDigest
+    source.persistence.mutateEvent(String(id), (event) => ({ ...event, time: event.time + 1 }))
+    const eventChangedManifest = await source.service.exportManifest()
+    const eventChangedEntry = eventChangedManifest.entries.find((entry) => entry.metadata.localEntityId === String(id))
+    expect(eventChangedEntry?.metadata.contentDigest).not.toBe(headerDigest)
+  })
+
+  it('uses the cached manifest for preflight before importing an empty bundle', async () => {
+    const source = createEnvironment('source')
+    addSourceSession(source)
+    addPlainSession(source, 'workspace-source', 'session-preflight-cache')
+    await source.service.exportBundle()
+    const pagesBefore = source.persistence.readEventPages
+
+    await source.service.applyBundle(
+      makeSyncSessionBundle('i-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', []),
+      'source peer',
+      'p-0123456789abcdef01234567',
+    )
+
+    expect(source.persistence.readEventPages - pagesBefore).toBe(1)
+  })
+
+  it('survives a service restart with the persisted export cache', async () => {
+    const source = createEnvironment('source')
+    addSourceSession(source)
+    const id = addPlainSession(source, 'workspace-source', 'session-restart-cache')
+    await source.service.exportBundle()
+    const pagesBefore = source.persistence.readEventPages
+
+    const restarted = new SyncSessionService(
+      source.state,
+      {
+        originForLocalNode: (nodeId: string) => nodeId === 'node-source' ? nodeOrigin : undefined,
+        localNodeIdForOrigin: () => undefined,
+        isPendingRemoval: () => false,
+        withAvailableRemoteNode: async () => undefined,
+      } as never,
+      { get: (nodeId: string) => nodeId === 'node-source' ? { id: 'node-source', type: 'remote-ssh' } : undefined } as never,
+      source.bindings as never,
+      () => source.workspaces as never,
+      () => source.persistence as never,
+      () => source.attachments as never,
+      () => source.spills as never,
+      source.instructions as never,
+      source.journal,
+      () => 1_800_000_000_000,
+      source.home,
+    )
+    const manifest = await restarted.exportManifest()
+    const entry = manifest.entries.find((item) => item.metadata.localEntityId === String(id))
+
+    expect(entry).toBeDefined()
+    expect(source.persistence.readEventPages - pagesBefore).toBe(1)
+  })
+
+  it('reads each shared attachment only once per bundle export', async () => {
+    const source = createEnvironment('source')
+    const workspace = source.workspaces.add('workspace-shared', `${source.home}/mirror/shared`, 'Shared attachments')
+    source.bindings.add({ mirrorPath: workspace.path, nodeId: 'node-source', remotePath: '/remote/shared', workspaceId: workspace.id })
+    const sharedImage: ImageAttachmentRef = {
+      attachmentId: 'shared-image' as ImageAttachmentRef['attachmentId'],
+      mediaType: 'image/png',
+      bytes: Buffer.from('shared image bytes').byteLength,
+      width: 1,
+      height: 1,
+      name: 'shared.png',
+    }
+    source.attachments.addImage(sharedImage, Buffer.from('shared image bytes'))
+    const makeSession = (idText: string): SessionId => {
+      const id = SessionId(idText)
+      const session = toolSession(String(id), workspace.path, sharedImage, {
+        locator: `/spill/${idText}/web_fetch.txt`,
+        bytes: 4,
+        retrievalHint: 'Use read with offset/limit, or grep this path to search within it.',
+      })
+      source.persistence.add(session)
+      workspace.sessionIds.push(id)
+      return id
+    }
+    makeSession('session-shared-a')
+    makeSession('session-shared-b')
+
+    const readsBefore = source.attachments.imageReads
+    const bundle = await source.service.exportBundle()
+
+    expect(bundle.entries).toHaveLength(2)
+    expect(source.attachments.imageReads - readsBefore).toBe(1)
+  })
+
+  it('saves each shared attachment only once per bundle import', async () => {
+    const source = createEnvironment('source')
+    const workspace = source.workspaces.add('workspace-shared', `${source.home}/mirror/shared`, 'Shared attachments')
+    source.bindings.add({ mirrorPath: workspace.path, nodeId: 'node-source', remotePath: '/remote/shared', workspaceId: workspace.id })
+    const sharedImage: ImageAttachmentRef = {
+      attachmentId: 'shared-import-image' as ImageAttachmentRef['attachmentId'],
+      mediaType: 'image/png',
+      bytes: Buffer.from('shared import bytes').byteLength,
+      width: 1,
+      height: 1,
+      name: 'shared.png',
+    }
+    source.attachments.addImage(sharedImage, Buffer.from('shared import bytes'))
+    const makeSession = (idText: string): SessionId => {
+      const id = SessionId(idText)
+      const session = Session.create(id, undefined, {
+        id,
+        version: SESSION_FORMAT_VERSION,
+        createdAt: Date.now(),
+        cwd: workspace.path,
+        isSeeded: false,
+      })
+      session.append('turn/start', { turn: 1 })
+      session.append('tool/result', {
+        turn: 1,
+        message: createToolResultMessage({
+          callId: ToolCallId(`call-${idText}`),
+          isError: false,
+          content: [{ type: 'image', attachment: sharedImage }],
+        }),
+      }, { surfaceOp: 'append' })
+      source.persistence.add(session)
+      workspace.sessionIds.push(id)
+      return id
+    }
+    makeSession('session-import-a')
+    makeSession('session-import-b')
+    const bundle = await source.service.exportBundle()
+
+    const target = createEnvironment('target')
+    const savesBefore = target.attachments.saves
+    const applied = await target.service.applyBundle(bundle, 'source peer', 'p-0123456789abcdef01234567')
+
+    expect(applied.created).toBe(2)
+    expect(target.attachments.saves - savesBefore).toBe(1)
+  })
+
+  it('transfers an event tail only when the receiver prefix digest matches', async () => {
+    const source = createEnvironment('source')
+    addSourceSession(source)
+    const sourceSessionId = addPlainSession(source, 'workspace-source', 'session-tail')
+    const initialBundle = await source.service.exportBundle()
+    const target = createEnvironment('target')
+    await target.service.applyBundle(initialBundle, 'source peer', 'p-0123456789abcdef01234567')
+    const targetManifest = await target.service.exportManifest()
+    const targetEntry = targetManifest.entries.find((entry) => entry.metadata.originEntityId === String(sourceSessionId))!
+
+    const stored = source.persistence.sessions.get(String(sourceSessionId))!
+    const nextTurn = Session.create(sourceSessionId, undefined, stored.header)
+    nextTurn.append('turn/start', { turn: 2 })
+    stored.events.push({ ...nextTurn.snapshotEvents()[0]!, seq: stored.events.length })
+    stored.revision += 1
+    const sourceManifest = await source.service.exportManifest()
+    const sourceEntry = sourceManifest.entries.find((entry) => entry.metadata.originEntityId === String(sourceSessionId))!
+    const key = syncSessionEntryKey(sourceEntry)
+    const prefix = {
+      key,
+      eventCount: targetEntry.eventCount!,
+      eventDigest: targetEntry.eventDigest!,
+      inheritedEventCount: targetEntry.inheritedEventCount!,
+    }
+    const deltaBundle = validateSyncSessionBundle(await source.service.exportEntries(
+      [key],
+      sourceManifest.digest,
+      [prefix],
+    ))
+
+    expect(deltaBundle.entries[0]?.eventDelta).toMatchObject({
+      baseEventCount: targetEntry.eventCount,
+      baseEventDigest: targetEntry.eventDigest,
+      fullEventCount: sourceEntry.eventCount,
+    })
+    expect(deltaBundle.entries[0]?.events?.map((event) => event.seq)).toEqual([targetEntry.eventCount])
+    await expect(target.service.applyBundle(
+      deltaBundle,
+      'offline archive',
+      'p-0123456789abcdef01234567',
+      { importedVia: 'offline' },
+    )).rejects.toMatchObject({ code: 'manifest-invalid' })
+
+    const applied = await target.service.applyBundle(deltaBundle, 'source peer', 'p-0123456789abcdef01234567')
+    const current = Object.values(target.state.read().records).find((metadata) =>
+      metadata.kind === 'session' && metadata.originEntityId === String(sourceSessionId) && !metadata.deleted,
+    )
+    const imported = current && target.persistence.sessions.get(current.localEntityId)
+
+    expect(applied).toMatchObject({ created: 1, archived: 1 })
+    expect(imported?.events.map((event) => event.seq)).toEqual([0, 1, 2])
+
+    const badPrefixBundle = validateSyncSessionBundle(await source.service.exportEntries(
+      [key],
+      sourceManifest.digest,
+      [{ ...prefix, eventDigest: `sha256:${'0'.repeat(64)}` }],
+    ))
+    expect(badPrefixBundle.entries[0]?.eventDelta).toBeUndefined()
+    expect(badPrefixBundle.entries[0]?.events).toHaveLength(sourceEntry.eventCount)
+
+    const mismatchTarget = createEnvironment('target')
+    await mismatchTarget.service.applyBundle(initialBundle, 'source peer', 'p-0123456789abcdef01234567')
+    const mismatchManifest = await mismatchTarget.service.exportManifest()
+    const mismatchEntry = mismatchManifest.entries.find((entry) => entry.metadata.originEntityId === String(sourceSessionId))!
+    mismatchTarget.persistence.mutateEvent(mismatchEntry.metadata.localEntityId, (event) => ({ ...event, time: event.time + 1 }))
+    const staleDelta = await source.service.exportEntries([key], sourceManifest.digest, [{
+      key,
+      eventCount: mismatchEntry.eventCount!,
+      eventDigest: mismatchEntry.eventDigest!,
+      inheritedEventCount: mismatchEntry.inheritedEventCount!,
+    }])
+    expect(staleDelta.entries[0]?.eventDelta).toBeDefined()
+    await expect(mismatchTarget.service.applyBundle(staleDelta, 'source peer', 'p-0123456789abcdef01234567'))
+      .rejects.toMatchObject({ code: 'session-delta-prefix' })
+  })
+
   it('transfers spill content when the local provider lacks stream methods', async () => {
     const source = createEnvironment('source')
     const target = createEnvironment('target')
@@ -917,6 +1210,22 @@ describe('session sync', () => {
     const target = createEnvironment('target')
     const selfBundle = makeSyncSessionBundle(target.state.instanceId(), bundle.entries, bundle.skipped)
     await expect(target.service.applyBundle(selfBundle, 'source peer')).rejects.toThrow(/this instance/)
+
+    const shared = validateSyncSessionBundle(await source.service.exportEntries(
+      [syncSessionEntryKey(bundle.entries[0]!)],
+      undefined,
+      [],
+      { sharedObjects: true },
+    ))
+    if (shared.objects !== undefined && shared.objects.length > 0) {
+      const tamperedShared = { ...shared, digest: `sha256:${'0'.repeat(64)}` }
+      expect(() => validateSyncSessionBundle(tamperedShared)).toThrow(SyncSessionError)
+      const corruptedShared = {
+        ...shared,
+        objects: [{ ...shared.objects[0]!, data: Buffer.from('corrupted-payload').toString('base64') }, ...shared.objects.slice(1)],
+      }
+      expect(() => validateSyncSessionBundle(corruptedShared)).toThrow(SyncSessionError)
+    }
   })
 
   it('derives deterministic conflict-free transfers from revisions', () => {

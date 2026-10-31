@@ -8,7 +8,7 @@ import { SyncStateStore } from '../../src/core/sync/stores.js'
 import { NodeRegistry } from '../../src/core/node-registry.js'
 import { WorkspaceBindingsStore } from '../../src/core/workspace-bindings.js'
 import { SyncNodeService } from '../../src/core/sync/node-sync.js'
-import { makeSyncSessionBundle } from '../../src/core/sync/session-sync.js'
+import { makeSyncSessionBundle, makeSyncSessionManifest } from '../../src/core/sync/session-sync.js'
 import type { SyncSessionService } from '../../src/core/sync/session-sync.js'
 
 const homes: string[] = []
@@ -112,7 +112,14 @@ describe('loopback sync handshake route', () => {
       type: 'remote-ssh',
       ssh: { host: 'sync.example', port: 22, username: 'sync', auth: { kind: 'agent' } },
     })
-    const { routes } = createRoute(syncNodes)
+    const sessionBundle = makeSyncSessionBundle(state.instanceId(), [])
+    const sessionSync = {
+      exportBundle: async () => sessionBundle,
+      exportManifest: async () => makeSyncSessionManifest(sessionBundle.instanceId, []),
+      exportEntries: async () => sessionBundle,
+      applyBundle: async () => ({ created: 0, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 }),
+    }
+    const { routes } = createRoute(syncNodes, sessionSync as unknown as SyncSessionService)
     const nodeRoutes = routes[1]
 
     const manifestResponse = await call(nodeRoutes, 'GET', '127.0.0.1', '127.0.0.1:3080', '/api/dshb/sync/internal/nodes/manifest')
@@ -125,6 +132,7 @@ describe('loopback sync handshake route', () => {
 
     expect(manifestResponse.status).toBe(200)
     expect(manifest.records).toHaveLength(1)
+    expect(manifestResponse.body.capabilities).toContain('session-manifest-v1')
     expect(applyResponse.status).toBe(200)
     expect(remoteResponse.status).toBe(403)
     expect(remoteResponse.body).not.toHaveProperty('manifest')
@@ -134,6 +142,8 @@ describe('loopback sync handshake route', () => {
     const bundle = makeSyncSessionBundle('i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', [])
     const sessionSync = {
       exportBundle: async () => bundle,
+      exportManifest: async () => makeSyncSessionManifest(bundle.instanceId, bundle.entries, bundle.skipped),
+      exportEntries: async () => bundle,
       applyBundle: async () => ({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 }),
     }
     const { routes } = createRoute(undefined, sessionSync as unknown as SyncSessionService)
@@ -152,5 +162,33 @@ describe('loopback sync handshake route', () => {
     expect(applied.status).toBe(200)
     expect(applied.body.result).toMatchObject({ created: 1 })
     expect(remote.status).toBe(403)
+  })
+
+  it('serves session manifests and selected entries to loopback callers', async () => {
+    const bundle = makeSyncSessionBundle('i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', [])
+    const manifest = makeSyncSessionManifest(bundle.instanceId, bundle.entries, bundle.skipped)
+    const sessionSync = {
+      exportBundle: async () => bundle,
+      exportManifest: async () => manifest,
+      exportEntries: async (keys: string[], manifestDigest: string) => {
+        expect(keys).toEqual(['entry-key'])
+        expect(manifestDigest).toBe(manifest.digest)
+        return bundle
+      },
+      applyBundle: async () => ({ created: 0, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 }),
+    }
+    const { routes } = createRoute(undefined, sessionSync as unknown as SyncSessionService)
+    const handshake = await call(routes[0]!, 'GET', '127.0.0.1', '127.0.0.1:3080', '/api/dshb/sync/internal/handshake')
+    const sessionRoutes = routes[1]!
+    const manifestResponse = await call(sessionRoutes, 'GET', '127.0.0.1', '127.0.0.1:3080', '/api/dshb/sync/internal/sessions/manifest')
+    const entriesResponse = await call(sessionRoutes, 'POST', '127.0.0.1', '127.0.0.1:3080', '/api/dshb/sync/internal/sessions/entries', {
+      keys: ['entry-key'],
+      manifestDigest: manifest.digest,
+    })
+
+    expect(handshake.body.capabilities).toContain('session-manifest-v1')
+    expect(handshake.body.capabilities).toContain('session-event-tail-delta-v1')
+    expect(manifestResponse.body.manifest).toEqual(manifest)
+    expect(entriesResponse.body.bundle).toEqual(bundle)
   })
 })

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { SyncSshSession, SyncSshTransport } from '../../src/core/sync/ssh-transport.js'
+import { SyncSessionDeltaPrefixError, SyncSshSession, SyncSshTransport } from '../../src/core/sync/ssh-transport.js'
 import { SyncFrameDecoder, encodeSyncControlFrame, encodeSyncDataFrame } from '../../src/core/sync/protocol.js'
 import type { SyncPeer } from '../../src/core/sync/model.js'
 
@@ -56,7 +56,8 @@ describe('SSH framed node transport', () => {
       instanceId: 'i-remote',
       records: [{ metadata: { kind: 'node', originInstanceId: 'i-remote', originEntityId: 'n1' } }],
     }
-    const json = Buffer.from(JSON.stringify({ ok: true, manifest }))
+    const capabilities = ['node-sync', 'session-manifest-v1', 'session-event-tail-delta-v1']
+    const json = Buffer.from(JSON.stringify({ ok: true, manifest, capabilities }))
     const middle = Math.floor(json.length / 2)
     const frames = [
       encodeSyncControlFrame({ kind: 'response', status: 200, bodyMode: 'data' }),
@@ -69,7 +70,7 @@ describe('SSH framed node transport', () => {
 
     const result = await transport.fetchNodeManifest(peer.id)
 
-    expect(result).toEqual(manifest)
+    expect(result).toEqual({ ...manifest, capabilities })
     expect(closed()).toBe(true)
     expect(decodeWrites(writes)).toEqual([{
       kind: 'control',
@@ -114,6 +115,50 @@ describe('SSH framed node transport', () => {
     expect(closed()).toBe(true)
   })
 
+  it('receives a session manifest from the remote helper protocol', async () => {
+    const manifest = { protocolVersion: 1, instanceId: 'i-remote', entries: [], skipped: [], digest: 'sha256:manifest' }
+    const json = Buffer.from(JSON.stringify({ ok: true, manifest }))
+    const { session, writes } = createSession([
+      encodeSyncControlFrame({ kind: 'response', status: 200, bodyMode: 'data' }),
+      encodeSyncDataFrame(0, json),
+      encodeSyncControlFrame({ kind: 'response-end' }),
+    ])
+    const transport = new TestTransport(session)
+
+    await expect(transport.fetchSessionManifest(peer.id)).resolves.toEqual(manifest)
+    expect(decodeWrites(writes)).toEqual([{
+      kind: 'control',
+      value: { kind: 'request', protocolVersion: 1, operation: 'session-manifest', port: 3090 },
+    }])
+  })
+
+  it('posts a selected session entry key to the remote helper protocol', async () => {
+    const bundle = { protocolVersion: 1, instanceId: 'i-remote', entries: [], skipped: [], digest: 'sha256:empty' }
+    const json = Buffer.from(JSON.stringify({ ok: true, bundle }))
+    const { session, writes } = createSession([
+      encodeSyncControlFrame({ kind: 'response', status: 200, bodyMode: 'data' }),
+      encodeSyncDataFrame(0, json),
+      encodeSyncControlFrame({ kind: 'response-end' }),
+    ])
+    const transport = new TestTransport(session)
+
+    await expect(transport.fetchSessionEntries(peer.id, ['entry-key'], 'sha256:manifest')).resolves.toEqual(bundle)
+
+    const frames = decodeWrites(writes)
+    expect(frames[0]).toEqual({
+      kind: 'control',
+      value: { kind: 'request', protocolVersion: 1, operation: 'session-entries', port: 3090 },
+    })
+    expect(frames[1]?.kind).toBe('data')
+    const body = Buffer.concat(frames.filter((frame) => frame.kind === 'data').map((frame) => frame.kind === 'data' ? frame.data : Buffer.alloc(0)))
+    expect(JSON.parse(body.toString('utf8'))).toEqual({
+      keys: ['entry-key'],
+      manifestDigest: 'sha256:manifest',
+      prefixes: [],
+    })
+    expect(frames.at(-1)).toEqual({ kind: 'control', value: { kind: 'request-end' } })
+  })
+
   it('sends a session apply bundle and validates all durable counts', async () => {
     const result = { created: 1, updated: 2, archived: 3, deleted: 4, skipped: 5, unmapped: 6 }
     const { session, writes, closed } = createSession([
@@ -134,5 +179,19 @@ describe('SSH framed node transport', () => {
     expect(JSON.parse(body.toString('utf8'))).toEqual({ bundle, sourceName: 'source', peerId: peer.id })
     expect(frames.at(-1)).toEqual({ kind: 'control', value: { kind: 'request-end' } })
     expect(closed()).toBe(true)
+  })
+
+  it('surfaces a stale delta prefix response for full-bundle fallback', async () => {
+    const { session } = createSession([
+      encodeSyncControlFrame({
+        kind: 'response',
+        status: 409,
+        body: { ok: false, code: 'session-delta-prefix', error: 'prefix changed' },
+      }),
+    ])
+    const transport = new TestTransport(session)
+    const bundle = { protocolVersion: 1, instanceId: 'i-source', entries: [], skipped: [], digest: 'sha256:test' }
+
+    await expect(transport.applySessionBundle(peer.id, bundle, 'source')).rejects.toBeInstanceOf(SyncSessionDeltaPrefixError)
   })
 })

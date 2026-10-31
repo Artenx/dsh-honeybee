@@ -10,6 +10,8 @@ const PATHS = {
   'node-manifest': { path: '/api/dshb/sync/internal/nodes/manifest', method: 'GET' },
   'node-apply': { path: '/api/dshb/sync/internal/nodes/apply', method: 'POST' },
   'session-bundle': { path: '/api/dshb/sync/internal/sessions/bundle', method: 'GET' },
+  'session-manifest': { path: '/api/dshb/sync/internal/sessions/manifest', method: 'GET' },
+  'session-entries': { path: '/api/dshb/sync/internal/sessions/entries', method: 'POST' },
   'session-apply': { path: '/api/dshb/sync/internal/sessions/apply', method: 'POST' },
 }
 const input = []
@@ -84,7 +86,7 @@ function parseRequest(buffer) {
   }
   if (!Number.isInteger(request.port) || request.port < 1 || request.port > 65535) throw new Error('invalid loopback port')
   const operation = PATHS[request.operation]
-  if (request.operation === 'node-apply' || request.operation === 'session-apply') {
+  if (request.operation === 'node-apply' || request.operation === 'session-entries' || request.operation === 'session-apply') {
     const last = frames[frames.length - 1]
     if (!last || last.kind !== 'control' || last.value.kind !== 'request-end') throw new Error('apply request terminator required')
     if (frames.slice(1, -1).some((frame) => frame.kind !== 'data')) throw new Error('invalid apply request body')
@@ -113,7 +115,8 @@ async function run() {
     })
   }
 
-  if (request.operation === 'node-manifest' || request.operation === 'session-bundle') {
+  if (request.operation === 'node-manifest' || request.operation === 'session-bundle' ||
+      request.operation === 'session-manifest' || request.operation === 'session-entries') {
     await writeStdout(encodeControl({ kind: 'response', status: response.status, bodyMode: 'data' }))
     if (!response.body) throw new Error('manifest response body missing')
     var sequence = 0
@@ -133,8 +136,11 @@ async function run() {
 
   var text = await response.text()
   if (Buffer.byteLength(text, 'utf8') > MAX_CONTROL) throw new Error('response control frame too large')
-  await writeStdout(encodeControl({ kind: 'response', status: response.status, body: JSON.parse(text) }))
-  if (!response.ok) process.exitCode = 1
+  var responseBody = JSON.parse(text)
+  await writeStdout(encodeControl({ kind: 'response', status: response.status, body: responseBody }))
+  var recoverableDeltaMismatch = request.operation === 'session-apply' && response.status === 409 &&
+    responseBody && responseBody.code === 'session-delta-prefix'
+  if (!response.ok && !recoverableDeltaMismatch) process.exitCode = 1
 }
 
 process.stdin.on('data', (chunk) => {

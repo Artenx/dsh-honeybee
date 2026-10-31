@@ -17,7 +17,7 @@ import {
   type SyncFrame,
 } from './protocol.js'
 import { REMOTE_SYNC_HELPER_COMMAND } from './remote-helper.js'
-import type { SyncSessionApplyResult, SyncSessionBundle } from './session-sync.js'
+import type { SyncSessionApplyResult, SyncSessionBundle, SyncSessionEventPrefix, SyncSessionManifest } from './session-sync.js'
 
 const SSH_READY_TIMEOUT_MS = 30_000
 const DEFAULT_REMOTE_WEB_PORT = 3080
@@ -31,10 +31,21 @@ export class SyncSshProbeError extends Error {
   }
 }
 
+export class SyncSessionDeltaPrefixError extends Error {
+  constructor() {
+    super('remote session event prefix changed during transfer')
+    this.name = 'SyncSessionDeltaPrefixError'
+  }
+}
+
 export interface SyncRemoteHandshake {
   protocolVersion: number
   instanceId: string
   capabilities: string[]
+}
+
+export interface SyncRemoteNodeManifest extends SyncNodeManifest {
+  capabilities?: string[]
 }
 
 export class SyncSshSession {
@@ -218,71 +229,18 @@ export class SyncSshTransport {
     }
   }
 
-  async fetchNodeManifest(peerId: string): Promise<SyncNodeManifest> {
-    const { peer, session } = await this.openSession(peerId)
-    try {
-      await session.sendControl({
-        kind: 'request',
-        protocolVersion: SYNC_PROTOCOL_VERSION,
-        operation: 'node-manifest',
-        port: peer.remoteWebPort ?? DEFAULT_REMOTE_WEB_PORT,
-      })
-      session.endInput()
-
-      let responseStatus: number | undefined
-      let bodyMode: string | undefined
-      let responseEnded = false
-      let totalBytes = 0
-      const chunks: Buffer[] = []
-      for await (const frame of session.readFrames()) {
-        if (frame.kind === 'control') {
-          if (frame.value.kind === 'error') throw new SyncSshProbeError('helper')
-          if (frame.value.kind === 'response' && responseStatus === undefined) {
-            responseStatus = typeof frame.value.status === 'number' ? frame.value.status : undefined
-            bodyMode = typeof frame.value.bodyMode === 'string' ? frame.value.bodyMode : undefined
-            continue
-          }
-          if (frame.value.kind === 'response-end' && responseStatus !== undefined && !responseEnded) {
-            responseEnded = true
-            continue
-          }
-          throw new SyncProtocolError('unexpected node manifest control frame')
-        }
-        if (responseStatus === undefined || bodyMode !== 'data' || responseEnded) {
-          throw new SyncProtocolError('unexpected node manifest data frame')
-        }
-        totalBytes += frame.data.length
-        if (totalBytes > MAX_SYNC_TRANSFER_BYTES) throw new SyncProtocolError('node manifest exceeds transfer limit')
-        chunks.push(frame.data)
-      }
-      if (responseStatus !== 200 || !responseEnded) throw new SyncSshProbeError('helper')
-
-      let value: unknown
-      try {
-        value = JSON.parse(Buffer.concat(chunks, totalBytes).toString('utf8'))
-      } catch {
-        throw new SyncProtocolError('node manifest response is invalid JSON')
-      }
-      if (value === null || typeof value !== 'object' || Array.isArray(value) || (value as Record<string, unknown>).ok !== true) {
-        throw new SyncSshProbeError('helper')
-      }
-      const manifest = (value as { manifest?: unknown }).manifest
-      if (
-        manifest === null || typeof manifest !== 'object' || Array.isArray(manifest) ||
-        (manifest as Record<string, unknown>).protocolVersion !== SYNC_PROTOCOL_VERSION ||
-        typeof (manifest as Record<string, unknown>).instanceId !== 'string' ||
-        !Array.isArray((manifest as Record<string, unknown>).records)
-      ) {
-        throw new SyncSshProbeError('protocol')
-      }
-      return manifest as SyncNodeManifest
-    } catch (error) {
-      if (error instanceof SyncSshProbeError) throw error
-      if (error instanceof SyncProtocolError) throw new SyncSshProbeError('protocol')
-      throw new SyncSshProbeError('helper')
-    } finally {
-      session.close()
+  async fetchNodeManifest(peerId: string): Promise<SyncRemoteNodeManifest> {
+    const value = await this.fetchDataOperation(peerId, 'node-manifest')
+    if (!isRecord(value) || value.ok !== true || !isRecord(value.manifest)) throw new SyncSshProbeError('helper')
+    const manifest = value.manifest
+    if (manifest.protocolVersion !== SYNC_PROTOCOL_VERSION || typeof manifest.instanceId !== 'string' || !Array.isArray(manifest.records)) {
+      throw new SyncSshProbeError('protocol')
     }
+    const capabilities = value.capabilities === undefined ? undefined : value.capabilities
+    if (capabilities !== undefined && (!Array.isArray(capabilities) || !capabilities.every((item) => typeof item === 'string'))) {
+      throw new SyncSshProbeError('protocol')
+    }
+    return { ...manifest, ...(capabilities ? { capabilities } : {}) } as unknown as SyncRemoteNodeManifest
   }
 
   async applyNodeManifest(
@@ -332,67 +290,41 @@ export class SyncSshTransport {
   }
 
   async fetchSessionBundle(peerId: string): Promise<SyncSessionBundle> {
-    const { peer, session } = await this.openSession(peerId)
-    try {
-      await session.sendControl({
-        kind: 'request',
-        protocolVersion: SYNC_PROTOCOL_VERSION,
-        operation: 'session-bundle',
-        port: peer.remoteWebPort ?? DEFAULT_REMOTE_WEB_PORT,
-      })
-      session.endInput()
-
-      let responseStatus: number | undefined
-      let bodyMode: string | undefined
-      let responseEnded = false
-      let totalBytes = 0
-      const chunks: Buffer[] = []
-      for await (const frame of session.readFrames()) {
-        if (frame.kind === 'control') {
-          if (frame.value.kind === 'error') throw new SyncSshProbeError('helper')
-          if (frame.value.kind === 'response' && responseStatus === undefined) {
-            responseStatus = typeof frame.value.status === 'number' ? frame.value.status : undefined
-            bodyMode = typeof frame.value.bodyMode === 'string' ? frame.value.bodyMode : undefined
-            continue
-          }
-          if (frame.value.kind === 'response-end' && responseStatus !== undefined && !responseEnded) {
-            responseEnded = true
-            continue
-          }
-          throw new SyncProtocolError('unexpected session bundle control frame')
-        }
-        if (responseStatus === undefined || bodyMode !== 'data' || responseEnded) {
-          throw new SyncProtocolError('unexpected session bundle data frame')
-        }
-        totalBytes += frame.data.length
-        if (totalBytes > MAX_SYNC_TRANSFER_BYTES) throw new SyncProtocolError('session bundle exceeds transfer limit')
-        chunks.push(frame.data)
-      }
-      if (responseStatus !== 200 || !responseEnded) throw new SyncSshProbeError('helper')
-      let value: unknown
-      try {
-        value = JSON.parse(Buffer.concat(chunks, totalBytes).toString('utf8'))
-      } catch {
-        throw new SyncProtocolError('session bundle response is invalid JSON')
-      }
-      if (!isRecord(value) || value.ok !== true || !isRecord(value.bundle)) throw new SyncSshProbeError('helper')
-      const bundle = value.bundle
-      if (
-        bundle.protocolVersion !== 1 || typeof bundle.instanceId !== 'string' ||
-        !Array.isArray(bundle.entries) || !Array.isArray(bundle.skipped) || typeof bundle.digest !== 'string'
-      ) throw new SyncSshProbeError('protocol')
-      return bundle as unknown as SyncSessionBundle
-    } catch (error) {
-      if (error instanceof SyncSshProbeError) throw error
-      if (error instanceof SyncProtocolError) {
-        const probe = new SyncSshProbeError('protocol')
-        ;(probe as Error & { detail?: string }).detail = error.message
-        throw probe
-      }
-      throw new SyncSshProbeError('helper')
-    } finally {
-      session.close()
+    const value = await this.fetchDataOperation(peerId, 'session-bundle')
+    if (!isRecord(value) || value.ok !== true || !isRecord(value.bundle)) throw new SyncSshProbeError('helper')
+    const bundle = value.bundle
+    if (bundle.protocolVersion !== 1 || typeof bundle.instanceId !== 'string' ||
+      !Array.isArray(bundle.entries) || !Array.isArray(bundle.skipped) || typeof bundle.digest !== 'string') {
+      throw new SyncSshProbeError('protocol')
     }
+    return bundle as unknown as SyncSessionBundle
+  }
+
+  async fetchSessionManifest(peerId: string): Promise<SyncSessionManifest> {
+    const value = await this.fetchDataOperation(peerId, 'session-manifest')
+    if (!isRecord(value) || value.ok !== true || !isRecord(value.manifest)) throw new SyncSshProbeError('helper')
+    const manifest = value.manifest
+    if (manifest.protocolVersion !== 1 || typeof manifest.instanceId !== 'string' ||
+      !Array.isArray(manifest.entries) || !Array.isArray(manifest.skipped) || typeof manifest.digest !== 'string') {
+      throw new SyncSshProbeError('protocol')
+    }
+    return manifest as unknown as SyncSessionManifest
+  }
+
+  async fetchSessionEntries(
+    peerId: string,
+    keys: readonly string[],
+    manifestDigest: string,
+    prefixes: readonly SyncSessionEventPrefix[] = [],
+  ): Promise<SyncSessionBundle> {
+    const value = await this.fetchDataOperation(peerId, 'session-entries', { keys, manifestDigest, prefixes })
+    if (!isRecord(value) || value.ok !== true || !isRecord(value.bundle)) throw new SyncSshProbeError('helper')
+    const bundle = value.bundle
+    if (bundle.protocolVersion !== 1 || typeof bundle.instanceId !== 'string' ||
+      !Array.isArray(bundle.entries) || !Array.isArray(bundle.skipped) || typeof bundle.digest !== 'string') {
+      throw new SyncSshProbeError('protocol')
+    }
+    return bundle as unknown as SyncSessionBundle
   }
 
   async applySessionBundle(peerId: string, bundle: SyncSessionBundle, sourceName: string): Promise<SyncSessionApplyResult> {
@@ -418,6 +350,8 @@ export class SyncSshTransport {
         response = frame.value
       }
       if (!response || response.kind === 'error') throw new SyncSshProbeError('helper')
+      if (response.kind === 'response' && response.status === 409 && isRecord(response.body) &&
+        response.body.code === 'session-delta-prefix') throw new SyncSessionDeltaPrefixError()
       if (response.kind !== 'response' || response.status !== 200 || response.body === null || typeof response.body !== 'object') {
         throw new SyncSshProbeError('helper')
       }
@@ -429,6 +363,7 @@ export class SyncSshTransport {
       }
       return result as unknown as SyncSessionApplyResult
     } catch (error) {
+      if (error instanceof SyncSessionDeltaPrefixError) throw error
       if (error instanceof SyncSshProbeError) throw error
       if (error instanceof SyncProtocolError) throw new SyncSshProbeError('protocol')
       throw new SyncSshProbeError('helper')
@@ -441,6 +376,74 @@ export class SyncSshTransport {
     const { peer } = await this.peerManager.connectionData(peerId)
     const fingerprint = this.hostKeyChallenges.acceptObserved(peer)
     await this.peerManager.pinHostKey(peerId, fingerprint)
+  }
+
+  private async fetchDataOperation(
+    peerId: string,
+    operation: 'node-manifest' | 'session-bundle' | 'session-manifest' | 'session-entries',
+    requestBody?: Record<string, unknown>,
+  ): Promise<unknown> {
+    const body = requestBody === undefined ? undefined : Buffer.from(JSON.stringify(requestBody), 'utf8')
+    if (body && body.length > MAX_SYNC_TRANSFER_BYTES) throw new SyncSshProbeError('protocol')
+    const { peer, session } = await this.openSession(peerId)
+    try {
+      await session.sendControl({
+        kind: 'request',
+        protocolVersion: SYNC_PROTOCOL_VERSION,
+        operation,
+        port: peer.remoteWebPort ?? DEFAULT_REMOTE_WEB_PORT,
+      })
+      if (body) {
+        for (let offset = 0, sequence = 0; offset < body.length; offset += MAX_SYNC_DATA_CHUNK_BYTES, sequence += 1) {
+          await session.sendData(sequence, body.subarray(offset, Math.min(offset + MAX_SYNC_DATA_CHUNK_BYTES, body.length)))
+        }
+        await session.sendControl({ kind: 'request-end' })
+      }
+      session.endInput()
+
+      let responseStatus: number | undefined
+      let bodyMode: string | undefined
+      let responseEnded = false
+      let totalBytes = 0
+      const chunks: Buffer[] = []
+      for await (const frame of session.readFrames()) {
+        if (frame.kind === 'control') {
+          if (frame.value.kind === 'error') throw new SyncSshProbeError('helper')
+          if (frame.value.kind === 'response' && responseStatus === undefined) {
+            responseStatus = typeof frame.value.status === 'number' ? frame.value.status : undefined
+            bodyMode = typeof frame.value.bodyMode === 'string' ? frame.value.bodyMode : undefined
+            continue
+          }
+          if (frame.value.kind === 'response-end' && responseStatus !== undefined && !responseEnded) {
+            responseEnded = true
+            continue
+          }
+          throw new SyncProtocolError(`unexpected ${operation} control frame`)
+        }
+        if (responseStatus === undefined || bodyMode !== 'data' || responseEnded) {
+          throw new SyncProtocolError(`unexpected ${operation} data frame`)
+        }
+        totalBytes += frame.data.length
+        if (totalBytes > MAX_SYNC_TRANSFER_BYTES) throw new SyncProtocolError(`${operation} exceeds transfer limit`)
+        chunks.push(frame.data)
+      }
+      if (responseStatus !== 200 || !responseEnded) throw new SyncSshProbeError('helper')
+      try {
+        return JSON.parse(Buffer.concat(chunks, totalBytes).toString('utf8')) as unknown
+      } catch {
+        throw new SyncProtocolError(`${operation} response is invalid JSON`)
+      }
+    } catch (error) {
+      if (error instanceof SyncSshProbeError) throw error
+      if (error instanceof SyncProtocolError) {
+        const probe = new SyncSshProbeError('protocol')
+        ;(probe as Error & { detail?: string }).detail = error.message
+        throw probe
+      }
+      throw new SyncSshProbeError('helper')
+    } finally {
+      session.close()
+    }
   }
 
   private async requestHandshake(session: SyncSshSession, port: number): Promise<SyncRemoteHandshake> {

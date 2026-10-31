@@ -59,6 +59,9 @@ export function apply(ctx: Context): void {
     () => ctx.get('attachments') as never,
     () => ctx.get('spillStore') as never,
     sharedSessionInstructionSnapshotStore(),
+    undefined,
+    undefined,
+    process.env.DSH_HOME,
   )
   const syncOfflineArchives = new SyncOfflineArchiveService(syncNodes, syncSessions, undefined, undefined, syncState)
   try {

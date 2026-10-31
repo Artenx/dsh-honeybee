@@ -189,6 +189,7 @@ async function createInstance(name: string): Promise<TestInstance> {
     new MemoryInstructions() as never,
     new SyncSessionJournalStore(home),
     () => 1_800_000_000_000,
+    home,
   )
   const offline = new SyncOfflineArchiveService(nodes, sessions, home, undefined, state)
   await withHome(home, async () => { await registry.list() })

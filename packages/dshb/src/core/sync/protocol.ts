@@ -1,6 +1,9 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 
 export const SYNC_PROTOCOL_VERSION = 1
+export const SYNC_SESSION_MANIFEST_CAPABILITY = 'session-manifest-v1'
+export const SYNC_SESSION_EVENT_TAIL_CAPABILITY = 'session-event-tail-delta-v1'
+export const SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY = 'session-bundle-objects-v1'
 export const MAX_SYNC_CONTROL_FRAME_BYTES = 64 * 1024
 export const MAX_SYNC_DATA_CHUNK_BYTES = 1024 * 1024
 export const MAX_SYNC_TRANSFER_BYTES = 100 * 1024 * 1024 * 1024
