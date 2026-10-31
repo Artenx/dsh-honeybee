@@ -198,15 +198,27 @@ function assertSelectedSessionEntries(
       expectedEntry.inheritedEventCount !== undefined
     const expectedWorkspace = metadata.workspaceOrigin
     const currentWorkspace = current?.workspaceOrigin
-    if (!current || current.localEntityId !== metadata.localEntityId ||
-      compareSyncRevision(current.revision, metadata.revision) !== 0 ||
-      current.contentDigest !== metadata.contentDigest || current.stateDigest !== metadata.stateDigest ||
-      Boolean(current.deleted) !== Boolean(metadata.deleted) ||
-      expectedWorkspace?.originInstanceId !== currentWorkspace?.originInstanceId ||
-      expectedWorkspace?.originEntityId !== currentWorkspace?.originEntityId ||
-      (hasExpectedEventSummary && (!eventSummary || eventSummary.eventCount !== expectedEntry.eventCount ||
-        eventSummary.eventDigest !== expectedEntry.eventDigest || eventSummary.inheritedEventCount !== expectedEntry.inheritedEventCount))) {
-      throw new SyncCoordinatorError('session-manifest-stale', `${side}会话内容在 manifest 之后发生变化`)
+    const mismatches: string[] = []
+    if (!current) mismatches.push('entry-missing')
+    else {
+      if (current.localEntityId !== metadata.localEntityId) mismatches.push('localEntityId')
+      if (compareSyncRevision(current.revision, metadata.revision) !== 0) mismatches.push('revision')
+      if (current.contentDigest !== metadata.contentDigest) mismatches.push('contentDigest')
+      if (current.stateDigest !== metadata.stateDigest) mismatches.push('stateDigest')
+      if (Boolean(current.deleted) !== Boolean(metadata.deleted)) mismatches.push('deleted')
+      if (expectedWorkspace?.originInstanceId !== currentWorkspace?.originInstanceId ||
+        expectedWorkspace?.originEntityId !== currentWorkspace?.originEntityId) mismatches.push('workspaceOrigin')
+      if (hasExpectedEventSummary && (!eventSummary || eventSummary.eventCount !== expectedEntry.eventCount ||
+        eventSummary.eventDigest !== expectedEntry.eventDigest || eventSummary.inheritedEventCount !== expectedEntry.inheritedEventCount)) {
+        mismatches.push('eventSummary')
+      }
+    }
+    if (mismatches.length > 0) {
+      const detail = current && hasExpectedEventSummary
+        ? ` expected(eventCount=${expectedEntry.eventCount}, inherited=${expectedEntry.inheritedEventCount}, digest=${expectedEntry.eventDigest})` +
+          ` actual(${eventSummary ? `eventCount=${eventSummary.eventCount}, inherited=${eventSummary.inheritedEventCount}, digest=${eventSummary.eventDigest}` : 'no-events'})`
+        : ''
+      throw new SyncCoordinatorError('session-manifest-stale', `${side}会话内容在 manifest 之后发生变化（key=${key}，字段=${mismatches.join(',')}）${detail}`)
     }
   }
 }

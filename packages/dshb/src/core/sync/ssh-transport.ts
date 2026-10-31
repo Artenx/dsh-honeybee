@@ -20,6 +20,7 @@ import { REMOTE_SYNC_HELPER_COMMAND } from './remote-helper.js'
 import type { SyncSessionApplyResult, SyncSessionBundle, SyncSessionEventPrefix, SyncSessionManifest } from './session-sync.js'
 
 const SSH_READY_TIMEOUT_MS = 30_000
+const SSH_READ_IDLE_TIMEOUT_MS = 60_000
 const DEFAULT_REMOTE_WEB_PORT = 3080
 
 export type SyncSshErrorCategory = 'auth' | 'network' | 'hostkey' | 'timeout' | 'helper' | 'protocol'
@@ -82,13 +83,23 @@ export class SyncSshSession {
     this.channel.end()
   }
 
-  async *readFrames(): AsyncGenerator<SyncFrame> {
+  async *readFrames(idleTimeoutMs = SSH_READ_IDLE_TIMEOUT_MS): AsyncGenerator<SyncFrame> {
     if (this.reading) throw new SyncProtocolError('SSH sync channel can only be read once')
     this.reading = true
     const channel = this.channel
     const decoder = this.decoder
+    let idleDeadline: NodeJS.Timeout | undefined
+    const armIdleDeadline = (): void => {
+      clearTimeout(idleDeadline)
+      idleDeadline = setTimeout(() => {
+        this.pendingError = new Error(`SSH channel idle for more than ${Math.round(idleTimeoutMs / 1000)}s`)
+        channel.destroy()
+      }, idleTimeoutMs)
+    }
     try {
+      armIdleDeadline()
       for await (const chunk of channel.stdout as AsyncIterable<Buffer>) {
+        armIdleDeadline()
         for (const frame of decoder.push(Buffer.from(chunk))) yield frame
       }
       if (this.pendingError) throw new SyncProtocolError(`SSH channel error: ${this.pendingError.message}`)
@@ -97,6 +108,8 @@ export class SyncSshSession {
       if (error instanceof SyncProtocolError) throw error
       const detail = this.pendingError ? this.pendingError.message : error instanceof Error ? error.message : 'unknown error'
       throw new SyncProtocolError(`SSH channel read failed: ${detail}`)
+    } finally {
+      clearTimeout(idleDeadline)
     }
   }
 
@@ -125,7 +138,7 @@ export function buildSyncSshConnectConfig(
     username: peer.username,
     hostHash: 'sha256',
     readyTimeout: SSH_READY_TIMEOUT_MS,
-    keepaliveInterval: 0,
+    keepaliveInterval: 15_000,
     hostVerifier: (sha256Hex: string): boolean => {
       try {
         const decision = inspectSyncHostKey(peer, sha256Hex, challenges)
@@ -182,10 +195,19 @@ export class SyncSshTransport {
         const finish = (error?: unknown): void => {
           if (settled) return
           settled = true
+          clearTimeout(readyDeadline)
           if (error) reject(error)
           else resolve()
         }
 
+        // ssh2's readyTimeout can be defeated by stalls behind transparent
+        // proxies; this deadline guarantees the connect promise settles.
+        const readyDeadline = setTimeout(() => {
+          const timeout = new Error('Timed out while waiting for SSH handshake')
+          ;(timeout as Error & { level?: string }).level = 'client-timeout'
+          finish(timeout)
+          client.end()
+        }, SSH_READY_TIMEOUT_MS * 2)
         client.once('ready', () => finish())
         client.on('error', (error: Error) => finish(challenge ?? error))
         const config = buildSyncSshConnectConfig(peer, secrets, this.hostKeyChallenges, (error) => {
@@ -200,7 +222,12 @@ export class SyncSshTransport {
       })
 
       const channel = await new Promise<ClientChannel>((resolve, reject) => {
-          client.exec(REMOTE_SYNC_HELPER_COMMAND, (error, opened) => {
+        const execDeadline = setTimeout(() => {
+          reject(new Error('Timed out while waiting for the sync helper channel'))
+          client.end()
+        }, SSH_READY_TIMEOUT_MS)
+        client.exec(REMOTE_SYNC_HELPER_COMMAND, (error, opened) => {
+          clearTimeout(execDeadline)
           if (error) reject(error)
           else resolve(opened)
         })
