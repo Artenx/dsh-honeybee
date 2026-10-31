@@ -254,7 +254,15 @@ export function registerWorkspaceInstructionMenu(ctx: ClientContext): void {
     }
   }
 
-  const observer = new MutationObserver(scan)
+  // 长会话流式输出期间每秒几十批变更；rAF 合帧避免每批都做同步全文档扫描。
+  let raf = 0
+  const observer = new MutationObserver(() => {
+    if (raf !== 0) return
+    raf = requestAnimationFrame(() => {
+      raf = 0
+      scan()
+    })
+  })
   observer.observe(document.body, { childList: true, subtree: true })
   scan()
 }

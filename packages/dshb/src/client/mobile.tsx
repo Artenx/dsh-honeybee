@@ -479,9 +479,13 @@ function installStatsLine(ctx: ClientContext): void {
       document.querySelectorAll(`[${FRAME_ATTR}="stats"]`).forEach((el) => {
         if (!el.isConnected || !STATS_LINE_RE.test((el.textContent ?? '').trim())) el.removeAttribute(FRAME_ATTR)
       })
-      // 候选：含统计特征的短文本元素（全文档搜索，含 composer 内的 stats line），取最浅容器标记
+      // 统计行位于 composer 区；优先在 composer 内做有界扫描，避免流式输出期间
+      // 每批 DOM 变更都全文档扫 span/div（长会话下每次都是 O(全文档) 的主线程开销）。
+      const composer = document.querySelector('[class*="composerStack"]') ?? document.querySelector('[class*="composer"]')
+      const scope: ParentNode = composer ?? document
+      // 候选：含统计特征的短文本元素（取最浅容器标记）
       // 排除 display:contents（无 box，overflow 无效，会误占最浅候选）
-      const cands = Array.from(document.querySelectorAll('span, div')).filter((el) => {
+      const cands = Array.from(scope.querySelectorAll('span, div')).filter((el) => {
         if (!isStatsText(el)) return false
         if (getComputedStyle(el).display === 'contents') return false
         return true
@@ -501,10 +505,20 @@ function installStatsLine(ctx: ClientContext): void {
       }
     }
     mark()
-    const mo = new MutationObserver(() => { if (narrow.matches) mark() })
+    // 流式输出每秒几十批变更；rAF 合帧避免每批都做同步扫描。
+    let raf = 0
+    const scheduleMark = (): void => {
+      if (raf !== 0 || !narrow.matches) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        mark()
+      })
+    }
+    const mo = new MutationObserver(scheduleMark)
     mo.observe(document.documentElement, { childList: true, subtree: true })
     narrow.addEventListener('change', mark)
     return () => {
+      if (raf !== 0) cancelAnimationFrame(raf)
       mo.disconnect()
       narrow.removeEventListener('change', mark)
     }
@@ -517,36 +531,49 @@ const SHEET_PROPS = [
   'min-width', 'max-width', 'max-height', 'overflow-y', 'box-sizing',
 ] as const
 
+/** 幂等写入 important 内联样式：值未变化时跳过，避免 MutationObserver(attributes) 自触发循环。 */
+function setImportantIfChanged(el: HTMLElement, prop: string, value: string): void {
+  if (el.style.getPropertyValue(prop) === value && el.style.getPropertyPriority(prop) === 'important') return
+  el.style.setProperty(prop, value, 'important')
+}
+
+/** 当前视口下的可视区域（手机键盘弹出时 visualViewport 与布局视口错位）。 */
+function visibleViewport(): { vw: number; vh: number; top: number } {
+  const vv = window.visualViewport
+  if (vv) return { vw: vv.width, vh: vv.offsetTop + vv.height, top: vv.offsetTop }
+  return { vw: window.innerWidth, vh: window.innerHeight, top: 0 }
+}
+
 /** Keep the model menu anchored to its trigger while fitting it in the viewport. */
 function positionAnchoredMenu(el: HTMLElement, triggerRect: DOMRect, maxWidth: number, maxHeight: number): void {
   const margin = 8
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  el.style.setProperty('position', 'fixed', 'important')
-  el.style.setProperty('box-sizing', 'border-box', 'important')
-  el.style.setProperty('left', '0', 'important')
-  el.style.setProperty('right', 'auto', 'important')
-  el.style.setProperty('top', '0', 'important')
-  el.style.setProperty('bottom', 'auto', 'important')
-  el.style.setProperty('min-width', '0', 'important')
-  el.style.setProperty('max-width', `${Math.max(0, Math.min(maxWidth, vw - margin * 2))}px`, 'important')
-  el.style.setProperty('max-height', `${Math.max(0, Math.min(maxHeight, vh - margin * 2))}px`, 'important')
-  el.style.setProperty('overflow-y', 'auto', 'important')
+  const { vw, vh } = visibleViewport()
+  setImportantIfChanged(el, 'position', 'fixed')
+  setImportantIfChanged(el, 'box-sizing', 'border-box')
+  setImportantIfChanged(el, 'left', '0')
+  setImportantIfChanged(el, 'right', 'auto')
+  setImportantIfChanged(el, 'top', '0')
+  setImportantIfChanged(el, 'bottom', 'auto')
+  setImportantIfChanged(el, 'min-width', '0')
+  setImportantIfChanged(el, 'max-width', `${Math.max(0, Math.min(maxWidth, vw - margin * 2))}px`)
+  setImportantIfChanged(el, 'max-height', `${Math.max(0, Math.min(maxHeight, vh - margin * 2))}px`)
+  setImportantIfChanged(el, 'overflow-y', 'auto')
   let width = el.offsetWidth
   let height = el.offsetHeight
-  const spaceAbove = Math.max(0, triggerRect.top - margin * 2)
+  const { top: viewportTop } = visibleViewport()
+  const spaceAbove = Math.max(0, triggerRect.top - viewportTop - margin * 2)
   const spaceBelow = Math.max(0, vh - triggerRect.bottom - margin * 2)
   const expandUp = height <= spaceAbove || spaceAbove >= spaceBelow
   const available = expandUp ? spaceAbove : spaceBelow
   if (height > available) {
-    el.style.setProperty('max-height', `${Math.max(0, available - margin)}px`, 'important')
+    setImportantIfChanged(el, 'max-height', `${Math.max(0, available - margin)}px`)
     height = el.offsetHeight
     width = el.offsetWidth
   }
   const top = expandUp ? triggerRect.top - margin - height : triggerRect.bottom + margin
   const left = Math.max(margin, Math.min(triggerRect.right - width, vw - width - margin))
-  el.style.setProperty('left', `${left}px`, 'important')
-  el.style.setProperty('top', `${Math.max(margin, Math.min(top, vh - height - margin))}px`, 'important')
+  setImportantIfChanged(el, 'left', `${left}px`)
+  setImportantIfChanged(el, 'top', `${Math.max(viewportTop + margin, Math.min(top, vh - height - margin))}px`)
 }
 
 /**
@@ -624,11 +651,17 @@ function clearFixedSheet(el: HTMLElement | null | undefined): void {
 function installModelMenuPosition(ctx: ClientContext): void {
   ctx.effect(() => {
     const narrow = window.matchMedia(NARROW_QUERY)
+    // 上游换 hash 后的语义类兜底查询是全文档扫描；流式期间 MutationObserver
+    // 每帧都触发 sync，用时间窗节流（每 500ms 最多一次）控制兜底成本。
+    let fallbackLast = 0
     // 多 tab 场景可能并存多个模型选择器（各自一个 _menu）；只处理可见的，
     // 避免 document.querySelector 命中隐藏 tab 的菜单而漏掉用户正在看的那个。
     const findMenus = (): HTMLElement[] => {
       const byHash = Array.from(document.querySelectorAll<HTMLElement>('[class*="7KE1Ra_menu"]'))
       if (byHash.length > 0) return byHash
+      const now = Date.now()
+      if (now - fallbackLast < 500) return []
+      fallbackLast = now
       // 上游升级换 hash 后回退：语义类匹配（cellLabel 命中一级 pane，modelName 命中二级）
       return Array.from(document.querySelectorAll<HTMLElement>('[class*="_menu"]')).filter((el) =>
         el.querySelector('[class*="cellLabel"], [class*="modelName"]') !== null,
@@ -702,15 +735,47 @@ function installModelMenuPosition(ctx: ClientContext): void {
     }
     sync()
     const mo = new MutationObserver(() => requestAnimationFrame(sync))
-    mo.observe(document.documentElement, { childList: true, subtree: true })
+    // 监听 style 属性变化：上游 React 重渲染会整体重写 style 声明，清掉我们
+    // 写入的 !important 内联样式；只观察 childList 会对此失明，弹窗位置落回
+    // 上游按布局视口计算的结果，键盘弹出时（视觉视口与布局视口错位）菜单整体
+    // 落在可视区外——这是"弹窗有时出不来"的根因。
+    mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
     narrow.addEventListener('change', sync)
     window.addEventListener('resize', sync)
     window.addEventListener('scroll', sync, true)
+    // 手机键盘弹出/收起只改变 visualViewport，不触发 window resize/scroll；
+    // 监听它保证菜单始终锚定在可视区域内。
+    window.visualViewport?.addEventListener('resize', sync)
+    window.visualViewport?.addEventListener('scroll', sync)
+    // 手机上二级 pane 切换后上游会自动聚焦搜索框并唤起键盘，遮挡刚打开的菜单；
+    // 键盘未开时拦截这类自动聚焦（用户主动点按输入框不受影响）。
+    let lastPointerTarget: Element | null = null
+    const keyboardLikelyOpen = (): boolean => {
+      const vv = window.visualViewport
+      if (!vv) return false
+      return window.innerHeight - vv.height > 150
+    }
+    const onPointerDown = (event: PointerEvent): void => {
+      lastPointerTarget = event.target instanceof Element ? event.target : null
+    }
+    const onFocusIn = (event: FocusEvent): void => {
+      if (!narrow.matches || !(event.target instanceof Element) || keyboardLikelyOpen()) return
+      const input = event.target.closest('input')
+      if (!input || input.closest('[class*="7KE1Ra_menu"], [class*="_menu"]') === null) return
+      if (lastPointerTarget !== null && (lastPointerTarget === input || input.contains(lastPointerTarget))) return
+      input.blur()
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('focusin', onFocusIn, true)
     return () => {
       mo.disconnect()
       narrow.removeEventListener('change', sync)
       window.removeEventListener('resize', sync)
       window.removeEventListener('scroll', sync, true)
+      window.visualViewport?.removeEventListener('resize', sync)
+      window.visualViewport?.removeEventListener('scroll', sync)
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('focusin', onFocusIn, true)
     }
   }, 'dshb-mobile: model menu position')
 }
@@ -723,37 +788,37 @@ function installModelMenuPosition(ctx: ClientContext): void {
 function installContextPanelPosition(ctx: ClientContext): void {
   ctx.effect(() => {
     const narrow = window.matchMedia(NARROW_QUERY)
-    const sync = (): void => {
-      if (!narrow.matches) return
-      const panels = document.querySelectorAll<HTMLElement>('[class*="JObwrW_panel"]')
-      for (const panel of Array.from(panels)) {
-        const root = panel.parentElement
-        if (root === null || !root.className.includes('JObwrW_root')) continue
-        const rootRect = root.getBoundingClientRect()
-        if (rootRect.width === 0 && rootRect.height === 0) continue
-        const gap = 8
-        panel.style.setProperty('position', 'fixed', 'important')
-        panel.style.setProperty('top', 'auto', 'important')
-        panel.style.setProperty('bottom', `${window.innerHeight - rootRect.top + gap}px`, 'important')
-        panel.style.setProperty('left', 'auto', 'important')
-        panel.style.setProperty('right', `${Math.max(gap, window.innerWidth - rootRect.right)}px`, 'important')
-        panel.style.setProperty('max-height', `${Math.max(160, rootRect.top - gap * 2)}px`, 'important')
-        panel.style.setProperty('overflow-y', 'auto', 'important')
-      }
+  const sync = (): void => {
+    if (!narrow.matches) return
+    const panels = document.querySelectorAll<HTMLElement>('[class*="JObwrW_panel"]')
+    for (const panel of Array.from(panels)) {
+      const root = panel.parentElement
+      if (root === null || !root.className.includes('JObwrW_root')) continue
+      const rootRect = root.getBoundingClientRect()
+      if (rootRect.width === 0 && rootRect.height === 0) continue
+      const gap = 8
+      setImportantIfChanged(panel, 'position', 'fixed')
+      setImportantIfChanged(panel, 'top', 'auto')
+      setImportantIfChanged(panel, 'bottom', `${window.innerHeight - rootRect.top + gap}px`)
+      setImportantIfChanged(panel, 'left', 'auto')
+      setImportantIfChanged(panel, 'right', `${Math.max(gap, window.innerWidth - rootRect.right)}px`)
+      setImportantIfChanged(panel, 'max-height', `${Math.max(160, rootRect.top - gap * 2)}px`)
+      setImportantIfChanged(panel, 'overflow-y', 'auto')
     }
-    sync()
-    const mo = new MutationObserver(() => requestAnimationFrame(sync))
-    mo.observe(document.documentElement, { childList: true, subtree: true })
-    narrow.addEventListener('change', sync)
-    window.addEventListener('resize', sync)
-    window.addEventListener('scroll', sync, true)
-    return () => {
-      mo.disconnect()
-      narrow.removeEventListener('change', sync)
-      window.removeEventListener('resize', sync)
-      window.removeEventListener('scroll', sync, true)
-    }
-  }, 'dshb-mobile: context panel position')
+  }
+  sync()
+  const mo = new MutationObserver(() => requestAnimationFrame(sync))
+  mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
+  narrow.addEventListener('change', sync)
+  window.addEventListener('resize', sync)
+  window.addEventListener('scroll', sync, true)
+  return () => {
+    mo.disconnect()
+    narrow.removeEventListener('change', sync)
+    window.removeEventListener('resize', sync)
+    window.removeEventListener('scroll', sync, true)
+  }
+}, 'dshb-mobile: context panel position')
 }
 
 function installMobileTerminalInputFocus(ctx: ClientContext): void {

@@ -696,20 +696,27 @@ export function apply(ctx: ClientContext): void {
   }
   const ICON_LABELS: Record<string, string> = { '认证': 'auth', '工作节点': 'dshb-nodes' }
 
+  // 流式输出期间 MutationObserver 每秒几十批变更；rAF 合帧把每批的
+  // 全文档 navCell 查询收敛到每帧一次。
+  let raf = 0
   const observer = new MutationObserver(() => {
-    const cells = document.querySelectorAll('button[class*="navCell"]')
-    for (const cell of Array.from(cells)) {
-      const label = cell.querySelector('span[class*="navLabel"]')
-      if (!label) continue
-      const text = label.textContent ?? ''
-      const iconKey = ICON_LABELS[text]
-      if (!iconKey) continue
-      const iconSlot = cell.querySelector('[class*="navIcon"]')
-      if (!iconSlot) continue
-      if (iconSlot.getAttribute('data-dshb-icon') === iconKey) continue
-      iconSlot.innerHTML = ICON_SVG[iconKey] ?? ''
-      iconSlot.setAttribute('data-dshb-icon', iconKey)
-    }
+    if (raf !== 0) return
+    raf = requestAnimationFrame(() => {
+      raf = 0
+      const cells = document.querySelectorAll('button[class*="navCell"]')
+      for (const cell of Array.from(cells)) {
+        const label = cell.querySelector('span[class*="navLabel"]')
+        if (!label) continue
+        const text = label.textContent ?? ''
+        const iconKey = ICON_LABELS[text]
+        if (!iconKey) continue
+        const iconSlot = cell.querySelector('[class*="navIcon"]')
+        if (!iconSlot) continue
+        if (iconSlot.getAttribute('data-dshb-icon') === iconKey) continue
+        iconSlot.innerHTML = ICON_SVG[iconKey] ?? ''
+        iconSlot.setAttribute('data-dshb-icon', iconKey)
+      }
+    })
   })
   observer.observe(document.body, { childList: true, subtree: true })
 }
