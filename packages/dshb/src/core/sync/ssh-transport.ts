@@ -51,6 +51,7 @@ export interface SyncRemoteNodeManifest extends SyncNodeManifest {
 
 export class SyncSshSession {
   private readonly decoder = new SyncFrameDecoder()
+  private readonly closeSignal = new AbortController()
   private reading = false
   private closed = false
   private inputEnded = false
@@ -65,6 +66,7 @@ export class SyncSshSession {
     channel.on('exit', (code: number | null) => {
       if (code !== null && code !== 0) this.pendingError = new Error(`remote helper exited with code ${code}`)
     })
+    channel.on('close', () => { this.closeSignal.abort() })
   }
 
   async sendControl(value: Record<string, unknown>): Promise<void> {
@@ -93,16 +95,32 @@ export class SyncSshSession {
       clearTimeout(idleDeadline)
       idleDeadline = setTimeout(() => {
         this.pendingError = new Error(`SSH channel idle for more than ${Math.round(idleTimeoutMs / 1000)}s`)
-        channel.destroy()
+        // Full teardown: destroying the channel alone may leave the stdout
+        // stream open, which would keep a plain for-await suspended forever.
+        this.close()
       }, idleTimeoutMs)
     }
+    // channel.destroy() does not reliably end ssh2's stdout stream; racing the
+    // iterator against the close signal guarantees this generator settles.
+    // A channel close resolves with a sentinel instead of rejecting: a normal
+    // helper exit closes the channel around the same moment stdout reaches EOF,
+    // and only a pendingError (idle timeout, helper crash) makes it an error.
+    const CLOSE: unique symbol = Symbol('channel-close')
+    const closed: Promise<IteratorResult<Buffer> | typeof CLOSE> = new Promise((resolve) => {
+      this.closeSignal.signal.addEventListener('abort', () => resolve(CLOSE), { once: true })
+    })
+    const iterator = (channel.stdout as AsyncIterable<Buffer>)[Symbol.asyncIterator]()
     try {
       armIdleDeadline()
-      for await (const chunk of channel.stdout as AsyncIterable<Buffer>) {
+      for (;;) {
+        const next = await Promise.race([iterator.next(), closed])
+        if (next === CLOSE || next.done) {
+          if (this.pendingError) throw new SyncProtocolError(`SSH channel error: ${this.pendingError.message}`)
+          break
+        }
         armIdleDeadline()
-        for (const frame of decoder.push(Buffer.from(chunk))) yield frame
+        for (const frame of decoder.push(Buffer.from(next.value))) yield frame
       }
-      if (this.pendingError) throw new SyncProtocolError(`SSH channel error: ${this.pendingError.message}`)
       decoder.finish()
     } catch (error) {
       if (error instanceof SyncProtocolError) throw error
@@ -110,6 +128,7 @@ export class SyncSshSession {
       throw new SyncProtocolError(`SSH channel read failed: ${detail}`)
     } finally {
       clearTimeout(idleDeadline)
+      void iterator.return?.().catch(() => {})
     }
   }
 
@@ -122,7 +141,17 @@ export class SyncSshSession {
 
   private async write(frame: Buffer): Promise<void> {
     if (this.closed || this.inputEnded) throw new SyncProtocolError('SSH sync channel input is closed')
-    if (!this.channel.write(frame)) await once(this.channel, 'drain')
+    if (this.channel.write(frame)) return
+    // A frozen connection never drains; bound the wait so writes cannot hang.
+    const drainDeadline = setTimeout(() => this.closeSignal.abort(), SSH_READ_IDLE_TIMEOUT_MS)
+    try {
+      await once(this.channel, 'drain', { signal: this.closeSignal.signal })
+    } catch (error) {
+      if (this.closeSignal.signal.aborted) throw new SyncProtocolError('SSH channel closed before write could drain')
+      throw error
+    } finally {
+      clearTimeout(drainDeadline)
+    }
   }
 }
 
