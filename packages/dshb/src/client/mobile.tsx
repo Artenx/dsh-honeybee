@@ -121,19 +121,8 @@ const MOBILE_CSS = `
      overflow: visible !important;
    }
 
-  /* 模型选择器弹窗：JS（installModelMenuPosition）在窄屏下改为 position:fixed
-     视口级浮层（fixed 不受祖先 overflow 裁剪），这里仅做静态兜底（JS 未生效时
-     仍从触发按钮左缘向右展开、宽度收进视口）。 */
-  [class*="7KE1Ra_menu"],
-  [class*="_menu"]:has([class*="modelName"]) {
-    left: 0 !important;
-    right: auto !important;
-    width: calc(100vw - 32px) !important;
-    min-width: 0 !important;
-    max-width: calc(100vw - 32px) !important;
-    overflow-y: auto !important;
-    max-height: calc(100vh - 120px) !important;
-  }
+  /* 菜单定位完全交还上游（0.2.1-rc.2 起菜单 position:fixed 且自带视口钳制；
+     此前插件的 left/width !important 兜底会覆盖上游 place() 的计算结果）。 */
 
   /* 工具调用执行结果/代码/JSON：窄屏可横向滑动。details 抽屉宽 min(92%,420px)
      较窄，命令行输出/JSON 长行溢出被外层 overflow:hidden 裁剪看不到。命令行输出
@@ -558,11 +547,7 @@ function installStatsLine(ctx: ClientContext): void {
   }, 'dshb-mobile: stats line')
 }
 
-/** 浮层 fixed 定位需管理的内联样式键，清理时逐一移除以交还上游 CSS。 */
-const SHEET_PROPS = [
-  'position', 'width', 'left', 'right', 'top', 'bottom',
-  'min-width', 'max-width', 'max-height', 'overflow-y', 'box-sizing',
-] as const
+
 
 /** 幂等写入 important 内联样式：值未变化时跳过，避免 MutationObserver(attributes) 自触发循环。 */
 function setImportantIfChanged(el: HTMLElement, prop: string, value: string): void {
@@ -570,44 +555,6 @@ function setImportantIfChanged(el: HTMLElement, prop: string, value: string): vo
   el.style.setProperty(prop, value, 'important')
 }
 
-/** 当前视口下的可视区域（手机键盘弹出时 visualViewport 与布局视口错位）。 */
-function visibleViewport(): { vw: number; vh: number; top: number } {
-  const vv = window.visualViewport
-  if (vv) return { vw: vv.width, vh: vv.offsetTop + vv.height, top: vv.offsetTop }
-  return { vw: window.innerWidth, vh: window.innerHeight, top: 0 }
-}
-
-/** Keep the model menu anchored to its trigger while fitting it in the viewport. */
-function positionAnchoredMenu(el: HTMLElement, triggerRect: DOMRect, maxWidth: number, maxHeight: number): void {
-  const margin = 8
-  const { vw, vh } = visibleViewport()
-  setImportantIfChanged(el, 'position', 'fixed')
-  setImportantIfChanged(el, 'box-sizing', 'border-box')
-  setImportantIfChanged(el, 'left', '0')
-  setImportantIfChanged(el, 'right', 'auto')
-  setImportantIfChanged(el, 'top', '0')
-  setImportantIfChanged(el, 'bottom', 'auto')
-  setImportantIfChanged(el, 'min-width', '0')
-  setImportantIfChanged(el, 'max-width', `${Math.max(0, Math.min(maxWidth, vw - margin * 2))}px`)
-  setImportantIfChanged(el, 'max-height', `${Math.max(0, Math.min(maxHeight, vh - margin * 2))}px`)
-  setImportantIfChanged(el, 'overflow-y', 'auto')
-  let width = el.offsetWidth
-  let height = el.offsetHeight
-  const { top: viewportTop } = visibleViewport()
-  const spaceAbove = Math.max(0, triggerRect.top - viewportTop - margin * 2)
-  const spaceBelow = Math.max(0, vh - triggerRect.bottom - margin * 2)
-  const expandUp = height <= spaceAbove || spaceAbove >= spaceBelow
-  const available = expandUp ? spaceAbove : spaceBelow
-  if (height > available) {
-    setImportantIfChanged(el, 'max-height', `${Math.max(0, available - margin)}px`)
-    height = el.offsetHeight
-    width = el.offsetWidth
-  }
-  const top = expandUp ? triggerRect.top - margin - height : triggerRect.bottom + margin
-  const left = Math.max(margin, Math.min(triggerRect.right - width, vw - width - margin))
-  setImportantIfChanged(el, 'left', `${left}px`)
-  setImportantIfChanged(el, 'top', `${Math.max(viewportTop + margin, Math.min(top, vh - height - margin))}px`)
-}
 
 /**
  * 模型名多为纯连字符词（DeepSeek-V4-Flash-Vision-Exp）；white-space:normal 下
@@ -667,19 +614,15 @@ function clearModelNameFit(menu: HTMLElement | null | undefined): void {
   }
 }
 
-/** 清除 anchored menu 写入的内联样式，交还上游 CSS。 */
-function clearFixedSheet(el: HTMLElement | null | undefined): void {
-  if (el === null || el === undefined) return
-  for (const key of SHEET_PROPS) el.style.removeProperty(key)
-}
+
 
 /**
- * 模型选择弹窗（dsh-client-ui-model-selection）是两级 pane 的同一个 `_7KE1Ra_menu`
- * 元素：一级 Model/Effort 单元格列表（cellLabel），点击后切到模型列表（modelName）
- * 或档位列表。上游默认 `position:absolute;right:0` 贴触发按钮右缘，触发按钮在
- * 可横向滚动的 stats 行内时菜单会整体出屏。两级 pane 都必须接管（不能只按
- * modelName 匹配，否则一级 pane 漏掉）。所有视口都把菜单锚定到触发按钮，
- * 在上方/下方可用空间中选择更合适的一侧，避免上游空间不足时把菜单钳到屏幕顶端。
+ * 模型选择弹窗（dsh-client-ui-model-selection）：上游 0.2.1-rc.2 起菜单已是
+ * `position:fixed` 并自带 place() 视口钳制定位（portal 到 body，ResizeObserver
+ * 跟随尺寸变化）。插件不再接管定位——此前写入的 fixed/left/top 与上游 menuPos
+ * 内联样式互相拉扯；且对自动聚焦搜索框的 blur 拦截会触发上游 onBlur 的
+ * close()（焦点移出菜单即关闭），手机上表现为菜单刚打开就被关掉（"弹不出来"）。
+ * 这里只保留窄屏下的视觉适配：模型名不换行连字符 + 按最宽名字缩放字号。
  */
 function installModelMenuPosition(ctx: ClientContext): void {
   ctx.effect(() => {
@@ -687,67 +630,39 @@ function installModelMenuPosition(ctx: ClientContext): void {
     // 上游换 hash 后的语义类兜底查询是全文档扫描；流式期间 MutationObserver
     // 每帧都触发 sync，用时间窗节流（每 500ms 最多一次）控制兜底成本。
     let fallbackLast = 0
-    // 多 tab 场景可能并存多个模型选择器（各自一个 _menu）；只处理可见的，
-    // 避免 document.querySelector 命中隐藏 tab 的菜单而漏掉用户正在看的那个。
     const findMenus = (): HTMLElement[] => {
       const byHash = Array.from(document.querySelectorAll<HTMLElement>('[class*="7KE1Ra_menu"]'))
       if (byHash.length > 0) return byHash
       const now = Date.now()
       if (now - fallbackLast < 500) return []
       fallbackLast = now
-      // 上游升级换 hash 后回退：语义类匹配（cellLabel 命中一级 pane，modelName 命中二级）
       return Array.from(document.querySelectorAll<HTMLElement>('[class*="_menu"]')).filter((el) =>
         el.querySelector('[class*="cellLabel"], [class*="modelName"]') !== null,
       )
     }
-    const findTrigger = (menu: HTMLElement): HTMLElement | null => {
-      if (menu.id) {
-        const controlled = Array.from(document.querySelectorAll<HTMLElement>('[aria-controls]')).find(
-          (el) => el.getAttribute('aria-controls') === menu.id,
-        )
-        if (controlled) return controlled
-      }
-      return document.querySelector<HTMLElement>('[class*="7KE1Ra_trigger"][aria-expanded="true"]')
-    }
     let fittedVw = 0
     let fittedSig = -1
     let fittedMenus: HTMLElement[] = []
-    let positionedMenus: HTMLElement[] = []
     const sync = (): void => {
-      const menus = findMenus()
       let vw = 0
       let sig = 0
       const modelMenus: HTMLElement[] = []
-      const visibleMenus: HTMLElement[] = []
-      for (const menu of menus) {
-        // 0.1.5 renders the menu through createPortal(..., document.body), so
-        // parentElement is body rather than the trigger root. Match aria-controls
-        // to the portal menu id to find the exact trigger across multiple tabs.
-        const trigger = findTrigger(menu)
-        if (trigger === null || trigger.getAttribute('aria-expanded') !== 'true') continue
-        const rect = menu.getBoundingClientRect()
-        // 跳过隐藏 tab / 未打开的菜单（0 尺寸或祖先 display:none）
-        if (rect.width === 0 && rect.height === 0) continue
-        const triggerRect = trigger.getBoundingClientRect()
-        positionAnchoredMenu(menu, triggerRect, Math.min(420, window.innerWidth - 16), 360)
-        visibleMenus.push(menu)
-        if (menu.querySelector('[class*="modelName"]')) {
-          modelMenus.push(menu)
-          if (narrow.matches) {
-            applyNonBreakingHyphens(menu)
-            vw = window.innerWidth
-            for (const n of menu.querySelectorAll<HTMLElement>('[class*="modelName"]')) {
-              sig += n.textContent?.length ?? 0
-            }
+      for (const menu of findMenus()) {
+        if (!menu.querySelector('[class*="modelName"]')) continue
+        if (menu.getBoundingClientRect().width === 0) continue
+        modelMenus.push(menu)
+        if (narrow.matches) {
+          applyNonBreakingHyphens(menu)
+          vw = window.innerWidth
+          for (const n of menu.querySelectorAll<HTMLElement>('[class*="modelName"]')) {
+            sig += n.textContent?.length ?? 0
           }
         }
       }
-      for (const previous of positionedMenus) {
-        if (visibleMenus.includes(previous)) continue
-        clearFixedSheet(previous)
+      for (const previous of fittedMenus) {
+        if (modelMenus.includes(previous)) continue
         clearModelNameFit(previous)
       }
-      positionedMenus = visibleMenus
       if (!narrow.matches) {
         for (const menu of modelMenus) clearModelNameFit(menu)
         fittedVw = 0
@@ -756,8 +671,7 @@ function installModelMenuPosition(ctx: ClientContext): void {
         return
       }
       // 菜单关闭再打开时 React 会重建菜单元素（新元素没有任何内联样式），
-      // 所以缓存必须含元素身份：vw / 名字集合 / 菜单实例任一变化都要重测，
-      // 否则重开的菜单会漏掉 nowrap+缩字而再次换行。
+      // 所以缓存必须含元素身份：vw / 名字集合 / 菜单实例任一变化都要重测。
       const needFit = modelMenus.some((m) => !fittedMenus.includes(m))
       if (vw > 0 && (needFit || vw !== fittedVw || sig !== fittedSig)) {
         for (const menu of modelMenus) fitModelNameFont(menu)
@@ -768,47 +682,13 @@ function installModelMenuPosition(ctx: ClientContext): void {
     }
     sync()
     const mo = new MutationObserver(() => requestAnimationFrame(sync))
-    // 监听 style 属性变化：上游 React 重渲染会整体重写 style 声明，清掉我们
-    // 写入的 !important 内联样式；只观察 childList 会对此失明，弹窗位置落回
-    // 上游按布局视口计算的结果，键盘弹出时（视觉视口与布局视口错位）菜单整体
-    // 落在可视区外——这是"弹窗有时出不来"的根因。
-    mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
+    mo.observe(document.documentElement, { childList: true, subtree: true })
     narrow.addEventListener('change', sync)
     window.addEventListener('resize', sync)
-    window.addEventListener('scroll', sync, true)
-    // 手机键盘弹出/收起只改变 visualViewport，不触发 window resize/scroll；
-    // 监听它保证菜单始终锚定在可视区域内。
-    window.visualViewport?.addEventListener('resize', sync)
-    window.visualViewport?.addEventListener('scroll', sync)
-    // 手机上二级 pane 切换后上游会自动聚焦搜索框并唤起键盘，遮挡刚打开的菜单；
-    // 键盘未开时拦截这类自动聚焦（用户主动点按输入框不受影响）。
-    let lastPointerTarget: Element | null = null
-    const keyboardLikelyOpen = (): boolean => {
-      const vv = window.visualViewport
-      if (!vv) return false
-      return window.innerHeight - vv.height > 150
-    }
-    const onPointerDown = (event: PointerEvent): void => {
-      lastPointerTarget = event.target instanceof Element ? event.target : null
-    }
-    const onFocusIn = (event: FocusEvent): void => {
-      if (!narrow.matches || !(event.target instanceof Element) || keyboardLikelyOpen()) return
-      const input = event.target.closest('input')
-      if (!input || input.closest('[class*="7KE1Ra_menu"], [class*="_menu"]') === null) return
-      if (lastPointerTarget !== null && (lastPointerTarget === input || input.contains(lastPointerTarget))) return
-      input.blur()
-    }
-    document.addEventListener('pointerdown', onPointerDown, true)
-    document.addEventListener('focusin', onFocusIn, true)
     return () => {
       mo.disconnect()
       narrow.removeEventListener('change', sync)
       window.removeEventListener('resize', sync)
-      window.removeEventListener('scroll', sync, true)
-      window.visualViewport?.removeEventListener('resize', sync)
-      window.visualViewport?.removeEventListener('scroll', sync)
-      document.removeEventListener('pointerdown', onPointerDown, true)
-      document.removeEventListener('focusin', onFocusIn, true)
     }
   }, 'dshb-mobile: model menu position')
 }
