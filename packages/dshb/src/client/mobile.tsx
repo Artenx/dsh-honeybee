@@ -617,16 +617,67 @@ function clearModelNameFit(menu: HTMLElement | null | undefined): void {
 
 
 /**
- * 模型选择弹窗（dsh-client-ui-model-selection）：上游 0.2.1-rc.2 起菜单已是
- * `position:fixed` 并自带 place() 视口钳制定位（portal 到 body，ResizeObserver
- * 跟随尺寸变化）。插件不再接管定位——此前写入的 fixed/left/top 与上游 menuPos
- * 内联样式互相拉扯；且对自动聚焦搜索框的 blur 拦截会触发上游 onBlur 的
- * close()（焦点移出菜单即关闭），手机上表现为菜单刚打开就被关掉（"弹不出来"）。
- * 这里只保留窄屏下的视觉适配：模型名不换行连字符 + 按最宽名字缩放字号。
+ * 模型选择弹窗（dsh-client-ui-model-selection）：定位完全交还上游的 fixed + place()。
+ * 第二层模型列表含自动聚焦的搜索框；窄屏下以 inputmode=none 阻止自动唤起虚拟键盘，
+ * 用户主动点搜索框时切回 search。保持焦点有效，避免 blur 触发上游关闭菜单。
+ * 同时保留模型名的窄屏视觉适配。
  */
-function installModelMenuPosition(ctx: ClientContext): void {
+function installModelMenuBehavior(ctx: ClientContext): void {
   ctx.effect(() => {
     const narrow = window.matchMedia(NARROW_QUERY)
+    const manualKeyboardInputs = new WeakSet<HTMLInputElement>()
+    const isModelSearchInput = (target: EventTarget | null): target is HTMLInputElement => {
+      if (!(target instanceof HTMLInputElement) || target.getAttribute('role') !== 'searchbox') return false
+      const menu = target.closest<HTMLElement>('[class*="_menu"]')
+      return menu !== null && menu.querySelector('[class*="modelName"]') !== null
+    }
+    const setAutoKeyboardMode = (input: HTMLInputElement): void => {
+      if (narrow.matches && isModelSearchInput(input) && !manualKeyboardInputs.has(input)) {
+        input.inputMode = 'none'
+      }
+    }
+    const prepareSearchInputs = (node: Node): void => {
+      if (!narrow.matches) return
+      if (node instanceof HTMLInputElement) {
+        setAutoKeyboardMode(node)
+      } else if (node instanceof Element) {
+        for (const input of node.querySelectorAll<HTMLInputElement>('input[role="searchbox"]')) {
+          setAutoKeyboardMode(input)
+        }
+      }
+    }
+    const onSearchFocus = (event: Event): void => {
+      const input = event.target
+      if (input instanceof HTMLInputElement) setAutoKeyboardMode(input)
+    }
+    const onSearchPointerDown = (event: Event): void => {
+      const input = event.target
+      if (!narrow.matches || !isModelSearchInput(input)) return
+      manualKeyboardInputs.add(input)
+      input.inputMode = 'search'
+    }
+    const onSearchBlur = (event: Event): void => {
+      const input = event.target
+      if (!isModelSearchInput(input)) return
+      manualKeyboardInputs.delete(input)
+      if (narrow.matches) input.inputMode = 'none'
+      else input.removeAttribute('inputmode')
+    }
+    const restoreSearchInputs = (): void => {
+      for (const input of document.querySelectorAll<HTMLInputElement>('input[role="searchbox"]')) {
+        if (isModelSearchInput(input)) input.removeAttribute('inputmode')
+      }
+    }
+    const onNarrowChange = (): void => {
+      if (narrow.matches) prepareSearchInputs(document.documentElement)
+      else restoreSearchInputs()
+      sync()
+    }
+    document.addEventListener('focus', onSearchFocus, true)
+    document.addEventListener('pointerdown', onSearchPointerDown, true)
+    document.addEventListener('blur', onSearchBlur, true)
+    prepareSearchInputs(document.documentElement)
+
     // 上游换 hash 后的语义类兜底查询是全文档扫描；流式期间 MutationObserver
     // 每帧都触发 sync，用时间窗节流（每 500ms 最多一次）控制兜底成本。
     let fallbackLast = 0
@@ -681,16 +732,25 @@ function installModelMenuPosition(ctx: ClientContext): void {
       }
     }
     sync()
-    const mo = new MutationObserver(() => requestAnimationFrame(sync))
+    const mo = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) prepareSearchInputs(node)
+      }
+      requestAnimationFrame(sync)
+    })
     mo.observe(document.documentElement, { childList: true, subtree: true })
-    narrow.addEventListener('change', sync)
+    narrow.addEventListener('change', onNarrowChange)
     window.addEventListener('resize', sync)
     return () => {
       mo.disconnect()
-      narrow.removeEventListener('change', sync)
+      document.removeEventListener('focus', onSearchFocus, true)
+      document.removeEventListener('pointerdown', onSearchPointerDown, true)
+      document.removeEventListener('blur', onSearchBlur, true)
+      narrow.removeEventListener('change', onNarrowChange)
       window.removeEventListener('resize', sync)
+      restoreSearchInputs()
     }
-  }, 'dshb-mobile: model menu position')
+  }, 'dshb-mobile: model menu behavior')
 }
 
 /**
@@ -886,7 +946,7 @@ export function installMobile(ctx: ClientContext): void {
   installViewport(ctx)
   installFrameMarker(ctx)
   installStatsLine(ctx)
-  installModelMenuPosition(ctx)
+  installModelMenuBehavior(ctx)
   installContextPanelPosition(ctx)
   const layout = (ctx as unknown as { layout?: LayoutLike }).layout
   const slots = (ctx as unknown as { slots?: SlotsLike }).slots
