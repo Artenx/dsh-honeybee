@@ -5,7 +5,6 @@ import { isLoopbackRequest } from '../../auth/loopback.js'
 import { SyncNodeManifestError, type SyncNodeService } from './node-sync.js'
 import { SyncSessionError, type SyncSessionEventPrefix, type SyncSessionService } from './session-sync.js'
 import {
-  MAX_SYNC_TRANSFER_BYTES,
   SYNC_PROTOCOL_VERSION,
   SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY,
   SYNC_SESSION_EVENT_TAIL_CAPABILITY,
@@ -13,7 +12,9 @@ import {
 } from './protocol.js'
 import type { SyncStateStore } from './stores.js'
 
-const MAX_APPLY_BODY_BYTES = MAX_SYNC_TRANSFER_BYTES
+// 与 MAX_SYNC_TRANSFER_BYTES 对齐的请求体硬上限：超限直接断开（resolve null → 400），
+// 避免对端（或恶意请求）把宿主堆吃满。协调器分批后正常请求远小于该值。
+const MAX_APPLY_BODY_BYTES = 128 * 1024 * 1024
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })

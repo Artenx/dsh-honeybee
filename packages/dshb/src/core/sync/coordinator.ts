@@ -28,6 +28,11 @@ import { SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABIL
 
 const EMPTY_APPLY_RESULT: SyncNodeApplyResult = { created: 0, updated: 0, deleted: 0, pendingRemoval: 0, skipped: 0 }
 const TRANSPORT_RETRY_DELAY_MS = 250
+// 会话分批交换的目标批体积与单批 key 数上限：目标值 ≈ JSON.parse 后对象图的
+// 堆占用仍远小于宿主堆上限（桌面端约 1.4GB）；单批 key 上限限制批内的
+// 条目数，避免 manifest 条目本身过大。
+const SESSION_CHUNK_TARGET_BYTES = 12 * 1024 * 1024
+const SESSION_CHUNK_MAX_KEYS = 8
 
 export interface NodeTransferPlan {
   toLocal: SyncNodeEntry[]
@@ -157,6 +162,17 @@ function emptySessionResult(): SyncSessionApplyResult {
 
 function sessionResultCount(result: SyncSessionApplyResult): number {
   return result.created + result.updated + result.deleted
+}
+
+function addSessionResults(target: SyncSessionApplyResult, delta: SyncSessionApplyResult): SyncSessionApplyResult {
+  return {
+    created: target.created + delta.created,
+    updated: target.updated + delta.updated,
+    archived: target.archived + delta.archived,
+    deleted: target.deleted + delta.deleted,
+    skipped: target.skipped + delta.skipped,
+    unmapped: target.unmapped + delta.unmapped,
+  }
 }
 
 function mergeSessionSkipped(...reports: Array<readonly { sessionId: string; reason: string }[]>): Array<{ sessionId: string; reason: string }> {
@@ -304,13 +320,12 @@ export class SyncCoordinator {
       if (peer.syncSessions) {
         const sessionService = this.sessions!
         let plan: ReturnType<typeof planSessionTransfers>
-        let localBundleToApply: ReturnType<typeof makeSyncSessionBundle>
-        let remoteBundleToApply: ReturnType<typeof makeSyncSessionBundle>
         let remoteSkipped = 0
         let remoteSessionDigest = ''
         let localSessionDigest = ''
         let localInstanceId = ''
-        let modernManifests: { remote: SyncSessionManifest; local: SyncSessionManifest } | undefined
+        let sessionLocalResult = emptySessionResult()
+        let sessionRemoteResult = emptySessionResult()
         if (remoteNodeManifest.capabilities?.includes(SYNC_SESSION_MANIFEST_CAPABILITY)) {
           const remoteManifest = validateSyncSessionManifest(
             await this.retryTransport(() => this.transport.fetchSessionManifest(peer.id)),
@@ -319,45 +334,141 @@ export class SyncCoordinator {
             throw new SyncCoordinatorError('protocol-invalid', '节点与会话 manifest 的实例身份不一致')
           }
           const localManifest = await sessionService.exportManifest()
-          modernManifests = { remote: remoteManifest, local: localManifest }
           plan = planSessionTransfers(peer.direction, localManifest.entries, remoteManifest.entries)
-          remoteSkipped = remoteManifest.skipped.length
           remoteSessionDigest = remoteManifest.digest
           localSessionDigest = localManifest.digest
           localInstanceId = localManifest.instanceId
           const useEventDeltas = remoteNodeManifest.capabilities.includes(SYNC_SESSION_EVENT_TAIL_CAPABILITY)
           const useSharedObjects = remoteNodeManifest.capabilities.includes(SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY)
-          const toWireBundle = (wired: SyncSessionBundle, skippedReport: Array<{ sessionId: string; reason: string }>): SyncSessionBundle =>
-            makeSyncSessionBundle(wired.instanceId, wired.entries, skippedReport, wired.objects)
+          const remoteSkippedReports: Array<readonly { sessionId: string; reason: string }[]> = [remoteManifest.skipped]
 
-          const remoteEntriesToApply = plan.toLocal.length > 0
-            ? validateSyncSessionBundle(await this.retryTransport(() =>
-                this.transport.fetchSessionEntries(
-                  peer.id,
-                  plan.toLocal.map(syncSessionEntryKey),
-                  remoteManifest.digest,
-                  useEventDeltas ? sessionEventPrefixesFor(plan.toLocal, localManifest.entries) : [],
-                ),
+          // 分批交换：首次同步（或长时间未同步后）plan 可能包含全部会话，一次性
+          // fetch/export/apply 会让两端同时把整包内容驻留堆内（桌面端 1.4GB 堆
+          // OOM 崩溃的根因，2026-11-01 崩溃日志）。按观测到的单 key 体积自适应
+          // 分批：每批 fetch → 断言 → apply，批间释放内存；小计划（≤ 单批上限）
+          // 仍只发一次请求，行为与旧实现一致。
+
+          // 拉取方向（远端 → 本地）
+          if (plan.toLocal.length > 0) {
+            let perKeyBytes = 0
+            let firstChunk = true
+            let cursor = 0
+            const keys = plan.toLocal.map(syncSessionEntryKey)
+            while (cursor < keys.length) {
+              const take = perKeyBytes > 0
+                ? Math.max(1, Math.min(SESSION_CHUNK_MAX_KEYS, Math.floor(SESSION_CHUNK_TARGET_BYTES / perKeyBytes)))
+                : SESSION_CHUNK_MAX_KEYS
+              const chunkKeys = keys.slice(cursor, cursor + take)
+              cursor += chunkKeys.length
+              const chunkKeySet = new Set(chunkKeys)
+              const chunkManifest = plan.toLocal.filter((entry) => chunkKeySet.has(syncSessionEntryKey(entry)))
+              const prefixes = useEventDeltas ? sessionEventPrefixesFor(chunkManifest, localManifest.entries) : []
+              let fetched = validateSyncSessionBundle(await this.retryTransport(() =>
+                this.transport.fetchSessionEntries(peer.id, chunkKeys, remoteManifest.digest, prefixes),
               ))
-            : makeSyncSessionBundle(remoteManifest.instanceId, [])
-          if (remoteEntriesToApply.instanceId !== remoteManifest.instanceId) {
-            throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
+              if (fetched.instanceId !== remoteManifest.instanceId) {
+                throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
+              }
+              assertSelectedSessionEntries(chunkManifest, fetched.entries, '远端')
+              remoteSkippedReports.push(fetched.skipped)
+              const applySkipped = firstChunk ? mergeSessionSkipped(remoteManifest.skipped, fetched.skipped) : fetched.skipped
+              try {
+                const applied = await sessionService.applyBundle(
+                  makeSyncSessionBundle(remoteManifest.instanceId, fetched.entries, applySkipped),
+                  peer.name,
+                  peer.id,
+                )
+                sessionLocalResult = addSessionResults(sessionLocalResult, applied)
+              } catch (error) {
+                if (!(error instanceof SyncSessionError && error.code === 'session-delta-prefix')) throw error
+                const fullRemoteEntries = validateSyncSessionBundle(await this.retryTransport(() =>
+                  this.transport.fetchSessionEntries(peer.id, chunkKeys, remoteManifest.digest),
+                ))
+                if (fullRemoteEntries.instanceId !== remoteManifest.instanceId) {
+                  throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
+                }
+                assertSelectedSessionEntries(chunkManifest, fullRemoteEntries.entries, '远端')
+                remoteSkippedReports.push(fullRemoteEntries.skipped)
+                const applied = await sessionService.applyBundle(
+                  makeSyncSessionBundle(
+                    remoteManifest.instanceId,
+                    fullRemoteEntries.entries,
+                    firstChunk ? mergeSessionSkipped(remoteManifest.skipped, fullRemoteEntries.skipped) : fullRemoteEntries.skipped,
+                  ),
+                  peer.name,
+                  peer.id,
+                )
+                sessionLocalResult = addSessionResults(sessionLocalResult, applied)
+                fetched = fullRemoteEntries
+              }
+              const chunkBytes = Buffer.byteLength(JSON.stringify(fetched), 'utf8')
+              if (chunkKeys.length > 0) perKeyBytes = Math.max(perKeyBytes, Math.ceil(chunkBytes / chunkKeys.length))
+              firstChunk = false
+            }
+          } else if (remoteManifest.skipped.length > 0) {
+            const applied = await sessionService.applyBundle(
+              makeSyncSessionBundle(remoteManifest.instanceId, [], remoteManifest.skipped),
+              peer.name,
+              peer.id,
+            )
+            sessionLocalResult = addSessionResults(sessionLocalResult, applied)
           }
-          assertSelectedSessionEntries(plan.toLocal, remoteEntriesToApply.entries, '远端')
-          const localEntriesToApply = plan.toRemote.length > 0
-            ? await sessionService.exportEntries(
-                plan.toRemote.map(syncSessionEntryKey),
+          remoteSkipped = mergeSessionSkipped(...remoteSkippedReports).length
+
+          // 推送方向（本地 → 远端）
+          if (plan.toRemote.length > 0) {
+            const keys = plan.toRemote.map(syncSessionEntryKey)
+            let perKeyBytes = 0
+            let firstChunk = true
+            let cursor = 0
+            while (cursor < keys.length) {
+              const take = perKeyBytes > 0
+                ? Math.max(1, Math.min(SESSION_CHUNK_MAX_KEYS, Math.floor(SESSION_CHUNK_TARGET_BYTES / perKeyBytes)))
+                : SESSION_CHUNK_MAX_KEYS
+              const chunkKeys = keys.slice(cursor, cursor + take)
+              cursor += chunkKeys.length
+              const chunkKeySet = new Set(chunkKeys)
+              const chunkManifest = plan.toRemote.filter((entry) => chunkKeySet.has(syncSessionEntryKey(entry)))
+              const prefixes = useEventDeltas ? sessionEventPrefixesFor(chunkManifest, remoteManifest.entries) : []
+              const exported = await sessionService.exportEntries(
+                chunkKeys,
                 localManifest.digest,
-                useEventDeltas ? sessionEventPrefixesFor(plan.toRemote, remoteManifest.entries) : [],
+                prefixes,
                 { sharedObjects: useSharedObjects },
               )
-            : makeSyncSessionBundle(localManifest.instanceId, [])
-          assertSelectedSessionEntries(plan.toRemote, localEntriesToApply.entries, '本地')
-          const remoteSkippedReport = mergeSessionSkipped(remoteManifest.skipped, remoteEntriesToApply.skipped)
-          const localSkippedReport = mergeSessionSkipped(localManifest.skipped, localEntriesToApply.skipped)
-          remoteSkipped = remoteSkippedReport.length
-          localBundleToApply = makeSyncSessionBundle(remoteManifest.instanceId, remoteEntriesToApply.entries, remoteSkippedReport)
-          remoteBundleToApply = toWireBundle(localEntriesToApply, localSkippedReport)
+              assertSelectedSessionEntries(chunkManifest, exported.entries, '本地')
+              const wireSkipped = firstChunk ? mergeSessionSkipped(localManifest.skipped, exported.skipped) : exported.skipped
+              let wireBundle = exported.objects !== undefined
+                ? makeSyncSessionBundle(exported.instanceId, exported.entries, wireSkipped, exported.objects)
+                : makeSyncSessionBundle(exported.instanceId, exported.entries, wireSkipped)
+              try {
+                const applied = await this.retryTransport(() =>
+                  this.transport.applySessionBundle(peer.id, wireBundle, localInstanceId),
+                )
+                sessionRemoteResult = addSessionResults(sessionRemoteResult, applied)
+              } catch (error) {
+                if (!(error instanceof SyncSessionDeltaPrefixError)) throw error
+                const fullLocalEntries = await sessionService.exportEntries(
+                  chunkKeys,
+                  localManifest.digest,
+                  [],
+                  { sharedObjects: wireBundle.objects !== undefined },
+                )
+                assertSelectedSessionEntries(chunkManifest, fullLocalEntries.entries, '本地')
+                const skippedReport = firstChunk ? mergeSessionSkipped(localManifest.skipped, fullLocalEntries.skipped) : fullLocalEntries.skipped
+                wireBundle = fullLocalEntries.objects !== undefined
+                  ? makeSyncSessionBundle(fullLocalEntries.instanceId, fullLocalEntries.entries, skippedReport, fullLocalEntries.objects)
+                  : makeSyncSessionBundle(fullLocalEntries.instanceId, fullLocalEntries.entries, skippedReport)
+                const applied = await this.retryTransport(() =>
+                  this.transport.applySessionBundle(peer.id, wireBundle, localInstanceId),
+                )
+                sessionRemoteResult = addSessionResults(sessionRemoteResult, applied)
+              }
+              const chunkBytes = Buffer.byteLength(JSON.stringify(wireBundle), 'utf8')
+              if (chunkKeys.length > 0) perKeyBytes = Math.max(perKeyBytes, Math.ceil(chunkBytes / chunkKeys.length))
+              firstChunk = false
+            }
+          }
         } else {
           const remoteBundle = validateSyncSessionBundle(await this.retryTransport(() => this.transport.fetchSessionBundle(peer.id)))
           if (remoteBundle.instanceId !== remoteNodeManifest.instanceId) {
@@ -369,51 +480,20 @@ export class SyncCoordinator {
           remoteSessionDigest = remoteBundle.digest
           localSessionDigest = localBundle.digest
           localInstanceId = localBundle.instanceId
-          localBundleToApply = makeSyncSessionBundle(remoteBundle.instanceId, plan.toLocal, remoteBundle.skipped)
-          remoteBundleToApply = makeSyncSessionBundle(localBundle.instanceId, plan.toRemote, localBundle.skipped)
-        }
-        let sessionLocalResult = emptySessionResult()
-        if (plan.toLocal.length > 0 || remoteSkipped > 0) {
-          try {
-            sessionLocalResult = await sessionService.applyBundle(localBundleToApply, peer.name, peer.id)
-          } catch (error) {
-            if (!(error instanceof SyncSessionError && error.code === 'session-delta-prefix') || !modernManifests) throw error
-            const fullRemoteEntries = validateSyncSessionBundle(await this.retryTransport(() =>
-              this.transport.fetchSessionEntries(
-                peer.id,
-                plan.toLocal.map(syncSessionEntryKey),
-                modernManifests!.remote.digest,
-              ),
-            ))
-            assertSelectedSessionEntries(plan.toLocal, fullRemoteEntries.entries, '远端')
-            const skippedReport = mergeSessionSkipped(modernManifests.remote.skipped, fullRemoteEntries.skipped)
-            remoteSkipped = skippedReport.length
-            localBundleToApply = makeSyncSessionBundle(modernManifests.remote.instanceId, fullRemoteEntries.entries, skippedReport)
-            sessionLocalResult = await sessionService.applyBundle(localBundleToApply, peer.name, peer.id)
+          if (plan.toLocal.length > 0 || remoteSkipped > 0) {
+            sessionLocalResult = await sessionService.applyBundle(
+              makeSyncSessionBundle(remoteBundle.instanceId, plan.toLocal, remoteBundle.skipped),
+              peer.name,
+              peer.id,
+            )
           }
-        }
-
-        let sessionRemoteResult = emptySessionResult()
-        if (plan.toRemote.length > 0) {
-          try {
+          if (plan.toRemote.length > 0) {
             sessionRemoteResult = await this.retryTransport(() =>
-              this.transport.applySessionBundle(peer.id, remoteBundleToApply, localInstanceId),
-            )
-          } catch (error) {
-            if (!(error instanceof SyncSessionDeltaPrefixError) || !modernManifests) throw error
-            const fullLocalEntries = await sessionService.exportEntries(
-              plan.toRemote.map(syncSessionEntryKey),
-              modernManifests.local.digest,
-              [],
-              { sharedObjects: remoteBundleToApply?.objects !== undefined },
-            )
-            assertSelectedSessionEntries(plan.toRemote, fullLocalEntries.entries, '本地')
-            const skippedReport = mergeSessionSkipped(modernManifests.local.skipped, fullLocalEntries.skipped)
-            remoteBundleToApply = fullLocalEntries.objects !== undefined
-              ? makeSyncSessionBundle(fullLocalEntries.instanceId, fullLocalEntries.entries, skippedReport, fullLocalEntries.objects)
-              : makeSyncSessionBundle(fullLocalEntries.instanceId, fullLocalEntries.entries, skippedReport)
-            sessionRemoteResult = await this.retryTransport(() =>
-              this.transport.applySessionBundle(peer.id, remoteBundleToApply, localInstanceId),
+              this.transport.applySessionBundle(
+                peer.id,
+                makeSyncSessionBundle(localBundle.instanceId, plan.toRemote, localBundle.skipped),
+                localInstanceId,
+              ),
             )
           }
         }

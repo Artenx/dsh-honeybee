@@ -500,4 +500,138 @@ describe('sync coordinator', () => {
     expect(test.transport.fetchNodeManifest).not.toHaveBeenCalled()
     expect(test.progress.at(-1)).toMatchObject({ lastRunStatus: 'failed', lastErrorCode: 'sessions-unavailable' })
   })
+
+  it('splits a large remote session plan into bounded fetch/apply chunks', async () => {
+    const sessionPeer = { ...peer, syncSessions: true }
+    const remoteEntries = Array.from({ length: 10 }, (_, index) => deletedSessionEntry(remoteInstanceId, `remote-chunk-${index}`))
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, remoteEntries)
+    const entryByKey = new Map(remoteEntries.map((entry) => [syncSessionEntryKey(entry), entry]))
+    const fetchSessionEntries = vi.fn(async (_peerId: string, keys: string[]) =>
+      makeSyncSessionBundle(remoteInstanceId, keys.map((key) => entryByKey.get(key)!)))
+    const applyBundle = vi.fn(async () => ({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 }))
+    const sessions = {
+      exportManifest: vi.fn(async () => makeSyncSessionManifest(localInstanceId, [])),
+      exportEntries: vi.fn(),
+      applyBundle,
+    }
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+      applySessionBundle: vi.fn(),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(fetchSessionEntries).toHaveBeenCalledTimes(2)
+    expect((fetchSessionEntries.mock.calls[0] as unknown[])[1]).toHaveLength(8)
+    expect((fetchSessionEntries.mock.calls[1] as unknown[])[1]).toHaveLength(2)
+    const allKeys = fetchSessionEntries.mock.calls.flatMap((call) => (call as unknown[])[1] as string[])
+    expect(new Set(allKeys).size).toBe(10)
+    expect(applyBundle).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({ importedSessions: 2 })
+  })
+
+  it('shrinks export chunks adaptively when entries carry large payloads', async () => {
+    const sessionPeer = { ...peer, syncSessions: true }
+    const bigText = 'x'.repeat(3 * 1024 * 1024)
+    const localEntry = (id: string) => ({
+      metadata: {
+        kind: 'session' as const,
+        originInstanceId: localInstanceId,
+        originEntityId: id,
+        localEntityId: id,
+        revision: { physicalTimeMs: 100, logicalCounter: 0, writerInstanceId: localInstanceId },
+        contentDigest: `sha256:${'c'.repeat(64)}`,
+        stateDigest: `sha256:${'d'.repeat(64)}`,
+      },
+    })
+    const localEntries = Array.from({ length: 20 }, (_, index) => localEntry(`local-big-${index}`))
+    const localManifest = makeSyncSessionManifest(localInstanceId, localEntries)
+    const entryByKey = new Map(localEntries.map((entry) => [syncSessionEntryKey(entry), entry]))
+    const exportEntries = vi.fn(async (...args: unknown[]) => {
+      const keys = args[0] as string[]
+      const entries = keys.map((key) => ({
+        ...entryByKey.get(key)!,
+        header: { id: 's', version: 1 },
+        inheritedEventCount: 0,
+        events: [{ seq: 0, type: 'text', text: bigText }],
+        workspace: { originInstanceId: localInstanceId, originWorkspaceId: 'w', nodeOrigin: { originInstanceId: localInstanceId, originEntityId: 'n' }, remotePath: '/r' },
+        workspacePosition: 0,
+        archived: false,
+        pinned: false,
+        objects: [],
+        sourceLocalSessionId: 's',
+      }))
+      return makeSyncSessionBundle(localInstanceId, entries as never)
+    })
+    const applySessionBundle = vi.fn(async () => ({ created: 0, updated: 1, archived: 0, deleted: 0, skipped: 0, unmapped: 0 }))
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries,
+      applyBundle: vi.fn(),
+    }
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => makeSyncSessionManifest(remoteInstanceId, [])),
+      fetchSessionEntries: vi.fn(),
+      applySessionBundle,
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    const result = await test.coordinator.run(peer.id)
+
+    const keyCounts = exportEntries.mock.calls.map((call) => (call as unknown[])[0] as string[]).map((keys) => keys.length)
+    expect(keyCounts[0]).toBe(8)
+    expect(keyCounts.slice(1).every((count) => count >= 1 && count <= 4)).toBe(true)
+    expect(keyCounts.reduce((sum, count) => sum + count, 0)).toBe(20)
+    expect(applySessionBundle).toHaveBeenCalledTimes(keyCounts.length)
+    expect(result).toMatchObject({ exportedSessions: keyCounts.length })
+  })
+
+  it('retries only the failing chunk when the local delta prefix changed', async () => {
+    const sessionPeer = { ...peer, syncSessions: true }
+    const remoteEntries = Array.from({ length: 10 }, (_, index) => deletedSessionEntry(remoteInstanceId, `remote-fallback-${index}`))
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, remoteEntries)
+    const entryByKey = new Map(remoteEntries.map((entry) => [syncSessionEntryKey(entry), entry]))
+    const fetchSessionEntries = vi.fn(async (_peerId: string, keys: string[]) =>
+      makeSyncSessionBundle(remoteInstanceId, keys.map((key) => entryByKey.get(key)!)))
+    const applyBundle = vi.fn()
+      .mockRejectedValueOnce(new SyncSessionError('session-delta-prefix', 'prefix mismatch'))
+      .mockResolvedValue({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })
+    const sessions = {
+      exportManifest: vi.fn(async () => makeSyncSessionManifest(localInstanceId, [])),
+      exportEntries: vi.fn(),
+      applyBundle,
+    }
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+      applySessionBundle: vi.fn(),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(fetchSessionEntries).toHaveBeenCalledTimes(3)
+    expect((fetchSessionEntries.mock.calls[0] as unknown[])[1]).toHaveLength(8)
+    expect((fetchSessionEntries.mock.calls[1] as unknown[])[1]).toHaveLength(8)
+    expect((fetchSessionEntries.mock.calls[2] as unknown[])[1]).toHaveLength(2)
+    expect(applyBundle).toHaveBeenCalledTimes(3)
+    expect(result).toMatchObject({ importedSessions: 2 })
+  })
 })

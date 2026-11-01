@@ -9,8 +9,10 @@ import { createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { SyncStateStore } from '../../src/core/sync/stores.js'
 import {
+  ExportObjectCache,
   makeSyncSessionBundle,
   planSessionTransfers,
+  sessionEventListDigest,
   SyncSessionError,
   SyncSessionService,
   syncSessionEntryKey,

@@ -6,7 +6,10 @@ export const SYNC_SESSION_EVENT_TAIL_CAPABILITY = 'session-event-tail-delta-v1'
 export const SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY = 'session-bundle-objects-v1'
 export const MAX_SYNC_CONTROL_FRAME_BYTES = 64 * 1024
 export const MAX_SYNC_DATA_CHUNK_BYTES = 1024 * 1024
-export const MAX_SYNC_TRANSFER_BYTES = 100 * 1024 * 1024 * 1024
+// 单次传输（bundle 请求/响应、原始附件/溢出流）的硬上限。必须远小于宿主进程
+// JS 堆（桌面端约 1.4GB）：JSON.parse 的对象图膨胀约为 JSON 文本的 5-10 倍，
+// 100GB 级上限等于无内存保护。协调器按更小的目标分批传输（见 coordinator.ts）。
+export const MAX_SYNC_TRANSFER_BYTES = 128 * 1024 * 1024
 
 const FRAME_HEADER_BYTES = 5
 const CONTROL_FRAME = 0

@@ -205,7 +205,37 @@ interface ExportObjectCacheEntry {
   object: SyncSessionObject
 }
 
-type ExportObjectCache = Map<string, ExportObjectCacheEntry>
+/**
+ * 导出期附件对象缓存：跨会话去重同一附件（同 id 只读一次存储、只算一次摘要）。
+ * 附件对象携带 base64 数据，若整轮导出无上限持有（此前是普通 Map），多图会话的
+ * 首次同步会把堆吃满（桌面端 OOM 崩溃的直接推手之一）。这里按原始字节数做
+ * LRU 上限，超限淘汰最早条目；被淘汰的附件在后续会话中按 cache miss 重新读取。
+ */
+const MAX_EXPORT_OBJECT_CACHE_BYTES = 64 * 1024 * 1024
+
+export class ExportObjectCache {
+  private readonly entries = new Map<string, ExportObjectCacheEntry>()
+  private bytes = 0
+
+  get(key: string): ExportObjectCacheEntry | undefined {
+    return this.entries.get(key)
+  }
+
+  set(key: string, entry: ExportObjectCacheEntry): void {
+    const existing = this.entries.get(key)
+    if (existing) this.bytes -= existing.object.bytes
+    this.entries.delete(key)
+    this.entries.set(key, entry)
+    this.bytes += entry.object.bytes
+    while (this.bytes > MAX_EXPORT_OBJECT_CACHE_BYTES && this.entries.size > 1) {
+      const oldest = this.entries.keys().next().value
+      if (oldest === undefined) break
+      const removed = this.entries.get(oldest)
+      this.entries.delete(oldest)
+      if (removed) this.bytes -= removed.object.bytes
+    }
+  }
+}
 
 interface SessionManifestPayloadCache {
   instanceId: string
@@ -744,31 +774,52 @@ function sessionEventDigest(
   void _id
   void _cwd
   void _parent
-  return sha256(canonicalJson({
-    header: stableHeader,
-    inheritedEventCount,
-    events: events.map(normalize),
-    workspace: {
-      originInstanceId: workspace.originInstanceId,
-      originWorkspaceId: workspace.originWorkspaceId,
-      nodeOrigin: workspace.nodeOrigin,
-      remotePath: workspace.remotePath,
-    },
-    parentOrigin,
-    instructionSnapshot: instructionSnapshot ? {
-      text: instructionSnapshot.text,
-      capturedAt: instructionSnapshot.capturedAt,
-      workspaceOrigin: instructionSnapshot.workspaceOrigin,
-      workspaceRemotePath: instructionSnapshot.workspaceRemotePath,
-      workspaceRevision: instructionSnapshot.workspaceRevision,
-      digest: instructionSnapshot.digest,
-      inheritedFromOrigin: instructionSnapshot.inheritedFromOrigin,
-    } : undefined,
-  }))
+  // 与 sha256(canonicalJson({header, inheritedEventCount, events: events.map(normalize), ...}))
+  // 逐字节等价：canonicalJson 对对象的输出是 '{' + 按 key 字典序 "key":value 以 ',' 连接 + '}'，
+  // value 为 undefined 时输出字面量 "undefined"（JSON.stringify(undefined) 经模板插值）。
+  // 事件逐条 normalize → canonicalJson 后直接喂哈希，避免 events.map 全量深拷贝与
+  // 整体巨型字符串（桌面端首次同步 OOM 的直接推手之一）。
+  const hash = createHash('sha256')
+  hash.update('{"events":[')
+  for (let index = 0; index < events.length; index += 1) {
+    if (index > 0) hash.update(',')
+    hash.update(canonicalJson(normalize(events[index])))
+  }
+  hash.update(']')
+  hash.update(`,"header":${canonicalJson(stableHeader)}`)
+  hash.update(`,"inheritedEventCount":${canonicalJson(inheritedEventCount)}`)
+  hash.update(`,"instructionSnapshot":${instructionSnapshot ? canonicalJson({
+    text: instructionSnapshot.text,
+    capturedAt: instructionSnapshot.capturedAt,
+    workspaceOrigin: instructionSnapshot.workspaceOrigin,
+    workspaceRemotePath: instructionSnapshot.workspaceRemotePath,
+    workspaceRevision: instructionSnapshot.workspaceRevision,
+    digest: instructionSnapshot.digest,
+    inheritedFromOrigin: instructionSnapshot.inheritedFromOrigin,
+  }) : 'undefined'}`)
+  hash.update(`,"parentOrigin":${parentOrigin ? canonicalJson(parentOrigin) : 'undefined'}`)
+  hash.update(`,"workspace":${canonicalJson({
+    originInstanceId: workspace.originInstanceId,
+    originWorkspaceId: workspace.originWorkspaceId,
+    nodeOrigin: workspace.nodeOrigin,
+    remotePath: workspace.remotePath,
+  })}`)
+  hash.update('}')
+  return `sha256:${hash.digest('hex')}`
 }
 
 export function sessionEventListDigest(events: readonly SessionEvent[]): string {
-  return sha256(canonicalJson(events))
+  // 与 sha256(canonicalJson(events)) 逐字节等价：canonicalJson 对数组的输出是
+  // '[' + 逐项 canonicalJson 以 ',' 连接 + ']'。逐事件喂入哈希可避免为整个
+  // 事件列表构造巨型 JSON 字符串（大会话在 1.4GB 堆上直接 OOM 的推手之一）。
+  const hash = createHash('sha256')
+  hash.update('[')
+  for (let index = 0; index < events.length; index += 1) {
+    if (index > 0) hash.update(',')
+    hash.update(canonicalJson(events[index]))
+  }
+  hash.update(']')
+  return `sha256:${hash.digest('hex')}`
 }
 
 function sessionStateDigest(
@@ -813,7 +864,7 @@ function sessionExportCacheKey(sessionId: string, branchId?: string): string {
   return JSON.stringify([sessionId, branchId ?? null])
 }
 
-function estimateJsonBytes(value: unknown, limit: number): number | undefined {
+export function estimateJsonBytes(value: unknown, limit: number): number | undefined {
   const active = new WeakSet<object>()
   const measure = (item: unknown): number => {
     if (item === null) return 4
@@ -1895,7 +1946,7 @@ export class SyncSessionService {
     const eligibleLocalIds = new Set<string>()
     const workspaceById = new Map<string, WorkspaceLike>()
     const archivedBranchSessionIds = new Set(Object.values(stateIndex.state.archives).map((archive) => archive.localSessionId))
-    const objectCache: ExportObjectCache = new Map()
+    const objectCache = new ExportObjectCache()
     const descriptorCache = new Map<string, SyncSessionWorkspace>()
     const getWorkspaceDescriptor = (
       workspace: WorkspaceLike,
@@ -1958,19 +2009,26 @@ export class SyncSessionService {
             continue
           }
         }
-        const exported = await this.exportSessionEntry(
-          persistence,
-          workspace,
-          descriptor,
-          position,
-          makeSessionId(sessionId),
-          snapshot,
-          archivedIds.has(sessionId),
-          pinnedIds.has(sessionId),
-          undefined,
-          stateIndex,
-          objectCache,
-        )
+        let exported: SessionExportResult | undefined
+        try {
+          exported = await this.exportSessionEntry(
+            persistence,
+            workspace,
+            descriptor,
+            position,
+            makeSessionId(sessionId),
+            snapshot,
+            archivedIds.has(sessionId),
+            pinnedIds.has(sessionId),
+            undefined,
+            stateIndex,
+            objectCache,
+          )
+        } catch (error) {
+          if (!(error instanceof SyncSessionError && error.code === 'session-too-large')) throw error
+          skipped.push({ sessionId, reason: 'session-payload-too-large' })
+          continue
+        }
         if (exported) {
           const { entry } = exported
           if (manifestOnly && options.payloadCache) {
@@ -2038,19 +2096,26 @@ export class SyncSessionService {
       const descriptor = getWorkspaceDescriptor(workspace, binding, nodeOrigin, archivedMetadata?.workspaceOrigin)
       const snapshot = await persistence.stat(makeSessionId(archive.localSessionId))
       if (!snapshot) continue
-      const exported = await this.exportSessionEntry(
-        persistence,
-        workspace,
-        descriptor,
-        archive.workspacePosition,
-        makeSessionId(archive.localSessionId),
-        snapshot,
-        true,
-        false,
-        archive,
-        stateIndex,
-        objectCache,
-      )
+      let exported: SessionExportResult | undefined
+      try {
+        exported = await this.exportSessionEntry(
+          persistence,
+          workspace,
+          descriptor,
+          archive.workspacePosition,
+          makeSessionId(archive.localSessionId),
+          snapshot,
+          true,
+          false,
+          archive,
+          stateIndex,
+          objectCache,
+        )
+      } catch (error) {
+        if (!(error instanceof SyncSessionError && error.code === 'session-too-large')) throw error
+        skipped.push({ sessionId: archive.localSessionId, reason: 'session-payload-too-large' })
+        continue
+      }
       if (exported) {
         const { entry } = exported
         if (manifestOnly && options.payloadCache) {
@@ -3248,7 +3313,18 @@ export class SyncSessionService {
         payloads.set(key, cached)
         continue
       }
-      const data = await collectBytes(attachmentStore!.readFileStream(ref))
+      // 超过传输上限的文件附件无法内联进 bundle（validateObjectPayload 要求真实数据），
+      // 也不能省略（接收端会重算摘要导致不一致）。抛出 session-too-large，由导出循环
+      // 把该会话整体记为 skipped，避免单次导出因一个巨型附件而崩溃或无限缓冲。
+      let data: Buffer
+      try {
+        data = await collectBytes(attachmentStore!.readFileStream(ref))
+      } catch (error) {
+        if (error instanceof SyncSessionError && error.code === 'bundle-too-large') {
+          throw new SyncSessionError('session-too-large', '会话文件附件超过传输大小限制')
+        }
+        throw error
+      }
       const object: SyncSessionObject = {
         id: key,
         kind: 'file',
