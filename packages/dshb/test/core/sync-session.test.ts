@@ -1246,3 +1246,294 @@ describe('session sync', () => {
     expect(() => planSessionTransfers('bidirectional', [local], [equalRevision])).toThrow(/Equal session revisions/)
   })
 })
+
+describe('会话摘要流式计算与旧实现逐字节等价', () => {
+  function canonicalJson(value: unknown): string {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value)
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+    const object = value as Record<string, unknown>
+    const entries = Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+    return `{${entries.join(',')}}`
+  }
+
+  it('sessionEventListDigest 与整体 canonicalJson 哈希一致（含 undefined 字段与多字节字符）', () => {
+    const events = [
+      { seq: 0, type: 'turn/start', turn: 1, note: undefined, text: '中文与emoji😀', nested: { b: undefined, a: 1 } },
+      { seq: 1, type: 'step/start', turn: 1, step: 1 },
+      { seq: 2, type: 'message', content: ['', 'x'.repeat(1024), null, true, 3.14] },
+    ] as never as SessionEvent[]
+    expect(sessionEventListDigest(events)).toBe(digest(canonicalJson(events)))
+    expect(sessionEventListDigest([])).toBe(digest('[]'))
+  })
+
+  it('导出条目的 contentDigest 与事件列表摘要都与参考实现一致', async () => {
+    const env = createEnvironment('source')
+    addSourceSession(env)
+    const bundle = await env.service.exportBundle()
+    const entry = bundle.entries[0]
+    expect(entry).toBeDefined()
+    if (!entry || entry.metadata.deleted || !entry.events) return
+
+    const imageDigests = new Map<string, { digest: string }>()
+    const fileDigests = new Map<string, { digest: string; name: string }>()
+    const spillDigests = new Map<string, { digest: string; bytes: number }>()
+    for (const object of entry.objects ?? []) {
+      if (object.kind === 'image') imageDigests.set(JSON.stringify([object.ref.attachmentId]), object)
+      else if (object.kind === 'file') fileDigests.set(JSON.stringify([object.ref.attachmentId]), object)
+      else spillDigests.set(JSON.stringify([object.reference.ref.locator]), object)
+    }
+    const normalize = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(normalize)
+      if (value === null || typeof value !== 'object') return value
+      const record = value as Record<string, unknown>
+      if (record.type === 'image' && typeof record.attachment === 'object' && record.attachment !== null) {
+        const object = imageDigests.get(JSON.stringify([(record.attachment as { attachmentId: string }).attachmentId]))
+        return object
+          ? { type: 'image', digest: object.digest, ...((record.attachment as { name?: string }).name ? { name: (record.attachment as { name?: string }).name } : {}) }
+          : { type: 'image', missing: (record.attachment as { attachmentId: string }).attachmentId }
+      }
+      if (record.type === 'file' && typeof record.attachment === 'object' && record.attachment !== null) {
+        const object = fileDigests.get(JSON.stringify([(record.attachment as { attachmentId: string }).attachmentId]))
+        return object
+          ? { type: 'file', digest: object.digest, name: (record.attachment as { name: string }).name }
+          : { type: 'file', missing: (record.attachment as { attachmentId: string }).attachmentId }
+      }
+      const output: Record<string, unknown> = {}
+      for (const [key, child] of Object.entries(record)) {
+        if (key === spillMetaKey && typeof child === 'object' && child !== null && Array.isArray((child as { references?: unknown }).references)) {
+          output[key] = {
+            version: (child as { version: unknown }).version,
+            references: (child as { references: Array<Record<string, unknown>> }).references.map((reference) => {
+              const spill = spillDigests.get(JSON.stringify([(reference.ref as { locator: string }).locator]))
+              return spill
+                ? { source: reference.source, suggestedName: reference.suggestedName, digest: spill.digest, bytes: spill.bytes }
+                : { source: reference.source, suggestedName: reference.suggestedName, missing: (reference.ref as { locator: string }).locator }
+            }),
+          }
+        } else if (key === 'text' && typeof child === 'string') {
+          let text = child
+          for (const object of entry.objects ?? []) {
+            if (object.kind !== 'spill') continue
+            const ref = object.reference.ref
+            text = text.replaceAll(
+              `Full formatted result stored at: ${ref.locator}. ${ref.retrievalHint}`,
+              `Full formatted result stored at: ${object.digest}.`,
+            )
+          }
+          output[key] = text
+        } else {
+          output[key] = normalize(child)
+        }
+      }
+      return output
+    }
+
+    const { id: _id, cwd: _cwd, parentSession: _parent, ...stableHeader } = entry.header
+    void _id
+    void _cwd
+    void _parent
+    const reference = digest(canonicalJson({
+      header: stableHeader,
+      inheritedEventCount: entry.inheritedEventCount,
+      events: entry.events.map(normalize),
+      workspace: {
+        originInstanceId: entry.workspace!.originInstanceId,
+        originWorkspaceId: entry.workspace!.originWorkspaceId,
+        nodeOrigin: entry.workspace!.nodeOrigin,
+        remotePath: entry.workspace!.remotePath,
+      },
+      parentOrigin: undefined,
+      instructionSnapshot: undefined,
+    }))
+    expect(entry.metadata.contentDigest).toBe(reference)
+
+    const manifest = await env.service.exportManifest()
+    const manifestEntry = manifest.entries.find((candidate) => syncSessionEntryKey(candidate) === syncSessionEntryKey(entry))
+    expect(manifestEntry?.eventDigest).toBe(sessionEventListDigest(entry.events))
+  })
+})
+
+describe('导出附件对象缓存按字节上限淘汰', () => {
+  const spillObject = (id: string, bytes: number) => ({
+    id,
+    kind: 'spill' as const,
+    reference: {
+      owner: { sessionId: 's' },
+      source: { toolName: 'bash', callId: 'c', label: 'result' },
+      suggestedName: 'out.txt',
+      ref: { locator: `/spill/${id}`, retrievalHint: 'hint' },
+    },
+    bytes,
+    digest: digest(id),
+    data: '',
+  })
+
+  it('超过上限时淘汰最早条目并保持字节账目正确', () => {
+    const cache = new ExportObjectCache()
+    cache.set('a', { object: spillObject('a', 40 * 1024 * 1024) as never })
+    expect(cache.get('a')).toBeDefined()
+    cache.set('b', { object: spillObject('b', 30 * 1024 * 1024) as never })
+    expect(cache.get('a')).toBeUndefined()
+    expect(cache.get('b')).toBeDefined()
+    cache.set('c', { object: spillObject('c', 40 * 1024 * 1024) as never })
+    expect(cache.get('b')).toBeUndefined()
+    expect(cache.get('c')).toBeDefined()
+    cache.set('c', { object: spillObject('c', 40 * 1024 * 1024) as never })
+    expect(cache.get('c')).toBeDefined()
+  })
+})
+
+describe('超大内容会话的导出降级', () => {
+  function fileSession(id: string, cwd: string, file: FileAttachmentRef): Session {
+    const sessionId = SessionId(id)
+    const header: SessionHeader = { id: sessionId, version: SESSION_FORMAT_VERSION, createdAt: Date.now(), cwd, isSeeded: false }
+    const session = Session.create(sessionId, undefined, header)
+    const callId = ToolCallId(`call-${id}`)
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+    session.append('tool/call', { turn: 1, step: 1, callId, name: 'web_fetch', arguments: '{}' })
+    const message = createToolResultMessage({ callId, isError: false, content: [{ type: 'file', attachment: file }] })
+    session.append('tool/result', { turn: 1, step: 1, message }, { surfaceOp: 'append' })
+    session.append('step/end', { turn: 1, step: 1 })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    return session
+  }
+
+  it('超过传输上限的文件附件让该会话记为 skipped，其余会话正常导出', { timeout: 120_000 }, async () => {
+    const env = createEnvironment('source')
+    addSourceSession(env, { id: 'session-ok' })
+    const id = SessionId('session-big-file')
+    const workspace = env.workspaces.add('workspace-big', `${env.home}/mirror/big`, 'Big project')
+    env.bindings.add({ mirrorPath: workspace.path, nodeId: 'node-source', remotePath: '/remote/project', workspaceId: workspace.id })
+    const bigData = Buffer.alloc(129 * 1024 * 1024, 7)
+    const fileRef: FileAttachmentRef = {
+      attachmentId: 'big-file' as FileAttachmentRef['attachmentId'],
+      name: 'big.bin',
+      bytes: bigData.byteLength,
+    }
+    env.attachments.objects.set(fileRef.attachmentId, bigData)
+    const session = fileSession('session-big-file', workspace.path, fileRef)
+    env.persistence.add(session)
+    workspace.sessionIds.push(id)
+
+    const bundle = await env.service.exportBundle()
+    expect(bundle.skipped).toContainEqual({ sessionId: 'session-big-file', reason: 'session-payload-too-large' })
+    expect(bundle.entries.some((entry) => entry.metadata.localEntityId === 'session-ok')).toBe(true)
+    expect(bundle.entries.some((entry) => entry.metadata.localEntityId === 'session-big-file')).toBe(false)
+  })
+
+  it('事件文本总量超过单会话序列化上限的会话记为 skipped，其余会话正常导出', { timeout: 120_000 }, async () => {
+    const env = createEnvironment('source')
+    addSourceSession(env, { id: 'session-ok' })
+    const id = SessionId('session-big-events')
+    const workspace = env.workspaces.add('workspace-big-events', `${env.home}/mirror/big-events`, 'Big events project')
+    env.bindings.add({ mirrorPath: workspace.path, nodeId: 'node-source', remotePath: '/remote/project', workspaceId: workspace.id })
+    const callId = ToolCallId('call-big-events')
+    const sessionId = SessionId('session-big-events')
+    const header: SessionHeader = { id: sessionId, version: SESSION_FORMAT_VERSION, createdAt: Date.now(), cwd: workspace.path, isSeeded: false }
+    const session = Session.create(sessionId, undefined, header)
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+    session.append('tool/call', { turn: 1, step: 1, callId, name: 'bash', arguments: '{}' })
+    const message = createToolResultMessage({
+      callId,
+      isError: false,
+      content: [{ type: 'text', text: 'y'.repeat(97 * 1024 * 1024) }],
+    })
+    session.append('tool/result', { turn: 1, step: 1, message }, { surfaceOp: 'append' })
+    session.append('step/end', { turn: 1, step: 1 })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    env.persistence.add(session)
+    workspace.sessionIds.push(id)
+
+    const bundle = await env.service.exportBundle()
+    expect(bundle.skipped).toContainEqual({ sessionId: 'session-big-events', reason: 'session-payload-too-large' })
+    expect(bundle.entries.some((entry) => entry.metadata.localEntityId === 'session-ok')).toBe(true)
+    expect(bundle.entries.some((entry) => entry.metadata.localEntityId === 'session-big-events')).toBe(false)
+  })
+})
+
+describe('带外对象流', () => {
+  function spillSession(id: string, cwd: string, spillRef: { locator: string; bytes: number; retrievalHint: string }): Session {
+    const sessionId = SessionId(id)
+    const header: SessionHeader = { id: sessionId, version: SESSION_FORMAT_VERSION, createdAt: Date.now(), cwd, isSeeded: false }
+    const session = Session.create(sessionId, undefined, header)
+    const callId = ToolCallId(`call-${id}`)
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+    session.append('tool/call', { turn: 1, step: 1, callId, name: 'web_fetch', arguments: '{}' })
+    const message = createToolResultMessage({
+      callId,
+      isError: false,
+      content: [{ type: 'text', text: `(Omitted 4 bytes. Full formatted result stored at: ${spillRef.locator}. ${spillRef.retrievalHint})` }],
+    })
+    session.append('tool/result', {
+      turn: 1,
+      step: 1,
+      message,
+      meta: {
+        [spillMetaKey]: {
+          version: 1,
+          references: [{
+            owner: { sessionId },
+            source: { toolName: 'web_fetch', callId, label: 'result' },
+            suggestedName: 'web_fetch.txt',
+            ref: spillRef,
+          }],
+        },
+      },
+    }, { surfaceOp: 'append' })
+    session.append('step/end', { turn: 1, step: 1 })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    return session
+  }
+
+  it('deferred 导出只带描述符；流式收发后 apply 水合并清空收件箱', async () => {
+    const source = createEnvironment('source')
+    const id = SessionId('session-big-spill')
+    const workspace = source.workspaces.add('workspace-big-spill', `${source.home}/mirror/big-spill`, 'Big spill project')
+    source.bindings.add({ mirrorPath: workspace.path, nodeId: 'node-source', remotePath: '/remote/project', workspaceId: workspace.id })
+    const bigText = 'z'.repeat(512 * 1024)
+    const spillRef = {
+      locator: '/source-spill/big/out.txt',
+      bytes: Buffer.byteLength(bigText, 'utf8'),
+      retrievalHint: 'Use read with offset/limit, or grep this path to search within it.',
+    }
+    source.spills.add('session-big-spill', spillRef, bigText)
+    source.persistence.add(spillSession('session-big-spill', workspace.path, spillRef))
+    workspace.sessionIds.push(id)
+
+    const inlineBundle = await source.service.exportBundle()
+    const inlineObject = inlineBundle.entries[0]?.objects?.[0]
+    expect(inlineObject?.kind).toBe('spill')
+    expect(inlineObject?.deferred).toBeUndefined()
+    const key = syncSessionEntryKey(inlineBundle.entries[0]!)
+
+    const deferredBundle = await source.service.exportEntries([key], undefined, [], { deferredObjects: true })
+    const deferredObject = deferredBundle.entries[0]?.objects?.[0]
+    expect(deferredObject).toMatchObject({ kind: 'spill', deferred: true, data: '', bytes: bigText.length })
+    expect(deferredObject?.digest).toBe(digest(Buffer.from(bigText, 'utf8')))
+
+    const target = createEnvironment('target')
+    await target.service.ingestObjectStream(source.service.streamObjects([deferredObject!]))
+    const applied = await target.service.applyBundle(
+      makeSyncSessionBundle(deferredBundle.instanceId, deferredBundle.entries, []),
+      'source peer',
+      'p-0123456789abcdef01234567',
+    )
+    expect(applied.created).toBe(1)
+    expect(target.spills.transfers.size).toBe(1)
+    const [transfer] = target.spills.transfers.values()
+    expect(transfer.digest).toBe(deferredObject?.digest)
+    await expect(target.service.objectInbox.read(deferredObject!.digest)).rejects.toBeInstanceOf(SyncSessionError)
+  })
+
+  it('收件箱写入器拒绝摘要不符的流并清理临时文件', async () => {
+    const env = createEnvironment('source')
+    const badDigest = digest(Buffer.from('real content'))
+    const writer = await env.service.objectInbox.writerFor(badDigest, 4)
+    await writer.write(Buffer.from('evil'))
+    await expect(writer.commit()).rejects.toBeInstanceOf(SyncSessionError)
+    await expect(env.service.objectInbox.read(badDigest)).rejects.toBeInstanceOf(SyncSessionError)
+  })
+})

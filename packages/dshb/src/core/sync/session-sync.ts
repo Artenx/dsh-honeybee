@@ -1,7 +1,8 @@
-import { createHash } from 'node:crypto'
-import { constants as fsConstants, mkdirSync } from 'node:fs'
-import { lstat, mkdir, open, realpath, unlink } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { createHash, randomBytes } from 'node:crypto'
+import { constants as fsConstants, createReadStream, mkdirSync } from 'node:fs'
+import type { Dirent, Stats } from 'node:fs'
+import { access, lstat, mkdir, open, readdir, realpath, rename, stat as statFs, unlink } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, normalize as normalizeHostPath, posix, resolve } from 'node:path'
 import {
   SESSION_FORMAT_VERSION,
@@ -30,10 +31,14 @@ import type {
 import { SyncStateStore } from './stores.js'
 import { SyncSessionJournalStore } from './session-journal.js'
 import { SyncSessionExportCacheStore } from './export-cache.js'
-import { MAX_SYNC_TRANSFER_BYTES } from './protocol.js'
+import { MAX_SESSION_OBJECT_INLINE_BYTES, MAX_SESSION_OBJECT_STREAM_BYTES, MAX_SYNC_TRANSFER_BYTES } from './protocol.js'
 
 const SESSION_READ_PAGE_SIZE = 256
 const MAX_SYNC_SESSIONS = 10_000
+// 单个会话条目的序列化体积上限：MAX_SYNC_TRANSFER_BYTES 内为 bundle 信封与
+// 同批其他条目留出余量。超出该体积的会话在导出时记为 skipped（见
+// exportSessionEntry），保证一个巨型会话不会让整次同步反复失败。
+const MAX_SESSION_EXPORT_ENTRY_BYTES = 96 * 1024 * 1024
 const MAX_MANIFEST_PAYLOAD_CACHE_BYTES = 4 * 1024 * 1024
 const MAX_MANIFEST_PAYLOAD_CACHE_COUNT = 8
 // Bump when sessionEventDigest's normalization changes.
@@ -81,8 +86,8 @@ export interface SyncSessionEventDelta {
 }
 
 export type SyncSessionObject =
-  | { id: string; kind: 'image'; ref: ImageAttachmentRef; bytes: number; digest: string; data: string }
-  | { id: string; kind: 'file'; ref: FileAttachmentRef; bytes: number; digest: string; data: string }
+  | { id: string; kind: 'image'; ref: ImageAttachmentRef; bytes: number; digest: string; data: string; deferred?: boolean }
+  | { id: string; kind: 'file'; ref: FileAttachmentRef; bytes: number; digest: string; data: string; deferred?: boolean }
   | {
       id: string
       kind: 'spill'
@@ -91,6 +96,7 @@ export type SyncSessionObject =
       digest: string
       data: string
       unavailable?: boolean
+      deferred?: boolean
     }
 
 export interface SyncSessionEntry {
@@ -199,11 +205,156 @@ interface SessionExportOptions {
   selectedKeys?: ReadonlySet<string>
   payloadCache?: SessionManifestPayloadCache
   sharedObjects?: boolean
+  deferredObjects?: boolean
 }
 
 interface ExportObjectCacheEntry {
   object: SyncSessionObject
 }
+
+/**
+ * 带外对象收件箱：对端推送/拉取的大对象（附件/spill）先落盘到
+ * `<home>/dshb/sync-objects/<sha256hex>`，apply 阶段按 digest 流式水合进
+ * 本地存储并删除。落盘全程流式（内存 O(单帧)），对象总体积不受堆约束。
+ * apply 失败时收件箱保留（journal 回放仍可水合），孤儿文件由 TTL 清扫回收。
+ */
+export interface SyncObjectInboxWriter {
+  write(chunk: Uint8Array): Promise<void>
+  commit(): Promise<void>
+  abort(): Promise<void>
+}
+
+export class SyncSessionObjectInbox {
+  private readonly root: string
+
+  constructor(home?: string) {
+    this.root = join(home ?? process.env.DSH_HOME ?? homedir(), 'dshb', 'sync-objects')
+  }
+
+  get path(): string {
+    return this.root
+  }
+
+  private fileFor(digest: string): string | undefined {
+    const match = /^sha256:([a-f0-9]{64})$/.exec(digest)
+    if (!match) return undefined
+    return join(this.root, match[1])
+  }
+
+  /**
+   * 打开一个收件箱写入器：逐帧流式写盘 + 增量摘要校验，内存 O(帧)。
+   * commit() 校验字节数与 digest 后原子重命名；abort() 清理临时文件。
+   */
+  async writerFor(digest: string, expectedBytes: number): Promise<SyncObjectInboxWriter> {
+    const file = this.fileFor(digest)
+    if (!file) throw new SyncSessionError('object-invalid', 'session object digest is invalid')
+    await mkdir(this.root, { recursive: true, mode: 0o700 })
+    const temporary = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`
+    const hash = createHash('sha256')
+    const handle = await open(temporary, 'wx', 0o600)
+    let written = 0
+    let closed = false
+    const closeHandle = async (): Promise<void> => {
+      if (closed) return
+      closed = true
+      await handle.close().catch(() => {})
+    }
+    return {
+      async write(chunk: Uint8Array): Promise<void> {
+        if (closed) throw new SyncSessionError('object-invalid', 'session object writer is closed')
+        written += chunk.byteLength
+        if (written > expectedBytes) throw new SyncSessionError('object-integrity', 'session object stream exceeds declared bytes')
+        hash.update(chunk)
+        let offset = 0
+        while (offset < chunk.byteLength) {
+          const { bytesWritten } = await handle.write(chunk, offset, chunk.byteLength - offset, null)
+          if (bytesWritten <= 0) throw new SyncSessionError('object-integrity', 'session object stream write made no progress')
+          offset += bytesWritten
+        }
+      },
+      async commit(): Promise<void> {
+        if (written !== expectedBytes || `sha256:${hash.digest('hex')}` !== digest) {
+          await closeHandle()
+          try {
+            await unlink(temporary)
+          } catch {}
+          throw new SyncSessionError('object-integrity', 'session object stream digest mismatch')
+        }
+        await handle.sync()
+        await closeHandle()
+        await rename(temporary, file)
+      },
+      async abort(): Promise<void> {
+        await closeHandle()
+        try {
+          await unlink(temporary)
+        } catch {}
+      },
+    }
+  }
+
+  /** 便捷写入：把对象流整段写进收件箱（测试与小对象用）。 */
+  async write(digest: string, bytes: number, stream: AsyncIterable<Uint8Array>): Promise<void> {
+    const writer = await this.writerFor(digest, bytes)
+    try {
+      for await (const chunk of stream) {
+        if (!(chunk instanceof Uint8Array) || chunk.byteLength === 0) {
+          throw new SyncSessionError('object-invalid', 'session object stream contains an invalid chunk')
+        }
+        await writer.write(chunk)
+      }
+      await writer.commit()
+    } catch (error) {
+      await writer.abort()
+      throw error
+    }
+  }
+
+  /** 打开收件箱文件的只读流（apply 水合用）；调用方负责消费完毕。 */
+  async read(digest: string): Promise<AsyncIterable<Uint8Array>> {
+    const file = this.fileFor(digest)
+    if (!file) throw new SyncSessionError('object-missing', 'session object is not in the inbox')
+    try {
+      await access(file)
+    } catch {
+      throw new SyncSessionError('object-missing', 'session object is not in the inbox')
+    }
+    return createReadStream(file)
+  }
+
+  async delete(digest: string): Promise<void> {
+    const file = this.fileFor(digest)
+    if (!file) return
+    try {
+      await unlink(file)
+    } catch {}
+  }
+
+  /** TTL 清扫：删除超过 maxAgeMs 未修改的孤儿文件。 */
+  async sweep(maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
+    let entries: Dirent[]
+    try {
+      entries = await readdir(this.root, { withFileTypes: true })
+    } catch {
+      return 0
+    }
+    const cutoff = Date.now() - maxAgeMs
+    let removed = 0
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^[a-f0-9]{64}(\.|$)/.test(entry.name)) continue
+      const file = join(this.root, entry.name)
+      try {
+        const stats: Stats = await statFs(file)
+        if (stats.mtimeMs < cutoff) {
+          await unlink(file)
+          removed += 1
+        }
+      } catch {}
+    }
+    return removed
+  }
+}
+
 
 /**
  * 导出期附件对象缓存：跨会话去重同一附件（同 id 只读一次存储、只算一次摘要）。
@@ -541,10 +692,24 @@ async function saveSpillTransfer(
     transferId: string
     bytes: number
     digest: string
-    data: Buffer
+    /** 内联路径的载荷；content 提供时可不传。 */
+    data?: Buffer
+    /** 带外水合：已校验摘要的原始内容流（需要 store 支持 saveTextStream）。 */
+    content?: AsyncIterable<Uint8Array>
   },
 ): Promise<SpillTransferReference['ref']> {
   if (store.saveTextStream) {
+    if (input.content !== undefined) {
+      return store.saveTextStream({
+        owner: input.owner,
+        source: input.source,
+        suggestedName: input.suggestedName,
+        transferId: input.transferId,
+        bytes: input.bytes,
+        digest: input.digest,
+        content: input.content,
+      })
+    }
     return store.saveTextStream({
       owner: input.owner,
       source: input.source,
@@ -552,10 +717,12 @@ async function saveSpillTransfer(
       transferId: input.transferId,
       bytes: input.bytes,
       digest: input.digest,
-      content: oneChunk(input.data),
+      content: oneChunk(input.data!),
     })
   }
-  if (typeof store.root === 'string') return writeLocalSpillTransfer(store.root, input)
+  if (typeof store.root === 'string' && input.content === undefined && input.data !== undefined) {
+    return writeLocalSpillTransfer(store.root, { ...input, data: input.data })
+  }
   throw new SyncSessionError('spill-transfer-unavailable', '目标实例的 spill provider 不支持安全写入')
 }
 
@@ -978,6 +1145,58 @@ async function collectBytes(stream: AsyncIterable<Uint8Array>, maxBytes = MAX_SY
   return Buffer.concat(chunks, size)
 }
 
+/** 流式计算对象摘要：内存 O(单块)，供超过内联阈值的带外对象测长 + 摘要。 */
+async function hashStream(stream: AsyncIterable<Uint8Array>, maxBytes: number): Promise<{ bytes: number; digest: string }> {
+  const hash = createHash('sha256')
+  let total = 0
+  for await (const chunk of stream) {
+    if (!(chunk instanceof Uint8Array)) throw new SyncSessionError('object-invalid', 'session object stream contains a non-byte chunk')
+    total += chunk.byteLength
+    if (total > maxBytes) throw new SyncSessionError('bundle-too-large', 'session object exceeds the transfer limit')
+    hash.update(chunk)
+  }
+  return { bytes: total, digest: `sha256:${hash.digest('hex')}` }
+}
+
+/**
+ * 带外水合的内容流：边消费边校验字节数与摘要，全部消费完才放行
+ * （摘要不符在流末尾抛出，内存 O(单块)）。
+ */
+async function* verifiedObjectStream(
+  stream: AsyncIterable<Uint8Array>,
+  expectedBytes: number,
+  expectedDigest: string,
+): AsyncGenerator<Uint8Array> {
+  const hash = createHash('sha256')
+  let total = 0
+  for await (const chunk of stream) {
+    if (!(chunk instanceof Uint8Array)) throw new SyncSessionError('object-invalid', 'session object stream contains a non-byte chunk')
+    total += chunk.byteLength
+    if (total > expectedBytes) throw new SyncSessionError('object-integrity', 'session object content exceeds declared bytes')
+    hash.update(chunk)
+    yield chunk
+  }
+  if (total !== expectedBytes || `sha256:${hash.digest('hex')}` !== expectedDigest) {
+    throw new SyncSessionError('object-integrity', 'session object content failed digest validation')
+  }
+}
+
+/** 校验带外对象帧头：{"id":"...","bytes":N,"digest":"sha256:..."} */
+function parseObjectStreamHeader(line: Buffer): { id: string; bytes: number; digest: string } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(line.toString('utf8'))
+  } catch {
+    throw new SyncSessionError('object-invalid', 'object stream header is not valid JSON')
+  }
+  if (!isRecord(parsed) || typeof parsed.id !== 'string' || !parsed.id ||
+    !isNonNegativeSafeInteger(parsed.bytes) || parsed.bytes > MAX_SESSION_OBJECT_STREAM_BYTES ||
+    typeof parsed.digest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(parsed.digest)) {
+    throw new SyncSessionError('object-invalid', 'object stream header is invalid')
+  }
+  return { id: parsed.id, bytes: parsed.bytes, digest: parsed.digest }
+}
+
 async function* oneChunk(data: Uint8Array): AsyncIterable<Uint8Array> {
   yield data
 }
@@ -1093,13 +1312,14 @@ function workspaceCandidateKey(workspace: WorkspaceLike): string {
   return normalizeHostPath(workspace.path)
 }
 
-function validateObjectPayload(object: unknown): SyncSessionObject {
+export function validateObjectPayload(object: unknown): SyncSessionObject {
   if (!isRecord(object) || typeof object.id !== 'string' || !object.id || typeof object.digest !== 'string' ||
     !/^sha256:[a-f0-9]{64}$/.test(object.digest) || !isNonNegativeSafeInteger(object.bytes) || typeof object.data !== 'string') {
     throw new SyncSessionError('object-invalid', 'session object metadata is invalid')
   }
+  const isDeferred = object.deferred === true && object.data === ''
   const isUnavailableSpill = object.kind === 'spill' && object.unavailable === true && object.bytes === 0 && object.data === ''
-  if (!isUnavailableSpill) {
+  if (!isDeferred && !isUnavailableSpill) {
     const bytes = Buffer.from(object.data, 'base64')
     if (bytes.toString('base64') !== object.data || bytes.byteLength !== object.bytes || sha256(bytes) !== object.digest) {
       throw new SyncSessionError('object-invalid', 'session object encoding or digest is invalid')
@@ -1673,6 +1893,8 @@ export class SyncSessionService {
   private readonly exportCacheStore: SyncSessionExportCacheStore
   private readonly manifestPayloadCache = new Map<string, SessionManifestPayloadCache>()
   private manifestPayloadCacheBytes = 0
+  /** 带外对象收件箱：对象流 RPC 的落盘暂存区，apply 水合后删除。 */
+  readonly objectInbox: SyncSessionObjectInbox
 
   constructor(
     private readonly state: SyncStateStore,
@@ -1689,6 +1911,7 @@ export class SyncSessionService {
     home?: string,
   ) {
     this.exportCacheStore = new SyncSessionExportCacheStore(home)
+    this.objectInbox = new SyncSessionObjectInbox(home)
     for (const [key, entry] of this.exportCacheStore.entries()) {
       if (!this.exportCache.has(key)) {
         this.exportCache.set(key, entry)
@@ -1718,7 +1941,7 @@ export class SyncSessionService {
     keys: readonly string[],
     manifestDigest?: string,
     prefixes: readonly SyncSessionEventPrefix[] = [],
-    options: { sharedObjects?: boolean } = {},
+    options: { sharedObjects?: boolean; deferredObjects?: boolean } = {},
   ): Promise<SyncSessionBundle> {
     return this.serializeMutation(async () => {
       if (keys.length > MAX_SYNC_SESSIONS || keys.some((key) => typeof key !== 'string' || key.length > 2048) ||
@@ -1753,7 +1976,7 @@ export class SyncSessionService {
           : makeSyncSessionBundle(payloadCache.instanceId, [])
         bundle = makeSyncSessionBundle(payloadCache.instanceId, [...cachedEntries, ...additional.entries], additional.skipped)
       } else {
-        bundle = await this.exportBundleNow({ selectedKeys, sharedObjects: options.sharedObjects === true })
+        bundle = await this.exportBundleNow({ selectedKeys, sharedObjects: options.sharedObjects === true, deferredObjects: options.deferredObjects === true })
       }
       const withTails = bundle.entries.map((entry) => withEventTail(entry, prefixesByKey.get(syncSessionEntryKey(entry))))
       if (bundle.objects !== undefined) {
@@ -1944,6 +2167,9 @@ export class SyncSessionService {
     const entries: SyncSessionEntry[] = []
     const skipped: Array<{ sessionId: string; reason: string }> = []
     const eligibleLocalIds = new Set<string>()
+    // 因体积超限被跳过的活跃会话仍然存在于本地，绝不能被底部墓碑清理当成
+    // "已消失"生成删除标记（否则远端会删掉这份还能正常打开的会话）。
+    const preservedLocalIds = new Set<string>()
     const workspaceById = new Map<string, WorkspaceLike>()
     const archivedBranchSessionIds = new Set(Object.values(stateIndex.state.archives).map((archive) => archive.localSessionId))
     const objectCache = new ExportObjectCache()
@@ -2023,10 +2249,12 @@ export class SyncSessionService {
             undefined,
             stateIndex,
             objectCache,
+            options.deferredObjects === true,
           )
         } catch (error) {
           if (!(error instanceof SyncSessionError && error.code === 'session-too-large')) throw error
           skipped.push({ sessionId, reason: 'session-payload-too-large' })
+          preservedLocalIds.add(sessionId)
           continue
         }
         if (exported) {
@@ -2067,6 +2295,7 @@ export class SyncSessionService {
         continue
       }
       if (eligibleLocalIds.has(metadata.localEntityId)) continue
+      if (preservedLocalIds.has(metadata.localEntityId)) continue
       const tombstone: SyncRecordMetadata = {
         ...metadata,
         revision: this.state.nextRevision(this.now()),
@@ -2110,10 +2339,12 @@ export class SyncSessionService {
           archive,
           stateIndex,
           objectCache,
+          options.deferredObjects === true,
         )
       } catch (error) {
         if (!(error instanceof SyncSessionError && error.code === 'session-too-large')) throw error
         skipped.push({ sessionId: archive.localSessionId, reason: 'session-payload-too-large' })
+        preservedLocalIds.add(archive.localSessionId)
         continue
       }
       if (exported) {
@@ -2203,6 +2434,8 @@ export class SyncSessionService {
     )
     const result = emptyApplyResult()
     const attachmentImportCache = new Map<string, ImportedSessionObjectRef>()
+    // 带外对象水合时消费的收件箱 digest；apply 成功后统一删除。
+    const inboxConsumed = new Set<string>()
     result.skipped += bundle.skipped.length
     result.unmapped += bundle.skipped.length
     const workspaceOrders = new Map<string, Array<{ id: SessionId; position: number }>>()
@@ -2322,7 +2555,7 @@ export class SyncSessionService {
         let prepared: PreparedSyncSession
         if (preparedValue === undefined) {
           try {
-            prepared = await this.prepareEntry(entry, safeSourceName, plannedSessionIds, entryWorkspace, resolvedImportedVia, attachmentImportCache)
+            prepared = await this.prepareEntry(entry, safeSourceName, plannedSessionIds, entryWorkspace, resolvedImportedVia, attachmentImportCache, inboxConsumed)
           } catch (error) {
             if (error instanceof SyncSessionError && error.code === 'workspace-unmapped') {
               result.skipped += 1
@@ -2352,6 +2585,9 @@ export class SyncSessionService {
       await this.orderWorkspaceSessions(workspaceOrders)
       this.journal.complete(batchId)
       this.exportCacheStore.flush()
+      // 批量应用成功：水合已完成的带外对象收件箱文件可以删除了。
+      // 失败路径保留收件箱，journal 回放仍能水合。
+      if (inboxConsumed.size > 0) await this.deleteInboxedObjects(inboxConsumed)
       return result
     } catch (error) {
       if (error instanceof SyncSessionError) throw error
@@ -2398,6 +2634,7 @@ export class SyncSessionService {
     workspace: WorkspaceLike,
     importedVia: SyncImportMethod,
     attachmentImportCache?: Map<string, ImportedSessionObjectRef>,
+    inboxConsumed?: Set<string>,
   ): Promise<PreparedSyncSession> {
     if (!entry.header || !entry.events || !entry.workspace || !entry.objects) {
       throw new SyncSessionError('manifest-invalid', 'active session entry is incomplete')
@@ -2429,7 +2666,7 @@ export class SyncSessionService {
         await handle.close()
       }
     }
-    const objectMap = await this.importObjects(entry.objects, sessionId, attachmentImportCache)
+    const objectMap = await this.importObjects(entry.objects, sessionId, attachmentImportCache, inboxConsumed)
     const events = this.rewriteEvents(entry.events, entry.objects, objectMap, sessionId, String(entry.header.id))
     const validatedEvents = validateStoredEvents(header, events)
     assertContiguous(sessionId, validatedEvents, 0)
@@ -2529,6 +2766,7 @@ export class SyncSessionService {
     objects: readonly SyncSessionObject[],
     sessionId: SessionId,
     attachmentImportCache?: Map<string, ImportedSessionObjectRef>,
+    inboxConsumed?: Set<string>,
   ): Promise<Map<string, ImportedSessionObjectRef>> {
     const attachments = objects.some((object) => object.kind === 'image' || object.kind === 'file')
       ? this.getAttachments()
@@ -2546,6 +2784,64 @@ export class SyncSessionService {
       if (object.kind !== 'spill') {
         const cached = attachmentImportCache?.get(object.id)
         if (cached) { output.set(object.id, cached); continue }
+      }
+      if (object.deferred === true) {
+        // 带外对象：从收件箱流式水合进本地存储（文件/spill 走流式写，
+        // 图片体积有限走缓冲），全程不把整块载荷读进堆。
+        inboxConsumed?.add(object.digest)
+        if (object.kind === 'image') {
+          const stream = await this.objectInbox.read(object.digest)
+          const data = await collectBytes(stream, MAX_SESSION_OBJECT_INLINE_BYTES * 256)
+          if (data.byteLength !== object.bytes || sha256(data) !== object.digest) {
+            throw new SyncSessionError('object-integrity', 'session object failed digest validation')
+          }
+          const ref = await attachments!.saveImage({
+            data,
+            mediaType: object.ref.mediaType,
+            ...(object.ref.name === undefined ? {} : { name: object.ref.name }),
+          })
+          output.set(object.id, ref)
+          attachmentImportCache?.set(object.id, ref)
+        } else if (object.kind === 'file') {
+          const stream = await this.objectInbox.read(object.digest)
+          const ref = await attachments!.saveFileStream({
+            data: verifiedObjectStream(stream, object.bytes, object.digest),
+            name: object.ref.name,
+          })
+          output.set(object.id, ref)
+          attachmentImportCache?.set(object.id, ref)
+        } else {
+          if (spills!.saveTextStream) {
+            const stream = await this.objectInbox.read(object.digest)
+            const ref = await saveSpillTransfer(spills!, {
+              owner: { sessionId },
+              source: object.reference.source,
+              suggestedName: object.reference.suggestedName,
+              transferId: object.id,
+              bytes: object.bytes,
+              digest: object.digest,
+              content: verifiedObjectStream(stream, object.bytes, object.digest),
+            })
+            output.set(object.id, ref)
+          } else {
+            const stream = await this.objectInbox.read(object.digest)
+            const data = await collectBytes(stream, MAX_SESSION_OBJECT_INLINE_BYTES * 1024)
+            if (data.byteLength !== object.bytes || sha256(data) !== object.digest) {
+              throw new SyncSessionError('object-integrity', 'session object failed digest validation')
+            }
+            const ref = await saveSpillTransfer(spills!, {
+              owner: { sessionId },
+              source: object.reference.source,
+              suggestedName: object.reference.suggestedName,
+              transferId: object.id,
+              bytes: object.bytes,
+              digest: object.digest,
+              data,
+            })
+            output.set(object.id, ref)
+          }
+        }
+        continue
       }
       const data = arrayBuffer(object.data)
       if (data.byteLength !== object.bytes || sha256(data) !== object.digest) {
@@ -3081,6 +3377,7 @@ export class SyncSessionService {
     archive?: SyncSessionArchive,
     stateIndex?: SessionStateIndex,
     objectCache?: ExportObjectCache,
+    deferredObjects = false,
   ): Promise<SessionExportResult | undefined> {
     const { header, inheritedEventCount, events, revision: sourceRevision } = await this.readStableSession(persistence, sessionId, firstSnapshot)
     const localSessionId = String(sessionId)
@@ -3103,7 +3400,7 @@ export class SyncSessionService {
       { originInstanceId: descriptor.originInstanceId, originEntityId: descriptor.originWorkspaceId },
     )
     const eventDigest = sessionEventListDigest(events)
-    const objects = await this.exportObjects(events, localSessionId, objectCache)
+    const objects = await this.exportObjects(events, localSessionId, objectCache, deferredObjects)
     const digest = sessionEventDigest(
       header,
       inheritedEventCount,
@@ -3174,6 +3471,35 @@ export class SyncSessionService {
       })
       indexSessionRecord(index, metadata)
     }
+    const wireEntry: SyncSessionEntry = {
+      metadata,
+      ...(outputBranchId ? { branchId: outputBranchId } : {}),
+      sourceLocalSessionId: localSessionId,
+      header,
+      inheritedEventCount,
+      ...(parentOrigin ? { parentOrigin } : {}),
+      workspace: descriptor,
+      workspacePosition,
+      archived,
+      pinned,
+      ...(syncInstructions ? { instructionSnapshot: syncInstructions } : {}),
+      events: [...events],
+      objects,
+      eventCount: events.length,
+      eventDigest,
+    }
+    // 单会话序列化体积硬闸：超过单条上限的会话无法装进任何一次分批传输
+    // （接收端整包 JSON.parse 的对象图约为文本 5 倍，128MB 传输上限下单条
+    // 留出信封余量）。抛 session-too-large，由导出循环记为 skipped——该会话
+    // 不参与同步，其余会话照常，避免一个巨型会话让整次同步反复失败。
+    // 必须在写导出缓存之前判定：缓存复用会绕过本函数的重新导出，若把超限
+    // 会话写进缓存，manifest 会包含它而 entries 路径又产出 skipped，两端
+    // 不一致会让整次同步以 session-manifest-stale 失败。
+    if (Buffer.byteLength(JSON.stringify(wireEntry), 'utf8') > MAX_SESSION_EXPORT_ENTRY_BYTES) {
+      this.exportCache.delete(cacheKey)
+      this.exportCacheStore.delete(cacheKey)
+      throw new SyncSessionError('session-too-large', '会话内容超过单会话传输上限')
+    }
     // Spill payloads can change outside the session log revision.
     if (!archive && !objects.some((object) => object.kind === 'spill')) {
       const fingerprint = sessionExportFingerprint({
@@ -3203,23 +3529,7 @@ export class SyncSessionService {
       this.exportCacheStore.delete(cacheKey)
     }
     return {
-      entry: {
-        metadata,
-        ...(outputBranchId ? { branchId: outputBranchId } : {}),
-        sourceLocalSessionId: localSessionId,
-        header,
-        inheritedEventCount,
-        ...(parentOrigin ? { parentOrigin } : {}),
-        workspace: descriptor,
-        workspacePosition,
-        archived,
-        pinned,
-        ...(syncInstructions ? { instructionSnapshot: syncInstructions } : {}),
-        events: [...events],
-        objects,
-        eventCount: events.length,
-        eventDigest,
-      },
+      entry: wireEntry,
       eventCount: events.length,
       eventDigest,
       inheritedEventCount,
@@ -3274,6 +3584,7 @@ export class SyncSessionService {
     events: readonly SessionEvent[],
     sessionId: string,
     objectCache?: ExportObjectCache,
+    deferredObjects = false,
   ): Promise<SyncSessionObject[]> {
     const attachments = attachmentReferences(events)
     const spills = spillReferences(events)
@@ -3286,6 +3597,8 @@ export class SyncSessionService {
     if ((attachments.images.length + attachments.files.length) > 0 && !attachmentStore) {
       throw new SyncSessionError('attachments-unavailable', '附件存储服务不可用')
     }
+    const deferredDescriptor = (object: SyncSessionObject): SyncSessionObject =>
+      ({ ...object, data: '', deferred: true }) as SyncSessionObject
     for (const ref of attachments.images) {
       const key = attachmentKey('image', ref)
       const cached = objectCache?.get(key)?.object
@@ -3295,7 +3608,7 @@ export class SyncSessionService {
       }
       const stored = await attachmentStore!.readImage(ref)
       const digest = sha256(stored.data)
-      const object: SyncSessionObject = {
+      let object: SyncSessionObject = {
         id: key,
         kind: 'image',
         ref: stored.ref,
@@ -3303,6 +3616,7 @@ export class SyncSessionService {
         digest,
         data: Buffer.from(stored.data).toString('base64'),
       }
+      if (deferredObjects && object.bytes > MAX_SESSION_OBJECT_INLINE_BYTES) object = deferredDescriptor(object)
       payloads.set(key, object)
       objectCache?.set(key, { object })
     }
@@ -3313,17 +3627,36 @@ export class SyncSessionService {
         payloads.set(key, cached)
         continue
       }
-      // 超过传输上限的文件附件无法内联进 bundle（validateObjectPayload 要求真实数据），
-      // 也不能省略（接收端会重算摘要导致不一致）。抛出 session-too-large，由导出循环
-      // 把该会话整体记为 skipped，避免单次导出因一个巨型附件而崩溃或无限缓冲。
-      let data: Buffer
+      let data: Buffer | undefined
+      // 收集上限按模式区分：deferred 模式超过内联阈值即转带外；旧路径保持
+      // 128MB 上限（与 0.1.31 语义一致，超限走 session-too-large）。
+      const inlineCap = deferredObjects ? MAX_SESSION_OBJECT_INLINE_BYTES : MAX_SYNC_TRANSFER_BYTES
       try {
-        data = await collectBytes(attachmentStore!.readFileStream(ref))
+        data = await collectBytes(attachmentStore!.readFileStream(ref), inlineCap)
       } catch (error) {
-        if (error instanceof SyncSessionError && error.code === 'bundle-too-large') {
+        if (!(error instanceof SyncSessionError && error.code === 'bundle-too-large')) throw error
+        data = undefined
+      }
+      if (data === undefined) {
+        // 超过内联阈值：对端声明带外流能力时记为 deferred 描述符（载荷走磁盘
+        // 流式 RPC，内存 O(帧)，体积无实质上限）；旧对端回退原行为——抛
+        // session-too-large 由导出循环把该会话记为 skipped。
+        if (!deferredObjects) {
           throw new SyncSessionError('session-too-large', '会话文件附件超过传输大小限制')
         }
-        throw error
+        const measured = await hashStream(attachmentStore!.readFileStream(ref), MAX_SESSION_OBJECT_STREAM_BYTES)
+        const object: SyncSessionObject = {
+          id: key,
+          kind: 'file',
+          ref,
+          bytes: measured.bytes,
+          digest: measured.digest,
+          data: '',
+          deferred: true,
+        }
+        payloads.set(key, object)
+        objectCache?.set(key, { object })
+        continue
       }
       const object: SyncSessionObject = {
         id: key,
@@ -3349,7 +3682,37 @@ export class SyncSessionService {
           continue
         }
         try {
-          const data = await collectBytes(readSpillStream(store, reference))
+          let data: Buffer | undefined
+          const inlineCap = deferredObjects ? MAX_SESSION_OBJECT_INLINE_BYTES : MAX_SYNC_TRANSFER_BYTES
+          try {
+            data = await collectBytes(readSpillStream(store, reference), inlineCap)
+          } catch (error) {
+            if (!(error instanceof SyncSessionError && error.code === 'bundle-too-large')) throw error
+            data = undefined
+          }
+          if (data === undefined) {
+            if (!deferredObjects) {
+              untransferred.push(reference)
+              continue
+            }
+            const measured = await hashStream(readSpillStream(store, reference), MAX_SESSION_OBJECT_STREAM_BYTES)
+            if (reference.ref.bytes !== undefined && measured.bytes !== reference.ref.bytes) {
+              untransferred.push(reference)
+              continue
+            }
+            const object: SyncSessionObject = {
+              id: key,
+              kind: 'spill',
+              reference,
+              bytes: measured.bytes,
+              digest: measured.digest,
+              data: '',
+              deferred: true,
+            }
+            payloads.set(key, object)
+            objectCache?.set(key, { object })
+            continue
+          }
           if (reference.ref.bytes !== undefined && data.byteLength !== reference.ref.bytes) {
             untransferred.push(reference); continue
           }
@@ -3392,6 +3755,122 @@ export class SyncSessionService {
     const persistence = this.getPersistence()
     if (!persistence) throw new SyncSessionError('session-persistence-unavailable', '会话持久化服务不可用')
     return persistence
+  }
+
+  /**
+   * 把 deferred 对象编码为带外帧流：每对象一行 JSON 头 + 原始字节。
+   * 内容从本地存储流式读取（spill/文件流式；图片体积有限走缓冲），
+   * 逐块校验字节数与摘要，内存 O(单块)。
+   */
+  async *streamObjects(objects: readonly SyncSessionObject[]): AsyncGenerator<Uint8Array> {
+    for (const object of objects) {
+      const header = Buffer.from(`${JSON.stringify({ id: object.id, bytes: object.bytes, digest: object.digest })}\n`, 'utf8')
+      yield header
+      if (object.deferred !== true) {
+        const data = arrayBuffer(object.data)
+        if (data.byteLength !== object.bytes || sha256(data) !== object.digest) {
+          throw new SyncSessionError('object-integrity', 'session object failed digest validation')
+        }
+        yield data
+        continue
+      }
+      const hash = createHash('sha256')
+      let verified = 0
+      const source = await this.openObjectContent(object)
+      for await (const chunk of source) {
+        if (!(chunk instanceof Uint8Array)) throw new SyncSessionError('object-invalid', 'session object stream contains a non-byte chunk')
+        verified += chunk.byteLength
+        if (verified > object.bytes) throw new SyncSessionError('object-integrity', 'session object content exceeds declared bytes')
+        hash.update(chunk)
+        yield chunk
+      }
+      if (verified !== object.bytes || `sha256:${hash.digest('hex')}` !== object.digest) {
+        throw new SyncSessionError('object-integrity', 'session object content failed digest validation')
+      }
+    }
+  }
+
+  private async openObjectContent(object: SyncSessionObject): Promise<AsyncIterable<Uint8Array>> {
+    if (object.kind === 'spill') {
+      const store = this.getSpills()
+      if (!store) throw new SyncSessionError('spill-transfer-unavailable', '目标实例没有 owner-scoped spill transfer API')
+      return readSpillStream(store, object.reference)
+    }
+    const attachments = this.getAttachments()
+    if (!attachments) throw new SyncSessionError('attachments-unavailable', '附件存储服务不可用')
+    if (object.kind === 'file') return attachments.readFileStream(object.ref)
+    const stored = await attachments.readImage(object.ref)
+    return oneChunk(stored.data)
+  }
+
+  /** 单帧写入上限：超过即认为流失控。 */
+  private static readonly OBJECT_STREAM_HEADER_MAX_BYTES = 64 * 1024
+
+  /**
+   * 解析并落盘对端推送的对象帧流：逐帧写收件箱，边写边校验摘要，
+   * 内存 O(单帧)。返回接收的对象数。
+   */
+  async ingestObjectStream(source: AsyncIterable<Uint8Array>): Promise<number> {
+    let buffer = Buffer.alloc(0)
+    const reader = source[Symbol.asyncIterator]()
+    const nextChunk = async (): Promise<Buffer | undefined> => {
+      const { value, done } = await reader.next()
+      return done ? undefined : Buffer.from(value)
+    }
+    let count = 0
+    for (;;) {
+      let newline = buffer.indexOf(0x0a)
+      while (newline < 0) {
+        const chunk = await nextChunk()
+        if (chunk === undefined) {
+          if (buffer.length === 0) return count
+          throw new SyncSessionError('object-invalid', 'object stream ended inside a header')
+        }
+        buffer = Buffer.concat([buffer, chunk])
+        if (buffer.length > SyncSessionService.OBJECT_STREAM_HEADER_MAX_BYTES) {
+          throw new SyncSessionError('object-invalid', 'object stream header exceeds size limit')
+        }
+        newline = buffer.indexOf(0x0a)
+      }
+      const header = parseObjectStreamHeader(buffer.subarray(0, newline))
+      buffer = buffer.subarray(newline + 1)
+      const writer = await this.objectInbox.writerFor(header.digest, header.bytes)
+      try {
+        const writePart = async (part: Buffer): Promise<void> => {
+          if (part.byteLength > 0) await writer.write(part)
+        }
+        let remaining = header.bytes
+        for (;;) {
+          if (buffer.length > 0) {
+            const take = Math.min(buffer.length, remaining)
+            await writePart(buffer.subarray(0, take))
+            remaining -= take
+            buffer = buffer.subarray(take)
+            if (remaining === 0) break
+            continue
+          }
+          const chunk = await nextChunk()
+          if (chunk === undefined) throw new SyncSessionError('object-invalid', 'object stream ended inside a payload')
+          const take = Math.min(chunk.length, remaining)
+          await writePart(chunk.subarray(0, take))
+          remaining -= take
+          if (take < chunk.length) buffer = Buffer.concat([buffer, chunk.subarray(take)])
+          if (remaining === 0) break
+        }
+        await writer.commit()
+      } catch (error) {
+        await writer.abort()
+        throw error
+      }
+      count += 1
+    }
+  }
+
+  /** apply 成功后删除已水合对象的收件箱文件；失败保留供 journal 回放。 */
+  async deleteInboxedObjects(digests: Iterable<string>): Promise<void> {
+    for (const digest of digests) {
+      await this.objectInbox.delete(digest)
+    }
   }
 
   private serializeMutation<T>(operation: () => Promise<T>): Promise<T> {

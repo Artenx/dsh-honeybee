@@ -97,6 +97,11 @@ export function apply(ctx: Context): void {
   registerSyncOfflineRoutes(ctx, syncOfflineArchives)
   ctx.effect(() => {
     const stopScheduler = syncScheduler.start()
+    // 带外对象收件箱 TTL 清扫：apply 失败/进程中断留下的孤儿文件按天回收。
+    const inboxSweeper = setInterval(() => {
+      void syncSessions.objectInbox.sweep().catch(() => {})
+    }, 60 * 60 * 1000)
+    inboxSweeper.unref()
     let disposed = false
     setImmediate(() => {
       if (disposed) return
@@ -115,6 +120,7 @@ export function apply(ctx: Context): void {
     })
     return () => {
       disposed = true
+      clearInterval(inboxSweeper)
       stopScheduler()
     }
   })

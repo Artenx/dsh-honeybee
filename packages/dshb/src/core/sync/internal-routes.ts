@@ -3,13 +3,15 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { isLoopbackRequest } from '../../auth/loopback.js'
 import { SyncNodeManifestError, type SyncNodeService } from './node-sync.js'
-import { SyncSessionError, type SyncSessionEventPrefix, type SyncSessionService } from './session-sync.js'
 import {
+  MAX_SESSION_OBJECT_STREAM_BYTES,
   SYNC_PROTOCOL_VERSION,
   SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY,
   SYNC_SESSION_EVENT_TAIL_CAPABILITY,
   SYNC_SESSION_MANIFEST_CAPABILITY,
+  SYNC_SESSION_OBJECT_STREAM_CAPABILITY,
 } from './protocol.js'
+import { SyncSessionError, type SyncSessionEventPrefix, type SyncSessionService, validateObjectPayload } from './session-sync.js'
 import type { SyncStateStore } from './stores.js'
 
 // 与 MAX_SYNC_TRANSFER_BYTES 对齐的请求体硬上限：超限直接断开（resolve null → 400），
@@ -67,6 +69,68 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | n
   })
 }
 
+/**
+ * 会话对象带外流端点（POST /api/dshb/sync/internal/sessions/objects）：
+ * - 拉取模式（application/json 请求体 {objects: 描述符[]}）：把本地对象编码为
+ *   "JSON 头行 + 原始字节" 帧流响应，磁盘到网络流式读出，内存 O(帧)。
+ * - 推送模式（application/x-dshb-object-stream 请求体）：请求帧流直接落盘
+ *   收件箱（边收边校验摘要），返回 JSON 摘要。
+ * 两种模式全程流式，单对象体积上限 MAX_SESSION_OBJECT_STREAM_BYTES（64GB），
+ * 不受 JSON bundle 传输上限约束。
+ */
+async function handleSessionObjects(
+  sessionSync: SyncSessionService,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (!isLoopbackRequest(req.socket.remoteAddress, req.headers.host)) {
+    sendJson(res, 403, { ok: false, error: 'loopback access required' })
+    return
+  }
+  const contentType = req.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase()
+  if (contentType === 'application/x-dshb-object-stream') {
+    try {
+      const received = await sessionSync.ingestObjectStream(req)
+      sendJson(res, 200, { ok: true, received })
+    } catch (error) {
+      const code = error instanceof SyncSessionError ? error.code : 'object-stream-failed'
+      sendJson(res, 422, { ok: false, code, error: error instanceof SyncSessionError ? error.message : 'object stream ingest failed' })
+    }
+    return
+  }
+  if (contentType !== 'application/json') {
+    sendJson(res, 400, { ok: false, code: 'object-request-invalid', error: 'json or object-stream content type is required' })
+    return
+  }
+  const body = await readJsonBody(req)
+  if (!body || !Array.isArray(body.objects) || body.objects.length > 10_000 ||
+    body.objects.some((object) => {
+      try {
+        return validateObjectPayload(object).deferred !== true
+      } catch {
+        return true
+      }
+    })) {
+    sendJson(res, 400, { ok: false, code: 'object-request-invalid', error: 'deferred session object descriptors are required' })
+    return
+  }
+  const objects = (body.objects as unknown[]).map((object) => validateObjectPayload(object))
+  res.writeHead(200, { 'content-type': 'application/x-dshb-object-stream', 'cache-control': 'no-store' })
+  try {
+    for await (const chunk of sessionSync.streamObjects(objects)) {
+      if (!res.write(chunk)) {
+        await new Promise<void>((resolve, reject) => {
+          res.once('drain', resolve)
+          res.once('error', reject)
+        })
+      }
+    }
+    res.end()
+  } catch {
+    res.destroy()
+  }
+}
+
 export function registerSyncInternalRoutes(
   ctx: Context,
   state: SyncStateStore,
@@ -76,7 +140,7 @@ export function registerSyncInternalRoutes(
   const capabilities = [
     'peer-handshake',
     ...(nodeSync ? ['node-sync'] : []),
-    ...(sessionSync ? ['session-sync', SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY] : []),
+    ...(sessionSync ? ['session-sync', SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY] : []),
   ]
   ctx.effect(() =>
     ctx.webServer.register({
@@ -199,6 +263,7 @@ export function registerSyncInternalRoutes(
                 body.keys as string[],
                 body.manifestDigest,
                 (body.prefixes ?? []) as SyncSessionEventPrefix[],
+                { deferredObjects: body.deferredObjects === true },
               ),
             })
           } catch (error) {
@@ -206,6 +271,10 @@ export function registerSyncInternalRoutes(
             const status = code === 'bundle-too-large' ? 413 : 500
             sendJson(res, status, { ok: false, code, error: error instanceof SyncSessionError ? error.message : 'session entries export failed' })
           }
+          return
+        }
+        if (req.method === 'POST' && action === 'objects') {
+          await handleSessionObjects(sessionSync, req, res)
           return
         }
         if (req.method === 'POST' && action === 'apply') {

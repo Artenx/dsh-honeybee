@@ -7,6 +7,7 @@ import { isRecord, type SyncPeer } from './model.js'
 import { SyncHostKeyChallengeError, SyncHostKeyChallenges, inspectSyncHostKey } from './host-key.js'
 import type { SyncNodeApplyResult, SyncNodeManifest } from './node-sync.js'
 import {
+  MAX_SESSION_OBJECT_STREAM_BYTES,
   MAX_SYNC_DATA_CHUNK_BYTES,
   MAX_SYNC_TRANSFER_BYTES,
   SYNC_PROTOCOL_VERSION,
@@ -17,7 +18,7 @@ import {
   type SyncFrame,
 } from './protocol.js'
 import { REMOTE_SYNC_HELPER_COMMAND } from './remote-helper.js'
-import type { SyncSessionApplyResult, SyncSessionBundle, SyncSessionEventPrefix, SyncSessionManifest } from './session-sync.js'
+import type { SyncSessionApplyResult, SyncSessionBundle, SyncSessionEventPrefix, SyncSessionManifest, SyncSessionObject } from './session-sync.js'
 
 const SSH_READY_TIMEOUT_MS = 30_000
 const SSH_READ_IDLE_TIMEOUT_MS = 60_000
@@ -372,8 +373,9 @@ export class SyncSshTransport {
     keys: readonly string[],
     manifestDigest: string,
     prefixes: readonly SyncSessionEventPrefix[] = [],
+    deferredObjects = false,
   ): Promise<SyncSessionBundle> {
-    const value = await this.fetchDataOperation(peerId, 'session-entries', { keys, manifestDigest, prefixes })
+    const value = await this.fetchDataOperation(peerId, 'session-entries', { keys, manifestDigest, prefixes, deferredObjects })
     if (!isRecord(value) || value.ok !== true || !isRecord(value.bundle)) throw new SyncSshProbeError('helper')
     const bundle = value.bundle
     if (bundle.protocolVersion !== 1 || typeof bundle.instanceId !== 'string' ||
@@ -432,6 +434,120 @@ export class SyncSshTransport {
     const { peer } = await this.peerManager.connectionData(peerId)
     const fingerprint = this.hostKeyChallenges.acceptObserved(peer)
     await this.peerManager.pinHostKey(peerId, fingerprint)
+  }
+
+  /**
+   * 拉取带外对象流：响应以帧流形式逐块 yield，调用方（收件箱）边收边落盘，
+   * 内存 O(单帧)。会话在流结束/出错时关闭（生成器 finally）。
+   */
+  async *fetchSessionObjects(
+    peerId: string,
+    objects: readonly SyncSessionObject[],
+  ): AsyncGenerator<Uint8Array> {
+    const body = Buffer.from(JSON.stringify({ objects: [...objects] }), 'utf8')
+    if (body.length > MAX_SYNC_TRANSFER_BYTES) throw new SyncSshProbeError('protocol')
+    const { peer, session } = await this.openSession(peerId)
+    try {
+      await session.sendControl({
+        kind: 'request',
+        protocolVersion: SYNC_PROTOCOL_VERSION,
+        operation: 'session-objects',
+        port: peer.remoteWebPort ?? DEFAULT_REMOTE_WEB_PORT,
+      })
+      for (let offset = 0, sequence = 0; offset < body.length; offset += MAX_SYNC_DATA_CHUNK_BYTES, sequence += 1) {
+        await session.sendData(sequence, body.subarray(offset, Math.min(offset + MAX_SYNC_DATA_CHUNK_BYTES, body.length)))
+      }
+      await session.sendControl({ kind: 'request-end' })
+      session.endInput()
+
+      let responseStatus: number | undefined
+      let bodyMode: string | undefined
+      let responseEnded = false
+      let totalBytes = 0
+      for await (const frame of session.readFrames()) {
+        if (frame.kind === 'control') {
+          if (frame.value.kind === 'error') throw new SyncSshProbeError('helper')
+          if (frame.value.kind === 'response' && responseStatus === undefined) {
+            responseStatus = typeof frame.value.status === 'number' ? frame.value.status : undefined
+            bodyMode = typeof frame.value.bodyMode === 'string' ? frame.value.bodyMode : undefined
+            continue
+          }
+          if (frame.value.kind === 'response-end' && responseStatus !== undefined && !responseEnded) {
+            responseEnded = true
+            continue
+          }
+          throw new SyncProtocolError('unexpected session-objects control frame')
+        }
+        if (responseStatus === undefined || bodyMode !== 'data' || responseEnded) {
+          throw new SyncProtocolError('unexpected session-objects data frame')
+        }
+        totalBytes += frame.data.length
+        if (totalBytes > MAX_SESSION_OBJECT_STREAM_BYTES) {
+          throw new SyncProtocolError('session-objects exceeds object stream limit')
+        }
+        yield frame.data
+      }
+      if (responseStatus !== 200 || !responseEnded) throw new SyncSshProbeError('helper')
+    } catch (error) {
+      if (error instanceof SyncSshProbeError) throw error
+      if (error instanceof SyncProtocolError) {
+        const probe = new SyncSshProbeError('protocol')
+        ;(probe as Error & { detail?: string }).detail = error.message
+        throw probe
+      }
+      throw new SyncSshProbeError('helper')
+    } finally {
+      session.close()
+    }
+  }
+
+  /**
+   * 推送带外对象流：把帧流按 1MB 分块写入请求体，逐块经 SSH 发送；
+   * 对端流式落盘收件箱后返回 JSON 摘要。
+   */
+  async pushSessionObjects(peerId: string, frames: AsyncIterable<Uint8Array>): Promise<void> {
+    const { peer, session } = await this.openSession(peerId)
+    try {
+      await session.sendControl({
+        kind: 'request',
+        protocolVersion: SYNC_PROTOCOL_VERSION,
+        operation: 'session-objects-push',
+        port: peer.remoteWebPort ?? DEFAULT_REMOTE_WEB_PORT,
+      })
+      let sequence = 0
+      let totalBytes = 0
+      for await (const chunk of frames) {
+        if (!(chunk instanceof Uint8Array)) throw new SyncProtocolError('session-objects-push contains a non-byte chunk')
+        const data = Buffer.from(chunk)
+        totalBytes += data.byteLength
+        if (totalBytes > MAX_SESSION_OBJECT_STREAM_BYTES) {
+          throw new SyncProtocolError('session-objects-push exceeds object stream limit')
+        }
+        for (let offset = 0; offset < data.byteLength; offset += MAX_SYNC_DATA_CHUNK_BYTES, sequence += 1) {
+          await session.sendData(sequence, data.subarray(offset, Math.min(offset + MAX_SYNC_DATA_CHUNK_BYTES, data.byteLength)))
+        }
+      }
+      await session.sendControl({ kind: 'request-end' })
+      session.endInput()
+
+      let response: Record<string, unknown> | undefined
+      for await (const frame of session.readFrames()) {
+        if (frame.kind !== 'control' || response !== undefined) throw new SyncProtocolError('unexpected session-objects-push frame')
+        if (frame.value.kind === 'error') throw new SyncSshProbeError('helper')
+        if (frame.value.kind === 'response') response = frame.value
+      }
+      if (!response || response.status !== 200) throw new SyncSshProbeError('helper')
+    } catch (error) {
+      if (error instanceof SyncSshProbeError) throw error
+      if (error instanceof SyncProtocolError) {
+        const probe = new SyncSshProbeError('protocol')
+        ;(probe as Error & { detail?: string }).detail = error.message
+        throw probe
+      }
+      throw new SyncSshProbeError('helper')
+    } finally {
+      session.close()
+    }
   }
 
   private async fetchDataOperation(

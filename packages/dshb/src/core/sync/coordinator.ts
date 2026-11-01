@@ -21,10 +21,11 @@ import type {
   SyncSessionBundle,
   SyncSessionEntry,
   SyncSessionEventPrefix,
+  SyncSessionObject,
   SyncSessionManifest,
   SyncSessionManifestEntry,
 } from './session-sync.js'
-import { SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY } from './protocol.js'
+import { SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY } from './protocol.js'
 
 const EMPTY_APPLY_RESULT: SyncNodeApplyResult = { created: 0, updated: 0, deleted: 0, pendingRemoval: 0, skipped: 0 }
 const TRANSPORT_RETRY_DELAY_MS = 250
@@ -340,6 +341,7 @@ export class SyncCoordinator {
           localInstanceId = localManifest.instanceId
           const useEventDeltas = remoteNodeManifest.capabilities.includes(SYNC_SESSION_EVENT_TAIL_CAPABILITY)
           const useSharedObjects = remoteNodeManifest.capabilities.includes(SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY)
+          const useObjectStream = remoteNodeManifest.capabilities.includes(SYNC_SESSION_OBJECT_STREAM_CAPABILITY)
           const remoteSkippedReports: Array<readonly { sessionId: string; reason: string }[]> = [remoteManifest.skipped]
 
           // 分批交换：首次同步（或长时间未同步后）plan 可能包含全部会话，一次性
@@ -364,13 +366,23 @@ export class SyncCoordinator {
               const chunkManifest = plan.toLocal.filter((entry) => chunkKeySet.has(syncSessionEntryKey(entry)))
               const prefixes = useEventDeltas ? sessionEventPrefixesFor(chunkManifest, localManifest.entries) : []
               let fetched = validateSyncSessionBundle(await this.retryTransport(() =>
-                this.transport.fetchSessionEntries(peer.id, chunkKeys, remoteManifest.digest, prefixes),
+                this.transport.fetchSessionEntries(peer.id, chunkKeys, remoteManifest.digest, prefixes, useObjectStream),
               ))
               if (fetched.instanceId !== remoteManifest.instanceId) {
                 throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
               }
               assertSelectedSessionEntries(chunkManifest, fetched.entries, '远端')
               remoteSkippedReports.push(fetched.skipped)
+              if (useObjectStream) {
+                // 带外对象：bundle 里 deferred 描述符的载荷经对象流 RPC 拉到本地
+                // 收件箱（磁盘流式，内存 O(帧)），随后 applyBundle 按摘要水合。
+                const deferredObjects = fetched.entries.flatMap((entry) => (entry.objects ?? []).filter((object) => object.deferred === true))
+                if (deferredObjects.length > 0) {
+                  await this.retryTransport(async () => {
+                    await sessionService.ingestObjectStream(this.transport.fetchSessionObjects(peer.id, deferredObjects))
+                  })
+                }
+              }
               const applySkipped = firstChunk ? mergeSessionSkipped(remoteManifest.skipped, fetched.skipped) : fetched.skipped
               try {
                 const applied = await sessionService.applyBundle(
@@ -381,8 +393,10 @@ export class SyncCoordinator {
                 sessionLocalResult = addSessionResults(sessionLocalResult, applied)
               } catch (error) {
                 if (!(error instanceof SyncSessionError && error.code === 'session-delta-prefix')) throw error
+                // 回退拉全量内容：不带 deferred 标记，载荷内联（与既有回退语义一致，
+                // 且不依赖已入库的收件箱对象）。
                 const fullRemoteEntries = validateSyncSessionBundle(await this.retryTransport(() =>
-                  this.transport.fetchSessionEntries(peer.id, chunkKeys, remoteManifest.digest),
+                  this.transport.fetchSessionEntries(peer.id, chunkKeys, remoteManifest.digest, undefined, false),
                 ))
                 if (fullRemoteEntries.instanceId !== remoteManifest.instanceId) {
                   throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
@@ -434,13 +448,24 @@ export class SyncCoordinator {
                 chunkKeys,
                 localManifest.digest,
                 prefixes,
-                { sharedObjects: useSharedObjects },
+                { sharedObjects: useSharedObjects, deferredObjects: useObjectStream },
               )
               assertSelectedSessionEntries(chunkManifest, exported.entries, '本地')
               const wireSkipped = firstChunk ? mergeSessionSkipped(localManifest.skipped, exported.skipped) : exported.skipped
               let wireBundle = exported.objects !== undefined
                 ? makeSyncSessionBundle(exported.instanceId, exported.entries, wireSkipped, exported.objects)
                 : makeSyncSessionBundle(exported.instanceId, exported.entries, wireSkipped)
+              if (useObjectStream) {
+                // 带外对象：先把 deferred 载荷推送进对端收件箱（磁盘流式，
+                // 内存 O(帧)），再发 bundle；对端 apply 时按摘要水合。
+                const deferredObjects = ((wireBundle.objects ?? wireBundle.entries.flatMap((entry) => entry.objects ?? [])) as SyncSessionObject[])
+                  .filter((object) => object.deferred === true)
+                if (deferredObjects.length > 0) {
+                  await this.retryTransport(() =>
+                    this.transport.pushSessionObjects(peer.id, sessionService.streamObjects(deferredObjects)),
+                  )
+                }
+              }
               try {
                 const applied = await this.retryTransport(() =>
                   this.transport.applySessionBundle(peer.id, wireBundle, localInstanceId),
@@ -448,11 +473,12 @@ export class SyncCoordinator {
                 sessionRemoteResult = addSessionResults(sessionRemoteResult, applied)
               } catch (error) {
                 if (!(error instanceof SyncSessionDeltaPrefixError)) throw error
+                // 回退推全量内容：不带 deferred 标记，载荷内联。
                 const fullLocalEntries = await sessionService.exportEntries(
                   chunkKeys,
                   localManifest.digest,
                   [],
-                  { sharedObjects: wireBundle.objects !== undefined },
+                  { sharedObjects: wireBundle.objects !== undefined, deferredObjects: false },
                 )
                 assertSelectedSessionEntries(chunkManifest, fullLocalEntries.entries, '本地')
                 const skippedReport = firstChunk ? mergeSessionSkipped(localManifest.skipped, fullLocalEntries.skipped) : fullLocalEntries.skipped

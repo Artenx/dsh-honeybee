@@ -8,7 +8,7 @@ import { SyncStateStore } from '../../src/core/sync/stores.js'
 import type { SyncPeer, SyncPeerView } from '../../src/core/sync/model.js'
 import { makeSyncSessionBundle, makeSyncSessionManifest, SyncSessionError, syncSessionEntryKey } from '../../src/core/sync/session-sync.js'
 import type { SyncSessionBundle, SyncSessionEntry, SyncSessionService } from '../../src/core/sync/session-sync.js'
-import { SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY } from '../../src/core/sync/protocol.js'
+import { SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY } from '../../src/core/sync/protocol.js'
 
 const localInstanceId = 'i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const remoteInstanceId = 'i-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -216,12 +216,13 @@ describe('sync coordinator', () => {
 
     expect(result).toMatchObject({ importedSessions: 1, exportedSessions: 1, skippedSessions: 0 })
     expect(sessions.exportManifest).toHaveBeenCalledOnce()
-    expect(sessions.exportEntries).toHaveBeenCalledWith([syncSessionEntryKey(localEntry)], localManifest.digest, [], { sharedObjects: false })
+    expect(sessions.exportEntries).toHaveBeenCalledWith([syncSessionEntryKey(localEntry)], localManifest.digest, [], { sharedObjects: false, deferredObjects: false })
     expect(fetchSessionEntries).toHaveBeenCalledWith(
       peer.id,
       [syncSessionEntryKey(remoteEntry)],
       remoteManifest.digest,
       [],
+      false,
     )
     expect(test.transport.fetchSessionBundle).not.toHaveBeenCalled()
   })
@@ -235,7 +236,7 @@ describe('sync coordinator', () => {
     const remoteBundle = makeSyncSessionBundle(remoteInstanceId, [remoteEntry])
     const sessions = {
       exportManifest: vi.fn(async () => localManifest),
-      exportEntries: vi.fn(async (_keys: string[], _digest: string, _prefixes: unknown[], options: { sharedObjects?: boolean }) =>
+      exportEntries: vi.fn(async (_keys: string[], _digest: string, _prefixes: unknown[], options: { sharedObjects?: boolean; deferredObjects?: boolean }) =>
         options.sharedObjects === true
           ? makeSyncSessionBundle(localInstanceId, [localEntry], [], [])
           : makeSyncSessionBundle(localInstanceId, [localEntry]),
@@ -268,7 +269,7 @@ describe('sync coordinator', () => {
       [syncSessionEntryKey(localEntry)],
       localManifest.digest,
       [],
-      { sharedObjects: true },
+      { sharedObjects: true, deferredObjects: false },
     )
     expect(applySessionBundle).toHaveBeenCalledOnce()
   })
@@ -499,6 +500,97 @@ describe('sync coordinator', () => {
     await expect(test.coordinator.run(peer.id)).rejects.toBeInstanceOf(SyncCoordinatorError)
     expect(test.transport.fetchNodeManifest).not.toHaveBeenCalled()
     expect(test.progress.at(-1)).toMatchObject({ lastRunStatus: 'failed', lastErrorCode: 'sessions-unavailable' })
+  })
+
+  it('requests deferred entries and pulls the object stream when the peer declares the capability', async () => {
+    const sessionPeer = { ...peer, syncSessions: true }
+    const remoteEntry = deletedSessionEntry(remoteInstanceId, 'remote-stream')
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [remoteEntry])
+    const remoteBundle = makeSyncSessionBundle(remoteInstanceId, [remoteEntry])
+    const fetchSessionEntries = vi.fn(async () => remoteBundle)
+    const fetchSessionObjects = vi.fn(async function* () {})
+    const ingestObjectStream = vi.fn(async () => 0)
+    const sessions = {
+      exportManifest: vi.fn(async () => makeSyncSessionManifest(localInstanceId, [])),
+      exportEntries: vi.fn(),
+      applyBundle: vi.fn(async () => ({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })),
+      ingestObjectStream,
+    }
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+      fetchSessionObjects,
+      applySessionBundle: vi.fn(),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    await test.coordinator.run(peer.id)
+
+    expect(fetchSessionEntries).toHaveBeenCalledWith(
+      peer.id,
+      [syncSessionEntryKey(remoteEntry)],
+      remoteManifest.digest,
+      [],
+      true,
+    )
+  })
+
+  it('pushes deferred object streams before applying bundles on the remote', async () => {
+    const sessionPeer = { ...peer, syncSessions: true }
+    const localEntry = deletedSessionEntry(localInstanceId, 'local-stream')
+    const localManifest = makeSyncSessionManifest(localInstanceId, [localEntry])
+    const deferredObject = {
+      id: 'spill:local-stream',
+      kind: 'spill',
+      reference: {
+        owner: { sessionId: 'session-local-stream' },
+        source: { toolName: 'bash', callId: 'call-1', label: 'result' },
+        suggestedName: 'out.txt',
+        ref: { locator: '/spill/out.txt', bytes: 4, retrievalHint: 'hint' },
+      },
+      bytes: 4,
+      digest: `sha256:${'f'.repeat(64)}`,
+      data: '',
+      deferred: true,
+    }
+    const exportEntries = vi.fn(async () =>
+      makeSyncSessionBundle(localInstanceId, [{ ...localEntry, objects: [deferredObject] } as never], [], [deferredObject as never]))
+    const streamObjects = vi.fn(async function* () { yield Buffer.from('test') })
+    const pushSessionObjects = vi.fn(async () => undefined)
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries,
+      applyBundle: vi.fn(),
+      streamObjects,
+    }
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => makeSyncSessionManifest(remoteInstanceId, [])),
+      fetchSessionEntries: vi.fn(),
+      pushSessionObjects,
+      applySessionBundle: vi.fn(async () => ({ created: 0, updated: 1, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(pushSessionObjects).toHaveBeenCalledOnce()
+    expect(exportEntries).toHaveBeenCalledWith(
+      [syncSessionEntryKey(localEntry)],
+      localManifest.digest,
+      [],
+      { sharedObjects: false, deferredObjects: true },
+    )
+    expect(result).toMatchObject({ exportedSessions: 1 })
   })
 
   it('splits a large remote session plan into bounded fetch/apply chunks', async () => {

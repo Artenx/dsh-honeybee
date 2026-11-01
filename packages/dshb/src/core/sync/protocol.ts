@@ -4,12 +4,22 @@ export const SYNC_PROTOCOL_VERSION = 1
 export const SYNC_SESSION_MANIFEST_CAPABILITY = 'session-manifest-v1'
 export const SYNC_SESSION_EVENT_TAIL_CAPABILITY = 'session-event-tail-delta-v1'
 export const SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY = 'session-bundle-objects-v1'
+// 对象带外流：附件/spill 负载不再内联进 bundle JSON，而是通过专用 RPC 以
+// 磁盘到磁盘的帧流传输（内存占用 O(单帧)），单对象与会话引用总量不再受
+// JSON 传输上限约束。两端都声明该能力时才启用，旧版本对端回退内联路径。
+export const SYNC_SESSION_OBJECT_STREAM_CAPABILITY = 'session-object-stream-v1'
 export const MAX_SYNC_CONTROL_FRAME_BYTES = 64 * 1024
 export const MAX_SYNC_DATA_CHUNK_BYTES = 1024 * 1024
 // 单次传输（bundle 请求/响应、原始附件/溢出流）的硬上限。必须远小于宿主进程
 // JS 堆（桌面端约 1.4GB）：JSON.parse 的对象图膨胀约为 JSON 文本的 5-10 倍，
 // 100GB 级上限等于无内存保护。协调器按更小的目标分批传输（见 coordinator.ts）。
+// 注意：该上限只约束 JSON bundle；对象带外流是磁盘流式传输，走独立上限。
 export const MAX_SYNC_TRANSFER_BYTES = 128 * 1024 * 1024
+// 对象内联进 bundle JSON 的字节阈值：小对象内联（减少往返），大对象走带外流。
+export const MAX_SESSION_OBJECT_INLINE_BYTES = 256 * 1024
+// 单个带外对象流的字节上限：磁盘到磁盘传输，内存不随体积增长，上限只为
+// 防失控对端无限发送。64GB 覆盖一切真实会话负载。
+export const MAX_SESSION_OBJECT_STREAM_BYTES = 64 * 1024 * 1024 * 1024
 
 const FRAME_HEADER_BYTES = 5
 const CONTROL_FRAME = 0

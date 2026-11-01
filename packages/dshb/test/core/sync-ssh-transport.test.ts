@@ -155,6 +155,7 @@ describe('SSH framed node transport', () => {
       keys: ['entry-key'],
       manifestDigest: 'sha256:manifest',
       prefixes: [],
+      deferredObjects: false,
     })
     expect(frames.at(-1)).toEqual({ kind: 'control', value: { kind: 'request-end' } })
   })
