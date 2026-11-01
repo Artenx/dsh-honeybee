@@ -638,10 +638,6 @@ export function apply(ctx: ClientContext): void {
        position:fixed 经 portal 渲染。子代理很多时 flex 压缩 node（flex-shrink:1 默认），
        文字挤压且不触发滚动。给 node flex-shrink:0 让 menu 整体 overflow:auto 滚动。 */
     [class*="_menu"] [class*="_node"] { flex-shrink: 0 !important; }
-    /* 模型选择弹窗（dsh-client-ui-model-selection）：Ra_menu 上游 max-width 420px，
-       长模型名单行放不下被 ellipsis 截断。放宽到 720px 让模型名单行完整显示。
-       [class*="Ra_menu"] 精确匹配模型弹窗，避免误伤其他菜单。Ra_ 为 hash，上游升级需同步。 */
-    [class*="Ra_menu"] { max-width: 720px !important; width: auto !important; }
     /* 终端组件（dsh-web-frontend，CSS 模块前缀 1gdtu_）桌面端修复：上游 _command_ 默认
        overflow:hidden+text-overflow:ellipsis，LLM 调 bash 的长命令在桌面端被省略号
        截断、看不到完整内容（输出区 _output_ 本就可横向滚动，唯命令区不行）。宽屏与

@@ -120,6 +120,12 @@ describe('移动端页面兼容', () => {
     const html = installLoopbackCompat('<html><head></head><body></body></html>')
     expect(html).toContain('input,textarea,select,[contenteditable="true"]{font-size:16px!important}')
   })
+
+  it('模型菜单定位交由上游管理', () => {
+    const html = installLoopbackCompat('<html><head></head><body></body></html>')
+    expect(html).not.toContain('[class*="7KE1Ra_menu"]')
+    expect(html).not.toContain('[class*="_menu"]:has([class*="modelName"])')
+  })
 })
 
 describe('登录限速（需求 1.5）', () => {
