@@ -18,7 +18,7 @@ const BUNDLE_ID = '@artenx/dshb'
 const serverEntries = {
   index: 'src/index.ts',
   'auth/index': 'src/auth/index.ts',
-  'auth/startup': 'src/auth/startup.ts',
+  'auth/reset-cli': 'src/auth/reset-cli.ts',
   'auth/decorate-webserver': 'src/auth/decorate-webserver.ts',
   'auth/loopback': 'src/auth/loopback.ts',
   'auth/loopback-compat': 'src/auth/loopback-compat.ts',

@@ -28,12 +28,27 @@ describe('single-package distribution', () => {
       devDependencies: Record<string, string>
     }
 
-    expect(pkg.version).toBe('0.1.33')
+    expect(pkg.version).toBe('0.1.34')
     expect(pkg.engines.dsh).toBe('>=0.1.7-rc.1 <0.2.2-rc.1')
     expect(pkg.dsh.compatibility.dshReleases).toBe(pkg.engines.dsh)
     expect(pkg.dsh.compatibility.nodeVersions).toBe('>=22.13')
     expect(pkg.peerDependencies).not.toHaveProperty('@deepseek-ai/dsh-client-runtime')
     expect(pkg.devDependencies).toHaveProperty('@deepseek-ai/dsh-client-runtime')
+  })
+
+  it('patch keeps the upstream web-startup provider untouched', () => {
+    // webserver 行 inject: [webStartup]：运行时启用/停用的补丁重载一旦更换
+    // webStartup 提供者，webServer 会被连带销毁重建，拆断桌面端正在使用的
+    // 连接（0.1.33 及之前桌面端"启用即断连"的根因）。补丁必须只做插入。
+    const patchLines = read('../cordis.patch.yml')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('#'))
+    for (const line of patchLines) {
+      expect(line).not.toContain('disabled:')
+      expect(line).not.toContain('web-startup')
+      expect(line).not.toContain('dshb-web-startup')
+    }
+    expect(read('../cordis.patch.yml')).toContain('id: dshb-auth')
   })
 
   it('exports the bundled plugin entry points and client patch metadata', () => {

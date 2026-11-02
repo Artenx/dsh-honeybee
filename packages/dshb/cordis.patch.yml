@@ -1,10 +1,14 @@
-- id: web-startup
-  disabled: true
+# DSHB 的补丁层：仅插入各功能条目。
+#
+# 注意：不要在这里禁用或替换上游 `web-startup`（dsh-web-app）。webserver 行
+# `inject: [webStartup]`，运行时启用/停用插件的补丁重载一旦更换 webStartup
+# 提供者，webServer 会被连带销毁重建，拆断桌面端正在使用的连接（0.1.33 及
+# 之前桌面端"启用即断连、左下角重连横幅"的根因）。上游 web-startup 与历史
+# 替换版功能等价（--host/--port/--trusted-host/--no-open），凭据重置已改为
+# 独立命令 `dshb-auth-reset`（见 src/auth/reset-cli.ts）。
 - insert:
     - id: dshb-auth
       name: "@artenx/dshb/auth"
-    - id: dshb-web-startup
-      name: "@artenx/dshb/auth/startup"
     - id: dshb-core
       name: "@artenx/dshb/core"
     - id: dshb-router

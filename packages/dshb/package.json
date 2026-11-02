@@ -1,6 +1,6 @@
 {
   "name": "@artenx/dshb",
-  "version": "0.1.33",
+  "version": "0.1.34",
   "description": "Routes DSH filesystem, shell, subprocess, and PTY operations to local, SSH, and Docker execution nodes, with a node registry, an authentication gate, a mobile-aware management UI, and per-workspace custom project instructions.",
   "type": "module",
   "main": "lib/index.js",
@@ -8,7 +8,6 @@
   "exports": {
     ".": "./lib/index.js",
     "./auth": "./lib/auth/index.js",
-    "./auth/startup": "./lib/auth/startup.js",
     "./auth/decorate-webserver": "./lib/auth/decorate-webserver.js",
     "./auth/loopback": "./lib/auth/loopback.js",
     "./auth/loopback-compat": "./lib/auth/loopback-compat.js",
@@ -83,8 +82,8 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "lib"
   ],
   "dsh": {
     "bundle": {
@@ -180,5 +179,8 @@
   "homepage": "https://github.com/Artenx/dsh-honeybee#readme",
   "bugs": {
     "url": "https://github.com/Artenx/dsh-honeybee/issues"
+  },
+  "bin": {
+    "dshb-auth-reset": "./lib/auth/reset-cli.js"
   }
 }
