@@ -67,9 +67,14 @@ interface SnapshotStoreData {
 export class WorkspaceInstructionStore {
   private data: WorkspaceStoreData = { records: {} }
   private loaded = false
+  private readonly home: string | undefined
+
+  constructor(home?: string) {
+    this.home = home
+  }
 
   private file(): string {
-    return join(dshHome(), 'dshb', 'workspace-instructions.json')
+    return join(this.home ?? dshHome(), 'dshb', 'workspace-instructions.json')
   }
 
   private load(): void {
@@ -137,6 +142,30 @@ export class WorkspaceInstructionStore {
     if (!existing) return
     delete this.data.records[workspaceId]
     this.save()
+  }
+
+  /**
+   * 同步导入采纳：以对端快照的修订恢复工作区指令。
+   * 本地缺失或本地修订更低（对端编辑过）时采纳；本地同版或更新时保留本地。
+   * revision 直接采用对端计数，使两端的指令修订序列保持同一根。
+   */
+  restoreWorkspace(input: { workspaceId: string; text: string; revision: number; capturedAt?: string }): WorkspaceInstructionRecord | undefined {
+    this.load()
+    if (utf8Bytes(input.text) > INSTRUCTION_MAX_BYTES) throw new InstructionSizeError(utf8Bytes(input.text))
+    const existing = this.data.records[input.workspaceId]
+    if (existing && existing.revision >= input.revision) return { ...existing }
+    const now = new Date().toISOString()
+    const record: WorkspaceInstructionRecord = {
+      workspaceId: input.workspaceId,
+      text: input.text,
+      revision: input.revision,
+      digest: computeDigest(input.text),
+      createdAt: existing?.createdAt ?? (input.capturedAt ?? now),
+      updatedAt: now,
+    }
+    this.data.records[input.workspaceId] = record
+    this.save()
+    return { ...record }
   }
 
   removeByWorkspace(workspaceId: string): void {
@@ -246,6 +275,11 @@ export class SessionInstructionSnapshotStore {
     return { ...snapshot }
   }
 
+  /**
+   * 同步导入采纳：以对端快照的修订恢复工作区指令。
+   * 本地缺失或本地修订更低（对端编辑过）时采纳；本地同版或更新时保留本地。
+   * revision 直接采用对端计数，使两端的指令修订序列保持同一根。
+   */
   remove(sessionId: string): void {
     this.load()
     if (!this.data.records[sessionId]) return

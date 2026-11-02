@@ -12,8 +12,8 @@ import {
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { assertContiguous, validateStoredEvents } from '@deepseek-ai/dsh-session-persistence'
 import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { INSTRUCTION_MAX_BYTES, type SessionInstructionSnapshot } from '../workspace-instructions.js'
-import { SessionInstructionSnapshotStore } from '../workspace-instructions.js'
+import { INSTRUCTION_MAX_BYTES, InstructionSizeError, sharedWorkspaceInstructionStore, type SessionInstructionSnapshot } from '../workspace-instructions.js'
+import { SessionInstructionSnapshotStore, WorkspaceInstructionStore } from '../workspace-instructions.js'
 import type { NodeRegistry, NodeType } from '../node-registry.js'
 import type { WorkspaceBindingsStore } from '../workspace-bindings.js'
 import { SyncNodeService } from './node-sync.js'
@@ -958,11 +958,11 @@ function sessionEventDigest(
   hash.update(`,"instructionSnapshot":${instructionSnapshot ? canonicalJson({
     text: instructionSnapshot.text,
     capturedAt: instructionSnapshot.capturedAt,
-    workspaceOrigin: instructionSnapshot.workspaceOrigin,
-    workspaceRemotePath: instructionSnapshot.workspaceRemotePath,
-    workspaceRevision: instructionSnapshot.workspaceRevision,
-    digest: instructionSnapshot.digest,
-    inheritedFromOrigin: instructionSnapshot.inheritedFromOrigin,
+    ...(instructionSnapshot.workspaceOrigin === undefined ? {} : { workspaceOrigin: instructionSnapshot.workspaceOrigin }),
+    ...(instructionSnapshot.workspaceRemotePath === undefined ? {} : { workspaceRemotePath: instructionSnapshot.workspaceRemotePath }),
+    ...(instructionSnapshot.workspaceRevision === undefined ? {} : { workspaceRevision: instructionSnapshot.workspaceRevision }),
+    ...(instructionSnapshot.digest === undefined ? {} : { digest: instructionSnapshot.digest }),
+    ...(instructionSnapshot.inheritedFromOrigin === undefined ? {} : { inheritedFromOrigin: instructionSnapshot.inheritedFromOrigin }),
   }) : 'undefined'}`)
   hash.update(`,"parentOrigin":${parentOrigin ? canonicalJson(parentOrigin) : 'undefined'}`)
   hash.update(`,"workspace":${canonicalJson({
@@ -1899,6 +1899,8 @@ export class SyncSessionService {
   private manifestPayloadCacheBytes = 0
   /** 带外对象收件箱：对象流 RPC 的落盘暂存区，apply 水合后删除。 */
   readonly objectInbox: SyncSessionObjectInbox
+  /** 工作区级指令存储：导入采纳写入，驱动该工作区新会话的指令注入。 */
+  readonly workspaceInstructions: WorkspaceInstructionStore
 
   constructor(
     private readonly state: SyncStateStore,
@@ -1913,9 +1915,11 @@ export class SyncSessionService {
     private readonly journal = new SyncSessionJournalStore(),
     private readonly now: () => number = Date.now,
     home?: string,
+    workspaceInstructions?: WorkspaceInstructionStore,
   ) {
     this.exportCacheStore = new SyncSessionExportCacheStore(home)
     this.objectInbox = new SyncSessionObjectInbox(home)
+    this.workspaceInstructions = workspaceInstructions ?? sharedWorkspaceInstructionStore()
     for (const [key, entry] of this.exportCacheStore.entries()) {
       if (!this.exportCache.has(key)) {
         this.exportCache.set(key, entry)
@@ -3012,7 +3016,24 @@ export class SyncSessionService {
     const sessionId = prepared.localSessionId
     const existed = await this.writeSession(prepared)
 
-    if (prepared.instructionSnapshot) this.instructions.restore(prepared.instructionSnapshot)
+    if (prepared.instructionSnapshot) {
+      this.instructions.restore(prepared.instructionSnapshot)
+      // 工作区级指令采纳：快照携带的注入内容按对端修订恢复到映射后的本地工作区，
+      // 使对端工作区新建的会话同样获得该注入（缺失或对端修订更新时采纳）。
+      const snapshot = prepared.instructionSnapshot
+      if (snapshot.workspaceId && snapshot.workspaceRevision !== undefined) {
+        try {
+          this.workspaceInstructions.restoreWorkspace({
+            workspaceId: snapshot.workspaceId,
+            text: snapshot.text,
+            revision: snapshot.workspaceRevision,
+            capturedAt: snapshot.capturedAt,
+          })
+        } catch (error) {
+          if (!(error instanceof InstructionSizeError)) throw error
+        }
+      }
+    }
     const registry = this.getWorkspaces()
     const workspace = registry?.get(prepared.workspaceId)
     if (!registry || !workspace || normalizeHostPath(workspace.path) !== normalizeHostPath(prepared.workspacePath)) {

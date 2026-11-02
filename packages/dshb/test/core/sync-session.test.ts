@@ -8,6 +8,7 @@ import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { SyncStateStore } from '../../src/core/sync/stores.js'
+import { WorkspaceInstructionStore } from '../../src/core/workspace-instructions.js'
 import {
   ExportObjectCache,
   makeSyncSessionBundle,
@@ -395,6 +396,7 @@ function createEnvironment(kind: 'source' | 'target', options: EnvironmentOption
   const attachments = new MemoryAttachments()
   const spills = new MemorySpills()
   const instructions = new MemoryInstructions()
+  const workspaceInstructions = new WorkspaceInstructionStore(home)
   const journal = new SyncSessionJournalStore(home)
   const workspaceRegistry: WorkspaceRegistryLike = options.omitPinning
     ? {
@@ -438,8 +440,9 @@ function createEnvironment(kind: 'source' | 'target', options: EnvironmentOption
     journal,
     () => 1_800_000_000_000,
     home,
+    workspaceInstructions,
   )
-  return { home, state, persistence, workspaces, bindings, attachments, spills, instructions, journal, service }
+  return { home, state, persistence, workspaces, bindings, attachments, spills, instructions, journal, workspaceInstructions, service }
 }
 
 function addSourceSession(env: TestEnvironment, options: { id?: string; title?: string; spillLocator?: string } = {}): SessionId {
@@ -1482,6 +1485,46 @@ describe('停止同步：journal 批次丢弃', () => {
     env.journal.beginWithBundle('p-0fffffffffffffffffffffff', 'b', bundleB.digest, ['kb'], bundleB)
     expect(env.service.discardPendingBatches('p-0123456789abcdef01234567')).toBe(1)
     expect(env.journal.pendingBatches().map((batch) => batch.peerId)).toEqual(['p-0fffffffffffffffffffffff'])
+  })
+})
+
+describe('工作区指令随会话同步采纳', () => {
+  it('导入带指令快照的会话时采纳工作区级指令，旧修订不回退', async () => {
+    const source = createEnvironment('source')
+    const sessionId = addSourceSession(source, { id: 'session-instr' })
+    const workspace = source.workspaces.list()[0]!
+    // 源端会话指令快照：携带工作区身份与修订 3
+    const instrText = '始终使用 TypeScript 严格模式'
+    source.instructions.restore({
+      sessionId: String(sessionId),
+      workspaceId: workspace.id,
+      workspaceRevision: 3,
+      digest: createHash('sha256').update(instrText, 'utf8').digest('hex'),
+      text: instrText,
+      capturedAt: new Date().toISOString(),
+    })
+
+    const bundle = await source.service.exportBundle()
+    const entry = bundle.entries[0]!
+    expect(entry.instructionSnapshot?.text).toBe('始终使用 TypeScript 严格模式')
+    expect(entry.instructionSnapshot?.workspaceRevision).toBe(3)
+
+    const target = createEnvironment('target')
+    expect(target.workspaceInstructions.get('workspace-*')).toBeUndefined()
+    // Exercise the actual wire shape: JSON drops undefined optional fields.
+    const wireBundle = JSON.parse(JSON.stringify(bundle)) as unknown
+    await target.service.applyBundle(wireBundle, 'source peer', 'p-0123456789abcdef01234567')
+
+    // 采纳：映射后的本地工作区获得注入内容（修订沿用对端计数）
+    const localWorkspaceId = target.workspaces.list()[0]!.id
+    const adopted = target.workspaceInstructions.get(localWorkspaceId)
+    expect(adopted?.text).toBe('始终使用 TypeScript 严格模式')
+    expect(adopted?.revision).toBe(3)
+
+    // 对端更旧的快照（修订 1）不得回退本地修订 3。
+    target.workspaceInstructions.restoreWorkspace({ workspaceId: localWorkspaceId, text: '旧文本', revision: 1 })
+    expect(target.workspaceInstructions.get(localWorkspaceId)?.revision).toBe(3)
+    expect(target.workspaceInstructions.get(localWorkspaceId)?.text).toBe('始终使用 TypeScript 严格模式')
   })
 })
 
