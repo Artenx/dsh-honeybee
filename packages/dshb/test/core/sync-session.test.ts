@@ -1485,6 +1485,32 @@ describe('停止同步：journal 批次丢弃', () => {
   })
 })
 
+describe('workspacePosition 不参与状态摘要', () => {
+  it('同一会话仅位置变化时修订与状态摘要保持稳定，内容变化才跳新', async () => {
+    const source = createEnvironment('source')
+    addSourceSession(source, { id: 'session-position' })
+    const first = await source.service.exportBundle()
+    const entry = first.entries[0]!
+    expect(entry.metadata.revision).toBeDefined()
+
+    // 会话在工作区中的位置变化（模拟导入前插位移）——重导出不得跳修订。
+    // 前插一个新会话，使既有会话的位置整体 +1。
+    const workspace = source.workspaces.list()[0]!
+    workspace.sessionIds.unshift(SessionId('position-shifter'))
+    const second = await source.service.exportBundle()
+    const secondEntry = second.entries.find((candidate) => syncSessionEntryKey(candidate) === syncSessionEntryKey(entry))!
+    expect(secondEntry.metadata.revision).toEqual(entry.metadata.revision)
+    expect(secondEntry.metadata.stateDigest).toEqual(entry.metadata.stateDigest)
+    expect(secondEntry.workspacePosition).toEqual((entry.workspacePosition ?? 0) + 1)
+
+    // 内容变化必须跳新修订（对照）
+    source.persistence.mutateEvent('session-position', (event) => ({ ...event, time: (event.time ?? 0) + 1 }))
+    const third = await source.service.exportBundle()
+    const thirdEntry = third.entries.find((candidate) => syncSessionEntryKey(candidate) === syncSessionEntryKey(entry))!
+    expect(thirdEntry.metadata.revision).not.toEqual(entry.metadata.revision)
+  })
+})
+
 describe('带外对象流', () => {
   function spillSession(id: string, cwd: string, spillRef: { locator: string; bytes: number; retrievalHint: string }): Session {
     const sessionId = SessionId(id)

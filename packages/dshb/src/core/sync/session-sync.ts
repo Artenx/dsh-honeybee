@@ -995,6 +995,11 @@ function sessionStateDigest(
   archived: boolean,
   pinned: boolean,
 ): string {
+  // workspacePosition 故意不参与摘要：导入时 attachSession 把会话前插到工作区
+  // 首位，其余会话位置整体位移，若位置参与摘要，每次导入都会让工作区里全部
+  // 会话的状态摘要/修订号跳新，双向 every-5m 调度器之间形成"拉回-推回"的无限
+  // 乒乓与 session-manifest-stale 竞态（0.1.36 实测）。显示顺序是本地偏好。
+  void workspacePosition
   return sha256(canonicalJson({
     workspace: {
       originInstanceId: workspace.originInstanceId,
@@ -1005,7 +1010,6 @@ function sessionStateDigest(
       revision: workspace.revision,
       contentDigest: workspace.contentDigest,
     },
-    workspacePosition,
     archived,
     pinned,
   }))
@@ -3442,7 +3446,7 @@ export class SyncSessionService {
     let contentDigest = digest
     let outputBranchId = archive?.branchId
     if (archive) {
-      if (archive.contentDigest !== digest || archive.stateDigest !== stateDigest || archive.workspacePosition !== workspacePosition) {
+      if (archive.contentDigest !== digest || archive.stateDigest !== stateDigest) {
         const nextRevision = this.state.nextRevision(this.now())
         revision = nextRevision
         const contentChanged = archive.contentDigest !== digest
