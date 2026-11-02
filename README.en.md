@@ -32,7 +32,8 @@ A single web entry drives execution environments across multiple cloud hosts or 
 - **On-demand artifact download**: click a produced file on a container or remote workspace to stream it straight from the node — no write-back needed
 - **Credential custody**: SSH passwords and private keys centrally managed by the management side
 - **Node management UI**: node CRUD, connection tests, directory-tree workspace creation, with built-in mobile-screen adaptation
-- **Workspace project instructions**: view and edit each workspace's instructions from its actions menu
+- **Workspace project instructions**: view and edit each workspace's instructions from its actions menu; instructions propagate to other devices through sync
+- **Multi-device bidirectional sync**: work nodes, workspaces, and sessions sync automatically between DSH instances that have this plugin installed (every-5-minute schedule, stoppable at any time). Remote session updates transfer as event-tail deltas, and large attachments use a disk-level streaming channel
 - **Single-admin authentication**: login page + session cookies to lock down the exposed network entry
 
 ## Installation
@@ -52,7 +53,7 @@ dsh plugin --profile web add @artenx/dshb
 
 Restart the corresponding DSH Web profile after installation.
 
-Desktop users: open the DSH desktop app → **Settings → Plugins → More**, search for `@artenx/dshb`, and install. The plugin takes effect on next startup; no restart is needed.
+Desktop users: open the DSH desktop app → **Settings → Plugins → More**, search for `@artenx/dshb`, and install. **Restart the desktop client once after installing or upgrading** so the plugin's server and UI halves take effect together.
 
 ### One-command source deploy
 
@@ -86,6 +87,14 @@ dsh --profile web
 3. Click "Add Workspace" in the session area, choose an online node, and pick a remote directory from the tree
 4. Read/write files and run commands on the workspace from the session — operations are routed to the node automatically
 5. Produced files under a container or remote workspace download on demand when clicked
+6. Multi-device: install this plugin on another device's DSH and add a sync peer (SSH pointing at this machine) — work nodes, workspaces, and sessions sync bidirectionally; remote session updates transfer incrementally
+
+## Sync
+
+- **Add a sync peer**: Settings → Sync Peers → New; fill in the peer's SSH details and remote web port, then "Test SSH Handshake". The peer's DSH home, profile, and web port can be auto-discovered over SSH
+- **Automatic sync**: set the schedule to "Every 5 minutes" and work nodes, workspaces, and sessions sync bidirectionally on schedule; a running sync can be stopped at any time
+- **Sync scope**: remote session updates transfer as event-tail deltas; large attachments stream through a disk-level channel outside the sync memory budget
+- **Session archives**: before a sync overwrites a local version, unsynced local edits are archived automatically and can be restored from the archive list
 
 ## Documentation
 
