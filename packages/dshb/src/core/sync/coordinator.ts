@@ -309,6 +309,11 @@ export class SyncCoordinator {
     if (signal.aborted) throw new SyncCoordinatorError('stopped', '同步已被手动停止')
   }
 
+  /** 进度错误消息必须满足校验器限制（≤256、无控制字符），否则收尾写失败会卡住状态。 */
+  private progressMessage(text: string): string {
+    return text.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 256)
+  }
+
   private async execute(peerId: string, signal: AbortSignal): Promise<SyncRunSummary> {
     const peer = await this.peers.get(peerId)
     if (!peer) throw new SyncCoordinatorError('peer-not-found', '同步节点已不存在')
@@ -578,24 +583,27 @@ export class SyncCoordinator {
         skippedSessions,
       }
 
-      this.peers.updateProgress(peer.id, {
-        lastRunAt: finishedAt,
-        lastRunStatus: 'succeeded',
-        lastSuccessAt: finishedAt,
-        lastManifestDigest: digest,
-        watermark: digest,
-        lastErrorCode: undefined,
-        lastErrorMessage: undefined,
-        lastResult: {
-          imported: summary.imported,
-          exported: summary.exported,
-          skipped: summary.skipped,
-          pendingRemoval: summary.pendingRemoval,
-          importedSessions,
-          exportedSessions,
-          skippedSessions,
-        },
-      })
+      // 成功路径的进度写也不得抛出（否则 promise 拒绝被路由吞掉，状态卡 running）。
+      try {
+        this.peers.updateProgress(peer.id, {
+          lastRunAt: finishedAt,
+          lastRunStatus: 'succeeded',
+          lastSuccessAt: finishedAt,
+          lastManifestDigest: digest,
+          watermark: digest,
+          lastErrorCode: undefined,
+          lastErrorMessage: undefined,
+          lastResult: {
+            imported: summary.imported,
+            exported: summary.exported,
+            skipped: summary.skipped,
+            pendingRemoval: summary.pendingRemoval,
+            importedSessions,
+            exportedSessions,
+            skippedSessions,
+          },
+        })
+      } catch {}
       return summary
     } catch (error) {
       if (this.stopped(error)) {
@@ -640,7 +648,7 @@ export class SyncCoordinator {
           lastRunAt: new Date(this.now()).toISOString(),
           lastRunStatus: 'failed',
           lastErrorCode: failure.code,
-          lastErrorMessage: failure.message,
+          lastErrorMessage: this.progressMessage(failure.message),
         })
       } catch {}
       throw failure

@@ -152,9 +152,24 @@ export class SyncPeerManager {
 
   updateProgress(id: string, patch: SyncPeerProgress): void {
     if (!this.peers.get(id)) throw new SyncPeerNotFoundError(id)
-    this.state.update((state) => {
-      state.peers[id] = { ...state.peers[id], ...patch }
-    })
+    try {
+      this.state.update((state) => {
+        state.peers[id] = { ...state.peers[id], ...patch }
+      })
+    } catch (error) {
+      // 进度写失败（校验拒绝、长消息等）绝不能让运行收尾丢失状态：
+      // 降级为最小合法补丁（截断错误消息），保证状态机总能离开 running。
+      const fallback: SyncPeerProgress = {
+        ...patch,
+        lastErrorMessage: patch.lastErrorMessage === undefined
+          ? undefined
+          : ('进度详情省略：' + patch.lastErrorMessage).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
+      }
+      this.state.update((state) => {
+        state.peers[id] = { ...state.peers[id], ...fallback }
+      })
+      void error
+    }
   }
 
   async get(id: string): Promise<SyncPeerView | undefined> {

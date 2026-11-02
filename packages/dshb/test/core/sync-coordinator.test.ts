@@ -645,6 +645,27 @@ describe('sync coordinator', () => {
     expect(test.coordinator.stop(peer.id)).toBe(false)
   })
 
+  it('a run failure with an over-long message still leaves a terminal status', async () => {
+    // 校验器拒绝超过 256 字符的 lastErrorMessage：失败收尾若不降级，
+    // 进度会永久卡在 running（桌面端"同步中"假死的根因）。
+    const sessionPeer = { ...peer, syncSessions: true }
+    const longDetail = 'x'.repeat(300)
+    const sessions = {
+      exportManifest: vi.fn(async () => makeSyncSessionManifest(localInstanceId, [])),
+      exportEntries: vi.fn(),
+      applyBundle: vi.fn(),
+      discardPendingBatches: vi.fn(async () => 0),
+    }
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => { throw new Error(longDetail) }),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    await expect(test.coordinator.run(peer.id)).rejects.toMatchObject({ code: 'sync-failed' })
+    const last = test.progress.at(-1)
+    expect(last?.lastRunStatus).toBe('failed')
+    expect(String(last?.lastErrorMessage).length).toBeLessThanOrEqual(256)
+  })
+
   it('stop without an active run reports false', async () => {
     const test = fakeCoordinator([], [], {})
     expect(test.coordinator.stop(peer.id)).toBe(false)
