@@ -1453,6 +1453,38 @@ describe('超大内容会话的导出降级', () => {
   })
 })
 
+describe('停止同步：journal 批次丢弃', () => {
+  it('discard 移除批次与暂存，未应用条目不再回放', async () => {
+    const env = createEnvironment('source')
+    const bundle = makeSyncSessionBundle(env.state.instanceId(), [])
+    const batchId = env.journal.beginWithBundle(
+      'p-0123456789abcdef01234567',
+      'peer',
+      bundle.digest,
+      ['k1', 'k2'],
+      bundle,
+    )
+    env.journal.writePrepared(batchId, 'k1', { ready: true })
+    expect(env.journal.pendingBatches()).toHaveLength(1)
+    expect(env.journal.readPrepared(batchId, 'k1')).toEqual({ ready: true })
+
+    env.journal.discard(batchId)
+    expect(env.journal.pendingBatches()).toHaveLength(0)
+    expect(env.journal.findBatch('p-0123456789abcdef01234567', bundle.digest)).toBeUndefined()
+    expect(env.journal.readPrepared(batchId, 'k1')).toBeUndefined()
+  })
+
+  it('discardPendingBatches 只丢弃指定对端的批次', async () => {
+    const env = createEnvironment('source')
+    const bundleA = makeSyncSessionBundle(env.state.instanceId(), [])
+    const bundleB = makeSyncSessionBundle(env.state.instanceId(), [], [], [])
+    env.journal.beginWithBundle('p-0123456789abcdef01234567', 'a', bundleA.digest, ['ka'], bundleA)
+    env.journal.beginWithBundle('p-0fffffffffffffffffffffff', 'b', bundleB.digest, ['kb'], bundleB)
+    expect(env.service.discardPendingBatches('p-0123456789abcdef01234567')).toBe(1)
+    expect(env.journal.pendingBatches().map((batch) => batch.peerId)).toEqual(['p-0fffffffffffffffffffffff'])
+  })
+})
+
 describe('带外对象流', () => {
   function spillSession(id: string, cwd: string, spillRef: { locator: string; bytes: number; retrievalHint: string }): Session {
     const sessionId = SessionId(id)

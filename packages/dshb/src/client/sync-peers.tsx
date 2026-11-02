@@ -18,7 +18,7 @@ interface SyncPeerView extends SyncPeerFormView {
   progress?: {
     lastRunAt?: string
     lastSuccessAt?: string
-    lastRunStatus?: 'running' | 'succeeded' | 'failed'
+    lastRunStatus?: 'running' | 'succeeded' | 'failed' | 'stopped'
     lastErrorMessage?: string
     lastResult?: {
       imported: number
@@ -169,6 +169,7 @@ export function SyncPeersSection(): ReactElement {
   const [probingRemote, setProbingRemote] = useState(false)
   const [remoteProbe, setRemoteProbe] = useState<SyncRemoteProbe | undefined>(undefined)
   const [syncing, setSyncing] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [notice, setNotice] = useState<Notice>(undefined)
   const [hostKeyChallenge, setHostKeyChallenge] = useState<HostKeyChallenge | undefined>(undefined)
 
@@ -205,6 +206,7 @@ export function SyncPeersSection(): ReactElement {
     const status = peer.progress?.lastRunStatus
     if (!peer.enabled) return '已停用'
     if (status === 'running') return '同步中'
+    if (status === 'stopped') return '上次已停止（未完成批次已丢弃）'
     if (status === 'failed') return '上次失败'
     if (status === 'succeeded') return '上次成功'
     return '尚未同步'
@@ -359,6 +361,28 @@ export function SyncPeersSection(): ReactElement {
     }
   }
 
+  const stopSync = async (): Promise<void> => {
+    if (selectedId === 'new') return
+    setStopping(true)
+    try {
+      const response = await fetch(`/api/dshb/sync/peers/${selectedId}/stop`, { method: 'POST' })
+      const data = await readJsonResponse<{ ok?: boolean; stopped?: boolean; error?: string }>(response, '停止同步失败')
+      if (!response.ok || !data.ok) throw new Error(data.error ?? '停止同步失败')
+      setPeers((current) => current.map((peer) => peer.id === selectedId ? {
+        ...peer,
+        progress: { ...peer.progress, lastRunStatus: data.stopped ? 'running' : peer.progress?.lastRunStatus },
+      } : peer))
+      setNotice({ kind: 'ok', text: data.stopped
+        ? '已请求停止：将在最近的安全边界中止，未完成的批次会被丢弃，已完成的会话保留'
+        : '当前没有运行中的同步作业' })
+      reload()
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '停止同步失败' })
+    } finally {
+      setStopping(false)
+    }
+  }
+
   const restoreArchive = async (branchId: string): Promise<void> => {
     const archive = archives.find((entry) => entry.branchId === branchId)
     if (!archive || !window.confirm(`恢复会话 ${archive.originSessionId} 的归档版本？当前版本将保留在归档中。`)) return
@@ -378,6 +402,7 @@ export function SyncPeersSection(): ReactElement {
 
   const progressLabel = (peer: SyncPeerView): string => {
     if (peer.progress?.lastRunStatus === 'running') return '同步中'
+    if (peer.progress?.lastRunStatus === 'stopped') return '上次已停止：未完成的批次已丢弃，已完成的会话保留'
     if (peer.progress?.lastRunStatus === 'failed') return `上次失败：${peer.progress.lastErrorMessage ?? '同步失败'}`
     if (peer.progress?.lastSuccessAt) return `上次成功：${new Date(peer.progress.lastSuccessAt).toLocaleString()}`
     return '尚未同步'
@@ -715,8 +740,8 @@ export function SyncPeersSection(): ReactElement {
             </button>
           )}
           {!isNew && (
-            <button type="button" onClick={() => void runSync()} disabled={busy || probing || syncInProgress || !selectedPeer?.enabled} style={secondaryBtn}>
-              {syncInProgress ? '同步中…' : '立即同步'}
+            <button type="button" onClick={() => void (syncInProgress ? stopSync() : runSync())} disabled={busy || probing || stopping || (!selectedPeer?.enabled && !syncInProgress)} style={secondaryBtn}>
+              {stopping ? '正在停止…' : syncInProgress ? '停止同步' : '立即同步'}
             </button>
           )}
           {!isNew && (

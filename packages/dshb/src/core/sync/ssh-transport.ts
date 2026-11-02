@@ -62,6 +62,7 @@ export class SyncSshSession {
   constructor(
     private readonly client: Client,
     private readonly channel: ClientChannel,
+    private readonly onClosed?: () => void,
   ) {
     channel.on('error', (error: Error) => { this.pendingError = error })
     channel.on('exit', (code: number | null) => {
@@ -138,6 +139,9 @@ export class SyncSshSession {
     this.closed = true
     this.channel.destroy()
     this.client.end()
+    try {
+      this.onClosed?.()
+    } catch {}
   }
 
   private async write(frame: Buffer): Promise<void> {
@@ -187,8 +191,34 @@ export function buildSyncSshConnectConfig(
 
 export class SyncSshTransport {
   private readonly hostKeyChallenges = new SyncHostKeyChallenges()
+  /** 每对端当前打开的 SSH 会话：手动停止同步时立即关闭通道，等待中的 readFrames 随即返回。 */
+  private readonly openSessions = new Map<string, Set<SyncSshSession>>()
 
   constructor(private readonly peerManager: SyncPeerManager) {}
+
+  private trackSession(peerId: string, session: SyncSshSession): void {
+    const sessions = this.openSessions.get(peerId) ?? new Set<SyncSshSession>()
+    sessions.add(session)
+    this.openSessions.set(peerId, sessions)
+  }
+
+  private untrackSession(peerId: string, session: SyncSshSession): void {
+    const sessions = this.openSessions.get(peerId)
+    sessions?.delete(session)
+    if (sessions !== undefined && sessions.size === 0) this.openSessions.delete(peerId)
+  }
+
+  /** 立即关闭该对端的全部活跃 SSH 会话（幂等；用于手动停止同步）。 */
+  stopActiveSessions(peerId: string): number {
+    const sessions = this.openSessions.get(peerId)
+    if (sessions === undefined) return 0
+    for (const session of [...sessions]) {
+      try {
+        session.close()
+      } catch {}
+    }
+    return sessions.size
+  }
 
   async probe(peerId: string): Promise<SyncRemoteHandshake> {
     const { peer, session } = await this.openSession(peerId)
@@ -262,8 +292,9 @@ export class SyncSshTransport {
           else resolve(opened)
         })
       })
-      const session = new SyncSshSession(client, channel)
+      const session = new SyncSshSession(client, channel, () => this.untrackSession(peer.id, session))
       sessionOpened = true
+      this.trackSession(peer.id, session)
       return { peer, session }
     } catch (error) {
       if (error instanceof SyncHostKeyChallengeError || error instanceof SyncPeerNotFoundError || error instanceof SyncSshProbeError) {

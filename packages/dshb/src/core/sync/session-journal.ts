@@ -216,6 +216,20 @@ export class SyncSessionJournalStore {
     rmSync(join(this.home, 'dshb', 'sync-session-staging', batchId), { recursive: true, force: true })
   }
 
+  /**
+   * 丢弃一个未完成批次：删除批次记录与暂存目录。用于手动停止同步——
+   * 该批未应用的条目不再落地，重启后也不会被 recoverPending 回放。
+   * 已应用完成的条目不受影响（它们是完整会话，不是半文件）。
+   */
+  discard(batchId: string): void {
+    if (!/^b-[a-f0-9]{32}$/.test(batchId)) throw new Error('Invalid sync session batch ID')
+    const data = this.load()
+    if (data.batches[batchId] === undefined) return
+    delete data.batches[batchId]
+    this.save()
+    rmSync(join(this.home, 'dshb', 'sync-session-staging', batchId), { recursive: true, force: true })
+  }
+
   cleanupOrphanedStaging(): void {
     const root = join(this.home, 'dshb', 'sync-session-staging')
     let entries: Dirent[]

@@ -263,6 +263,20 @@ export function registerSyncPeerRoutes(
             }
             return
           }
+          if (action === 'stop') {
+            // 停止运行中的同步：在最近的安全边界中止，丢弃未完成批次，水位不变。
+            if (!coordinator) {
+              sendJson(res, 503, { ok: false, error: 'sync coordinator unavailable' })
+              return
+            }
+            try {
+              await manager.get(peerId)
+              sendJson(res, 200, { ok: true, stopped: coordinator.stop(peerId) })
+            } catch (error) {
+              sendRunFailure(res, error)
+            }
+            return
+          }
           sendJson(res, 404, { ok: false, error: 'not found' })
           return
         }

@@ -199,6 +199,30 @@ describe('sync peer HTTP routes', () => {
     expect(serialized).toContain('"hasKey":true')
   })
 
+  it('exposes run/stop over the peers route and reports whether a run was active', async () => {
+    const { manager } = createManager()
+    const routes: CapturedRoute[] = []
+    const ctx = {
+      webServer: { register(route: CapturedRoute) { routes.push(route); return () => {} } },
+      effect(register: () => () => void) { register() },
+    }
+    const stop = vi.fn(() => true)
+    registerSyncPeerRoutes(ctx as never, manager, {} as never, { run: vi.fn(), stop } as never)
+
+    const created = await callRoute(routes[0], 'POST', '/api/dshb/sync/peers', {
+      ...peerDraft,
+      secrets: { privateKey: 'PRIVATE KEY' },
+    })
+    expect(created.status).toBe(201)
+    const peerId = (created.body as { peer?: { id?: string } }).peer?.id!
+    expect(peerId).toMatch(/^p-[a-f0-9]{24}$/)
+    const stopped = await callRoute(routes[0], 'POST', `/api/dshb/sync/peers/${peerId}/stop`)
+
+    expect(stopped.status).toBe(200)
+    expect(stopped.body).toEqual({ ok: true, stopped: true })
+    expect(stop).toHaveBeenCalledWith(peerId)
+  })
+
   it('returns client errors for invalid data and unknown peers', async () => {
     const { manager } = createManager()
     const routes: CapturedRoute[] = []

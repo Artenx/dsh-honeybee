@@ -593,6 +593,63 @@ describe('sync coordinator', () => {
     expect(result).toMatchObject({ exportedSessions: 1 })
   })
 
+  it('stops a running sync at the next safe boundary and preserves the watermark', async () => {
+    const sessionPeer = { ...peer, syncSessions: true }
+    const remoteEntries = Array.from({ length: 12 }, (_, index) => deletedSessionEntry(remoteInstanceId, `remote-stop-${index}`))
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, remoteEntries)
+    const entryByKey = new Map(remoteEntries.map((entry) => [syncSessionEntryKey(entry), entry]))
+    let fetchCalls = 0
+    let releaseSecondFetch: (value: SyncSessionBundle) => void = () => undefined
+    const secondFetchGate = new Promise<SyncSessionBundle>((resolve) => { releaseSecondFetch = resolve })
+    const fetchSessionEntries = vi.fn(async (_peerId: string, keys: string[]) => {
+      fetchCalls += 1
+      if (fetchCalls === 1) {
+        // 第一批正常返回；第二批在测试释放门控后才返回，
+        // 保证 stop() 落在第一批应用完成之后、第二批应用之前。
+        return makeSyncSessionBundle(remoteInstanceId, keys.map((key) => entryByKey.get(key)!))
+      }
+      return secondFetchGate
+    })
+    const applyBundle = vi.fn(async () => ({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0, createdSessionIds: [] }))
+    const sessions = {
+      exportManifest: vi.fn(async () => makeSyncSessionManifest(localInstanceId, [])),
+      exportEntries: vi.fn(),
+      applyBundle,
+      discardPendingBatches: vi.fn(async () => 1),
+    }
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+      applySessionBundle: vi.fn(),
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    const run = test.coordinator.run(peer.id)
+    await vi.waitFor(() => expect(fetchSessionEntries).toHaveBeenCalledTimes(2))
+    // 第二批的 fetch 已挂起：此时停止，第二批内容不得落地。
+    expect(test.coordinator.stop(peer.id)).toBe(true)
+    releaseSecondFetch(makeSyncSessionBundle(remoteInstanceId, []))
+    const result = await run
+
+    expect(fetchCalls).toBe(2)
+    expect(applyBundle).toHaveBeenCalledTimes(1)
+    expect(result).toMatchObject({ importedSessions: 0 })
+    expect(test.progress.at(-1)).toMatchObject({ lastRunStatus: 'stopped', watermark: 'previous-watermark' })
+    expect(sessions.discardPendingBatches).toHaveBeenCalledWith(peer.id)
+    // 停止后再 run 应是全新作业（inFlight 已清理）
+    expect(test.coordinator.stop(peer.id)).toBe(false)
+  })
+
+  it('stop without an active run reports false', async () => {
+    const test = fakeCoordinator([], [], {})
+    expect(test.coordinator.stop(peer.id)).toBe(false)
+  })
+
   it('splits a large remote session plan into bounded fetch/apply chunks', async () => {
     const sessionPeer = { ...peer, syncSessions: true }
     const remoteEntries = Array.from({ length: 10 }, (_, index) => deletedSessionEntry(remoteInstanceId, `remote-chunk-${index}`))

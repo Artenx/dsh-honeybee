@@ -204,7 +204,7 @@ function validateProgress(value: unknown): SyncPeerProgress {
     }
   }
   if (value.lastRunStatus !== undefined) {
-    if (value.lastRunStatus !== 'running' && value.lastRunStatus !== 'succeeded' && value.lastRunStatus !== 'failed') {
+    if (value.lastRunStatus !== 'running' && value.lastRunStatus !== 'succeeded' && value.lastRunStatus !== 'failed' && value.lastRunStatus !== 'stopped') {
       throw new Error('Invalid peer sync run status')
     }
     progress.lastRunStatus = value.lastRunStatus

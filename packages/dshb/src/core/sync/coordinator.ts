@@ -262,7 +262,7 @@ function sessionEventPrefixesFor(
 }
 
 export class SyncCoordinator {
-  private readonly inFlight = new Map<string, Promise<SyncRunSummary>>()
+  private readonly inFlight = new Map<string, { promise: Promise<SyncRunSummary>; controller: AbortController }>()
 
   constructor(
     private readonly peers: SyncPeerManager,
@@ -275,17 +275,45 @@ export class SyncCoordinator {
 
   run(peerId: string): Promise<SyncRunSummary> {
     const active = this.inFlight.get(peerId)
-    if (active) return active
-    const run = this.execute(peerId)
-    this.inFlight.set(peerId, run)
+    if (active) return active.promise
+    const controller = new AbortController()
+    const run = this.execute(peerId, controller.signal)
+    this.inFlight.set(peerId, { promise: run, controller })
     void run.then(() => this.clear(peerId, run), () => this.clear(peerId, run))
     return run
   }
 
-  private async execute(peerId: string): Promise<SyncRunSummary> {
+  /**
+   * 手动停止运行中的同步：在最近的安全边界（批次之间）中止。
+   * 返回是否确有运行中的作业。中止后丢弃本对端未完成的 journal 批次
+   * （未应用条目不落地、重启不回放），水位保持不变，状态记为 stopped。
+   */
+  stop(peerId: string): boolean {
+    const active = this.inFlight.get(peerId)
+    if (!active) return false
+    active.controller.abort()
+    // 立即关闭该对端的活跃 SSH 通道：等待中的 readFrames 随即返回，
+    // 不必等空闲超时（沙箱代理冻结场景下可能长达 60s）。
+    try {
+      this.transport.stopActiveSessions(peerId)
+    } catch {}
+    return true
+  }
+
+  /** 是否已手动停止：错误分类与收尾路径共用。 */
+  private stopped(error: unknown): boolean {
+    return error instanceof SyncCoordinatorError && error.code === 'stopped'
+  }
+
+  private throwIfStopped(signal: AbortSignal): void {
+    if (signal.aborted) throw new SyncCoordinatorError('stopped', '同步已被手动停止')
+  }
+
+  private async execute(peerId: string, signal: AbortSignal): Promise<SyncRunSummary> {
     const peer = await this.peers.get(peerId)
     if (!peer) throw new SyncCoordinatorError('peer-not-found', '同步节点已不存在')
     if (!peer.enabled) throw new SyncCoordinatorError('peer-disabled', '此同步节点已停用')
+    if (signal.aborted) throw new SyncCoordinatorError('stopped', '同步已被手动停止')
 
     const startedAt = new Date(this.now()).toISOString()
     this.peers.updateProgress(peer.id, {
@@ -297,7 +325,7 @@ export class SyncCoordinator {
 
     try {
       if (peer.syncSessions && !this.sessions) throw new SyncCoordinatorError('sessions-unavailable', '会话同步服务不可用')
-      const remoteNodeManifest = await this.retryTransport(() => this.transport.fetchNodeManifest(peer.id))
+      const remoteNodeManifest = await this.retryTransport(signal, () => this.transport.fetchNodeManifest(peer.id))
       if (remoteNodeManifest.protocolVersion !== 1 || remoteNodeManifest.instanceId === this.state.instanceId()) {
         throw new SyncCoordinatorError('protocol-invalid', '同步 peer 协议版本或实例身份无效')
       }
@@ -310,7 +338,7 @@ export class SyncCoordinator {
         ? await this.nodes.applyManifest(plan.toLocal, peer.name, 'peer')
         : EMPTY_APPLY_RESULT
       const remoteResult = plan.toRemote.length > 0
-        ? await this.retryTransport(() => this.transport.applyNodeManifest(peer.id, plan.toRemote, localManifest.instanceId))
+        ? await this.retryTransport(signal, () => this.transport.applyNodeManifest(peer.id, plan.toRemote, localManifest.instanceId))
         : EMPTY_APPLY_RESULT
       const localCounts = resultCount(localResult)
       const remoteCounts = resultCount(remoteResult)
@@ -329,7 +357,7 @@ export class SyncCoordinator {
         let sessionRemoteResult = emptySessionResult()
         if (remoteNodeManifest.capabilities?.includes(SYNC_SESSION_MANIFEST_CAPABILITY)) {
           const remoteManifest = validateSyncSessionManifest(
-            await this.retryTransport(() => this.transport.fetchSessionManifest(peer.id)),
+            await this.retryTransport(signal, () => this.transport.fetchSessionManifest(peer.id)),
           )
           if (remoteManifest.instanceId !== remoteNodeManifest.instanceId) {
             throw new SyncCoordinatorError('protocol-invalid', '节点与会话 manifest 的实例身份不一致')
@@ -365,9 +393,11 @@ export class SyncCoordinator {
               const chunkKeySet = new Set(chunkKeys)
               const chunkManifest = plan.toLocal.filter((entry) => chunkKeySet.has(syncSessionEntryKey(entry)))
               const prefixes = useEventDeltas ? sessionEventPrefixesFor(chunkManifest, localManifest.entries) : []
-              let fetched = validateSyncSessionBundle(await this.retryTransport(() =>
+              this.throwIfStopped(signal)
+              let fetched = validateSyncSessionBundle(await this.retryTransport(signal, () =>
                 this.transport.fetchSessionEntries(peer.id, chunkKeys, remoteManifest.digest, prefixes, useObjectStream),
               ))
+              this.throwIfStopped(signal)
               if (fetched.instanceId !== remoteManifest.instanceId) {
                 throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
               }
@@ -378,7 +408,7 @@ export class SyncCoordinator {
                 // 收件箱（磁盘流式，内存 O(帧)），随后 applyBundle 按摘要水合。
                 const deferredObjects = fetched.entries.flatMap((entry) => (entry.objects ?? []).filter((object) => object.deferred === true))
                 if (deferredObjects.length > 0) {
-                  await this.retryTransport(async () => {
+                  await this.retryTransport(signal, async () => {
                     await sessionService.ingestObjectStream(this.transport.fetchSessionObjects(peer.id, deferredObjects))
                   })
                 }
@@ -395,7 +425,7 @@ export class SyncCoordinator {
                 if (!(error instanceof SyncSessionError && error.code === 'session-delta-prefix')) throw error
                 // 回退拉全量内容：不带 deferred 标记，载荷内联（与既有回退语义一致，
                 // 且不依赖已入库的收件箱对象）。
-                const fullRemoteEntries = validateSyncSessionBundle(await this.retryTransport(() =>
+                const fullRemoteEntries = validateSyncSessionBundle(await this.retryTransport(signal, () =>
                   this.transport.fetchSessionEntries(peer.id, chunkKeys, remoteManifest.digest, undefined, false),
                 ))
                 if (fullRemoteEntries.instanceId !== remoteManifest.instanceId) {
@@ -444,12 +474,14 @@ export class SyncCoordinator {
               const chunkKeySet = new Set(chunkKeys)
               const chunkManifest = plan.toRemote.filter((entry) => chunkKeySet.has(syncSessionEntryKey(entry)))
               const prefixes = useEventDeltas ? sessionEventPrefixesFor(chunkManifest, remoteManifest.entries) : []
+              this.throwIfStopped(signal)
               const exported = await sessionService.exportEntries(
                 chunkKeys,
                 localManifest.digest,
                 prefixes,
                 { sharedObjects: useSharedObjects, deferredObjects: useObjectStream },
               )
+              this.throwIfStopped(signal)
               assertSelectedSessionEntries(chunkManifest, exported.entries, '本地')
               const wireSkipped = firstChunk ? mergeSessionSkipped(localManifest.skipped, exported.skipped) : exported.skipped
               let wireBundle = exported.objects !== undefined
@@ -461,13 +493,13 @@ export class SyncCoordinator {
                 const deferredObjects = ((wireBundle.objects ?? wireBundle.entries.flatMap((entry) => entry.objects ?? [])) as SyncSessionObject[])
                   .filter((object) => object.deferred === true)
                 if (deferredObjects.length > 0) {
-                  await this.retryTransport(() =>
+                  await this.retryTransport(signal, () =>
                     this.transport.pushSessionObjects(peer.id, sessionService.streamObjects(deferredObjects)),
                   )
                 }
               }
               try {
-                const applied = await this.retryTransport(() =>
+                const applied = await this.retryTransport(signal, () =>
                   this.transport.applySessionBundle(peer.id, wireBundle, localInstanceId),
                 )
                 sessionRemoteResult = addSessionResults(sessionRemoteResult, applied)
@@ -485,7 +517,7 @@ export class SyncCoordinator {
                 wireBundle = fullLocalEntries.objects !== undefined
                   ? makeSyncSessionBundle(fullLocalEntries.instanceId, fullLocalEntries.entries, skippedReport, fullLocalEntries.objects)
                   : makeSyncSessionBundle(fullLocalEntries.instanceId, fullLocalEntries.entries, skippedReport)
-                const applied = await this.retryTransport(() =>
+                const applied = await this.retryTransport(signal, () =>
                   this.transport.applySessionBundle(peer.id, wireBundle, localInstanceId),
                 )
                 sessionRemoteResult = addSessionResults(sessionRemoteResult, applied)
@@ -496,7 +528,9 @@ export class SyncCoordinator {
             }
           }
         } else {
-          const remoteBundle = validateSyncSessionBundle(await this.retryTransport(() => this.transport.fetchSessionBundle(peer.id)))
+          this.throwIfStopped(signal)
+          const remoteBundle = validateSyncSessionBundle(await this.retryTransport(signal, () => this.transport.fetchSessionBundle(peer.id)))
+          this.throwIfStopped(signal)
           if (remoteBundle.instanceId !== remoteNodeManifest.instanceId) {
             throw new SyncCoordinatorError('protocol-invalid', '节点与会话 manifest 的实例身份不一致')
           }
@@ -514,7 +548,7 @@ export class SyncCoordinator {
             )
           }
           if (plan.toRemote.length > 0) {
-            sessionRemoteResult = await this.retryTransport(() =>
+            sessionRemoteResult = await this.retryTransport(signal, () =>
               this.transport.applySessionBundle(
                 peer.id,
                 makeSyncSessionBundle(localBundle.instanceId, plan.toRemote, localBundle.skipped),
@@ -564,6 +598,39 @@ export class SyncCoordinator {
       })
       return summary
     } catch (error) {
+      if (this.stopped(error)) {
+        // 手动停止：丢弃本对端未完成的 journal 批次（进行中的批不再落地、
+        // 重启不回放），水位保持不变，状态记为 stopped。
+        let discarded = 0
+        try {
+          discarded = this.sessions?.discardPendingBatches(peerId) ?? 0
+        } catch {}
+        const finishedAt = new Date(this.now()).toISOString()
+        // 进度写失败不得遮蔽停止本身（校验器曾拒绝 stopped 值导致状态卡 running）。
+        try {
+          this.peers.updateProgress(peer.id, {
+            lastRunAt: finishedAt,
+            lastRunStatus: 'stopped',
+            lastErrorCode: 'stopped',
+            lastErrorMessage: discarded > 0 ? `已停止：丢弃 ${discarded} 个未完成批次，已完成的会话保留` : '已停止：已完成的会话保留',
+          })
+        } catch {}
+        const summary: SyncRunSummary = {
+          peerId,
+          direction: peer.direction,
+          startedAt,
+          finishedAt,
+          remoteInstanceId: '',
+          imported: 0,
+          exported: 0,
+          skipped: 0,
+          pendingRemoval: 0,
+          importedSessions: 0,
+          exportedSessions: 0,
+          skippedSessions: 0,
+        }
+        return summary
+      }
       const failure = mapFailure(error)
       if (!(error instanceof SyncCoordinatorError) && !(error instanceof SyncSshProbeError) && !(error instanceof SyncSessionError) && !(error instanceof SyncNodeManifestError) && !(error instanceof SyncHostKeyChallengeError) && !(error instanceof SyncPeerNotFoundError)) {
         failure.message = `${failure.message}：${error instanceof Error ? error.message : String(error)}`
@@ -581,15 +648,19 @@ export class SyncCoordinator {
   }
 
   private clear(peerId: string, run: Promise<SyncRunSummary>): void {
-    if (this.inFlight.get(peerId) === run) this.inFlight.delete(peerId)
+    if (this.inFlight.get(peerId)?.promise === run) this.inFlight.delete(peerId)
   }
 
-  private async retryTransport<T>(operation: () => Promise<T>): Promise<T> {
+  private async retryTransport<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    this.throwIfStopped(signal)
     try {
       return await operation()
     } catch (error) {
+      if (signal.aborted) throw new SyncCoordinatorError('stopped', '同步已被手动停止')
       if (!(error instanceof SyncSshProbeError) || !['network', 'timeout', 'helper'].includes(error.category)) throw error
+      this.throwIfStopped(signal)
       await new Promise((resolve) => setTimeout(resolve, TRANSPORT_RETRY_DELAY_MS))
+      this.throwIfStopped(signal)
       return operation()
     }
   }

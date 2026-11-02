@@ -2061,6 +2061,21 @@ export class SyncSessionService {
     return this.journal.pendingPeerIds()
   }
 
+  /**
+   * 丢弃指定对端的全部未完成 journal 批次（含正在应用中的当前批）。
+   * 手动停止同步时调用：未应用的条目不再落地，重启后也不会回放；
+   * 已应用完成的条目不受影响。
+   */
+  discardPendingBatches(peerId: string): number {
+    let discarded = 0
+    for (const batch of this.journal.pendingBatches()) {
+      if (batch.peerId !== peerId) continue
+      this.journal.discard(batch.batchId)
+      discarded += 1
+    }
+    return discarded
+  }
+
   async recoverPending(): Promise<void> {
     const failures: unknown[] = []
     for (const batch of this.journal.pendingBatches()) {

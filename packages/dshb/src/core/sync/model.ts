@@ -49,7 +49,7 @@ export interface SyncRecordMetadata extends SyncProvenance {
 
 export interface SyncPeerProgress {
   lastRunAt?: string
-  lastRunStatus?: 'running' | 'succeeded' | 'failed'
+  lastRunStatus?: 'running' | 'succeeded' | 'failed' | 'stopped'
   lastSuccessAt?: string
   lastManifestDigest?: string
   watermark?: string
