@@ -1,12 +1,15 @@
 import type { CSSProperties, ReactElement } from 'react'
 import { useEffect, useState } from 'react'
 import {
+  applyRemoteProbeToForm,
   buildSyncPeerFormRequest,
   EMPTY_SYNC_PEER_FORM,
+  remoteProfileOptions,
   syncPeerFormError,
   toSyncPeerForm,
   type SyncPeerForm,
   type SyncPeerFormView,
+  type SyncRemoteProbe,
 } from './sync-peer-form.js'
 
 interface SyncPeerView extends SyncPeerFormView {
@@ -163,6 +166,8 @@ export function SyncPeersSection(): ReactElement {
   const [form, setForm] = useState<SyncPeerForm>(EMPTY_SYNC_PEER_FORM)
   const [busy, setBusy] = useState(false)
   const [probing, setProbing] = useState(false)
+  const [probingRemote, setProbingRemote] = useState(false)
+  const [remoteProbe, setRemoteProbe] = useState<SyncRemoteProbe | undefined>(undefined)
   const [syncing, setSyncing] = useState(false)
   const [notice, setNotice] = useState<Notice>(undefined)
   const [hostKeyChallenge, setHostKeyChallenge] = useState<HostKeyChallenge | undefined>(undefined)
@@ -270,6 +275,40 @@ export function SyncPeersSection(): ReactElement {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'SSH 测试失败' })
     } finally {
       setProbing(false)
+    }
+  }
+
+  const probeRemote = async (): Promise<void> => {
+    const secretReady = form.authKind === 'password' ? form.password !== '' : form.privateKey !== ''
+    if (selectedId === 'new' && (!form.host.trim() || !form.username.trim() || !secretReady)) {
+      setNotice({ kind: 'error', text: '探测远端前请先填写 SSH 主机、系统账号和登录凭据' })
+      return
+    }
+    setProbingRemote(true)
+    setHostKeyChallenge(undefined)
+    try {
+      // 已保存对端且未重新输入凭据：用存储凭据探测；否则用表单填写值。
+      const useSavedCredentials = selectedId !== 'new' && !secretReady
+      const request = buildSyncPeerFormRequest(form)
+      const response = await fetch('/api/dshb/sync/peers/probe-remote', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(useSavedCredentials
+          ? { peerId: selectedId }
+          : { ...request.fields, secrets: request.secrets }),
+      })
+      const data = await readJsonResponse<{ ok?: boolean; code?: string; error?: string; probe?: SyncRemoteProbe }>(response, '远端探测失败')
+      if (!response.ok || !data.ok || !data.probe) throw new Error(data.error ?? '远端探测失败')
+      const probe = data.probe
+      setRemoteProbe(probe)
+      setForm((current) => applyRemoteProbeToForm(current, probe))
+      const profileText = probe.profiles.length > 0 ? `${probe.profiles.length} 个 profile` : '未发现 profile'
+      const portText = probe.webPort !== undefined ? `Web 端口 ${probe.webPort}` : '未探测到运行中的 Web 端口'
+      setNotice({ kind: 'ok', text: `远端探测完成：${profileText}，${portText}${probe.instanceId ? `（实例 ${probe.instanceId.slice(0, 14)}…）` : ''}` })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '远端探测失败' })
+    } finally {
+      setProbingRemote(false)
     }
   }
 
@@ -513,26 +552,63 @@ export function SyncPeersSection(): ReactElement {
         )}
 
         {/* 远端配置 */}
-        <div style={{ ...groupTitle, marginTop: 20 }}>远端配置</div>
+        <div style={{ ...groupTitle, marginTop: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>远端配置</span>
+          <button
+            type="button"
+            style={probingRemote ? secondaryBtn : secondaryBtn}
+            disabled={probingRemote}
+            onClick={() => { void probeRemote() }}
+          >
+            {probingRemote ? '探测中…' : '通过 SSH 探测远端'}
+          </button>
+        </div>
 
         <div style={field}>
-          <span style={label}>远端 DSH_HOME</span>
-          <input style={inputStyle} value={form.remoteDshHome} placeholder="默认使用 SSH 账号的 ~/.dsh"
+          <span style={label}>
+            远端 DSH_HOME
+            {remoteProbe?.homes.length ? <span style={{ fontWeight: 400, opacity: 0.55 }}>（已探测）</span> : undefined}
+          </span>
+          <input style={inputStyle} value={form.remoteDshHome} placeholder="点击上方按钮通过 SSH 自动探测"
             onChange={(e) => setForm((c) => ({ ...c, remoteDshHome: e.target.value }))} />
-          <div style={hint}>远端 DSH 数据目录，留空使用默认路径</div>
+          <div style={hint}>
+            {remoteProbe?.homes.length
+              ? `探测到 ${remoteProbe.homes.length} 个候选目录，已回填首个命中`
+              : '留空时由探测自动发现；也可手动填写远端 DSH 数据目录'}
+          </div>
         </div>
 
         <div className="dshb-sync-two-col">
           <div style={field}>
-            <span style={label}>远端 profile</span>
-            <input style={inputStyle} value={form.remoteProfile} placeholder="web"
-              onChange={(e) => setForm((c) => ({ ...c, remoteProfile: e.target.value }))} />
+            <span style={label}>
+              远端 profile
+              {remoteProbe?.profiles.length ? <span style={{ fontWeight: 400, opacity: 0.55 }}>（已探测）</span> : undefined}
+            </span>
+            <select
+              style={inputStyle}
+              value={form.remoteProfile}
+              onChange={(e) => setForm((c) => ({ ...c, remoteProfile: e.target.value }))}
+            >
+              {remoteProfileOptions(form, remoteProbe).map((option) => (
+                <option key={option.name} value={option.name}>
+                  {option.name}{option.dshbInstalled === true ? '（DSHB 已安装）' : option.dshbInstalled === false ? '（未安装 DSHB）' : ''}
+                </option>
+              ))}
+            </select>
+            <div style={hint}>由探测列出；未探测时默认 web</div>
           </div>
           <div style={field}>
-            <span style={label}>远端 Web 端口</span>
+            <span style={label}>
+              远端 Web 端口
+              {remoteProbe?.webPort !== undefined ? <span style={{ fontWeight: 400, opacity: 0.55 }}>（已探测）</span> : undefined}
+            </span>
             <input style={inputStyle} inputMode="numeric" value={form.remoteWebPort} placeholder="3080"
               onChange={(e) => setForm((c) => ({ ...c, remoteWebPort: e.target.value }))} />
-            <div style={hint}>留空使用默认 3080</div>
+            <div style={hint}>
+              {remoteProbe?.webPort !== undefined
+                ? `已回填 ${remoteProbe.webPort}${remoteProbe.instanceId ? `（实例 ${remoteProbe.instanceId.slice(0, 14)}…）` : ''}${(remoteProbe.handshakes?.length ?? 0) > 1 ? `；同机检测到多个实例：${remoteProbe.handshakes?.map((hit) => hit.port).join('、') ?? ''}` : ''}`
+                : '留空使用默认 3080；桌面版远端也走本机回环，无需公网暴露'}
+            </div>
           </div>
         </div>
 

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { SyncSessionDeltaPrefixError, SyncSshSession, SyncSshTransport } from '../../src/core/sync/ssh-transport.js'
+import { SyncSessionDeltaPrefixError, SyncSshSession, SyncSshTransport, buildRemoteProbeScript, parseRemoteProbeOutput } from '../../src/core/sync/ssh-transport.js'
 import { SyncFrameDecoder, encodeSyncControlFrame, encodeSyncDataFrame } from '../../src/core/sync/protocol.js'
 import type { SyncPeer } from '../../src/core/sync/model.js'
 
@@ -194,5 +194,59 @@ describe('SSH framed node transport', () => {
     const bundle = { protocolVersion: 1, instanceId: 'i-source', entries: [], skipped: [], digest: 'sha256:test' }
 
     await expect(transport.applySessionBundle(peer.id, bundle, 'source')).rejects.toBeInstanceOf(SyncSessionDeltaPrefixError)
+  })
+})
+
+describe('远端配置探测', () => {
+  it('发现脚本包含候选目录、profile 扫描与握手探测', () => {
+    const script = buildRemoteProbeScript('/custom/.dsh')
+    expect(script).toContain('DSHB_PROBE_BEGIN')
+    expect(script).toContain('DSHB_PROBE_END')
+    expect(script).toContain('"/custom/.dsh"')
+    expect(script).toContain('$HOME/.dsh')
+    expect(script).toContain('Application Support/dsh')
+    expect(script).toContain('node_modules/@artenx/dshb')
+    expect(script).toContain('/api/dshb/sync/internal/handshake')
+  })
+
+  it('解析探测输出：home/profile/握手端口与指纹', () => {
+    const output = [
+      'DSHB_PROBE_BEGIN',
+      'home /home/mt/.dsh',
+      'home /home/mt/.dsh',
+      'profile web yes /home/mt/.dsh',
+      'profile scratch no /home/mt/.dsh',
+      'dsh --profile web --port 3206',
+      'handshake 3206 i-abc',
+      'DSHB_PROBE_END',
+    ].join('\n')
+    const result = parseRemoteProbeOutput(output, 'SHA256:fp')
+    expect(result.homes).toEqual(['/home/mt/.dsh'])
+    expect(result.profiles).toEqual([
+      { name: 'web', dshbInstalled: true, home: '/home/mt/.dsh' },
+      { name: 'scratch', dshbInstalled: false, home: '/home/mt/.dsh' },
+    ])
+    expect(result.handshakes).toEqual([{ port: 3206, instanceId: 'i-abc' }])
+    expect(result.webPort).toBe(3206)
+    expect(result.instanceId).toBe('i-abc')
+    expect(result.processHints).toEqual(['dsh --profile web --port 3206'])
+    expect(result.hostKeyFingerprint).toBe('SHA256:fp')
+  })
+
+  it('缺少结束标记时拒绝输出', () => {
+    expect(() => parseRemoteProbeOutput('DSHB_PROBE_BEGIN\nhome /x', 'fp')).toThrow()
+  })
+
+  it('多实例命中时优先回填已配置端口', () => {
+    const output = [
+      'DSHB_PROBE_BEGIN',
+      'handshake 3204 i-first',
+      'handshake 3207 i-second',
+      'DSHB_PROBE_END',
+    ].join('\n')
+    const preferred = parseRemoteProbeOutput(output, 'fp', 3207)
+    expect(preferred.webPort).toBe(3207)
+    expect(preferred.instanceId).toBe('i-second')
+    expect(preferred.handshakes.map((hit) => hit.port)).toEqual([3204, 3207])
   })
 })

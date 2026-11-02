@@ -111,3 +111,50 @@ export function buildSyncPeerFormRequest(form: SyncPeerForm): SyncPeerFormReques
   }
   return { fields, secrets }
 }
+
+export interface SyncRemoteProbeProfile {
+  name: string
+  dshbInstalled: boolean
+  home: string
+}
+
+export interface SyncRemoteProbe {
+  homes: string[]
+  profiles: SyncRemoteProbeProfile[]
+  handshakes?: Array<{ port: number; instanceId: string }>
+  webPort?: number
+  instanceId?: string
+  hostKeyFingerprint: string
+}
+
+/**
+ * 把探测结果回填进表单：DSH_HOME 取首个命中目录（保留用户已填的显式覆盖），
+ * profile 取首个装有 dshb 的条目，Web 端口取握手命中值。仅在对应字段为空
+ * 或明显是默认值时回填，避免覆盖用户手改内容。
+ */
+export function applyRemoteProbeToForm(form: SyncPeerForm, probe: SyncRemoteProbe): SyncPeerForm {
+  const detectedHome = probe.homes[0]
+  const detectedProfile = probe.profiles.find((profile) => profile.dshbInstalled) ?? probe.profiles[0]
+  const homeKept = form.remoteDshHome.trim() !== '' && form.remoteDshHome.trim() !== (detectedHome ?? '')
+  const profileKept = form.remoteProfile.trim() !== '' && form.remoteProfile.trim() !== 'web'
+  return {
+    ...form,
+    remoteDshHome: homeKept ? form.remoteDshHome : (detectedHome ?? form.remoteDshHome),
+    remoteProfile: profileKept ? form.remoteProfile : (detectedProfile?.name ?? form.remoteProfile),
+    remoteWebPort: probe.webPort !== undefined ? String(probe.webPort) : form.remoteWebPort,
+  }
+}
+
+/** 远端 profile 下拉选项：探测结果优先（dshb 已装的排前），并保留当前手填值。 */
+export function remoteProfileOptions(form: SyncPeerForm, probe?: SyncRemoteProbe): Array<{ name: string; dshbInstalled?: boolean }> {
+  const options: Array<{ name: string; dshbInstalled?: boolean }> = (probe?.profiles ?? [])
+    .slice()
+    .sort((left, right) => Number(right.dshbInstalled) - Number(left.dshbInstalled))
+    .map((profile) => ({ name: profile.name, dshbInstalled: profile.dshbInstalled }))
+  const current = form.remoteProfile.trim()
+  if (current && !options.some((option) => option.name === current)) {
+    options.push({ name: current })
+  }
+  if (options.length === 0) options.push({ name: 'web' })
+  return options
+}

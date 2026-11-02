@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { SyncHostKeyChallengeError, SyncHostKeyChallengeExpiredError } from './host-key.js'
 import { SyncPeerInputError, SyncPeerManager, SyncPeerNotFoundError } from './peer-manager.js'
-import { SyncSshProbeError, SyncSshTransport } from './ssh-transport.js'
+import { SyncRemoteProbe, SyncSshProbeError, SyncSshTransport } from './ssh-transport.js'
 import { SyncCoordinator, SyncCoordinatorError } from './coordinator.js'
 
 const MAX_BODY_BYTES = 128 * 1024
@@ -145,6 +145,54 @@ export function registerSyncPeerRoutes(
           return
         }
 
+        if (req.method === 'POST' && peerId === 'probe-remote') {
+          // 远端配置探测：① peerId 模式——用已保存对端的存储凭据；② 显式模式——
+          // 用表单填写的 SSH 连接信息（新建对端场景）。
+          const body = await readBody(req)
+          if (!body || (typeof body.peerId !== 'string'
+            && (typeof body.host !== 'string' || !body.host.trim()
+              || typeof body.username !== 'string' || !body.username.trim()
+              || !Number.isInteger(body.port) || (body.port as number) < 1 || (body.port as number) > 65535
+              || (body.authKind !== 'password' && body.authKind !== 'key')))) {
+            sendJson(res, 400, { ok: false, error: 'either peerId or host/port/username/authKind are required' })
+            return
+          }
+          try {
+            const probe = new SyncRemoteProbe()
+            let result
+            if (typeof body.peerId === 'string' && body.peerId !== 'new') {
+              const { peer, secrets } = await manager.connectionData(body.peerId)
+              result = await probe.probeRemote(
+                { host: peer.host, port: peer.port, username: peer.username, authKind: peer.authKind },
+                secrets,
+                peer.remoteWebPort,
+              )
+            } else {
+              const secrets = (body.secrets ?? {}) as Record<string, unknown>
+              if (body.authKind === 'password' && typeof secrets.password !== 'string') {
+                sendJson(res, 400, { ok: false, error: 'SSH password is required for probing' })
+                return
+              }
+              if (body.authKind === 'key' && typeof secrets.privateKey !== 'string') {
+                sendJson(res, 400, { ok: false, error: 'SSH private key is required for probing' })
+                return
+              }
+              const authKind = body.authKind === 'key' ? 'key' : 'password'
+              result = await probe.probeRemote(
+                { host: (body.host as string).trim(), port: body.port as number, username: (body.username as string).trim(), authKind },
+                secrets as { password?: string; privateKey?: string; passphrase?: string },
+              )
+            }
+            sendJson(res, 200, { ok: true, probe: result })
+          } catch (error) {
+            if (error instanceof SyncPeerNotFoundError) {
+              sendJson(res, 404, { ok: false, error: '同步节点已不存在' })
+              return
+            }
+            sendProbeFailure(res, error)
+          }
+          return
+        }
         if (req.method === 'POST' && peerId === undefined) {
           const body = await readBody(req)
           if (!body) {

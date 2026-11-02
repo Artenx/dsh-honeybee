@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyRemoteProbeToForm,
   buildSyncPeerFormRequest,
   EMPTY_SYNC_PEER_FORM,
+  remoteProfileOptions,
   syncPeerFormError,
   toSyncPeerForm,
   type SyncPeerFormView,
@@ -90,5 +92,49 @@ describe('sync peer form model', () => {
     const base = { ...EMPTY_SYNC_PEER_FORM, name: 'Peer', host: 'peer.example', username: 'sync', password: 'pw' }
     expect(syncPeerFormError({ ...base, remoteWebPort: '65535' })).toBeUndefined()
     expect(syncPeerFormError({ ...base, remoteWebPort: '65536' })).toBe('远端 Web 端口必须在 1 到 65535 之间')
+  })
+})
+
+describe('远端配置探测回填', () => {
+  it('applyRemoteProbeToForm 用探测值回填空字段并保留手改值', () => {
+    const probe = {
+      homes: ['/home/mt/.dsh', '/home/mt/Library/Application Support/dsh'],
+      profiles: [
+        { name: 'web2', dshbInstalled: false, home: '/home/mt/.dsh' },
+        { name: 'web', dshbInstalled: true, home: '/home/mt/.dsh' },
+      ],
+      webPort: 3206,
+      instanceId: 'i-1234567890abcdef1234567890abcdef',
+      hostKeyFingerprint: 'SHA256:abc',
+    }
+    const empty = applyRemoteProbeToForm(
+      { ...EMPTY_SYNC_PEER_FORM, remoteProfile: '' },
+      probe,
+    )
+    expect(empty.remoteDshHome).toBe('/home/mt/.dsh')
+    expect(empty.remoteProfile).toBe('web')
+    expect(empty.remoteWebPort).toBe('3206')
+
+    const edited = applyRemoteProbeToForm(
+      { ...EMPTY_SYNC_PEER_FORM, remoteDshHome: '/custom/.dsh', remoteProfile: 'prod' },
+      probe,
+    )
+    expect(edited.remoteDshHome).toBe('/custom/.dsh')
+    expect(edited.remoteProfile).toBe('prod')
+    expect(edited.remoteWebPort).toBe('3206')
+  })
+
+  it('remoteProfileOptions 把 dshb 已装条目排前并保留手填值', () => {
+    const probe = {
+      homes: ['/home/mt/.dsh'],
+      profiles: [
+        { name: 'scratch', dshbInstalled: false, home: '/home/mt/.dsh' },
+        { name: 'web', dshbInstalled: true, home: '/home/mt/.dsh' },
+      ],
+      hostKeyFingerprint: 'SHA256:abc',
+    }
+    const options = remoteProfileOptions({ ...EMPTY_SYNC_PEER_FORM, remoteProfile: 'prod' }, probe)
+    expect(options.map((option) => option.name)).toEqual(['web', 'scratch', 'prod'])
+    expect(remoteProfileOptions(EMPTY_SYNC_PEER_FORM).map((option) => option.name)).toEqual(['web'])
   })
 })

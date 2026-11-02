@@ -657,3 +657,215 @@ function validateHandshakeResponse(value: Record<string, unknown>): SyncRemoteHa
     capabilities: body.capabilities,
   }
 }
+
+//#region 远端配置探测（SSH 登录后自动发现 DSH_HOME / profile / Web 端口）
+
+export interface SyncRemoteProbeDraft {
+  host: string
+  port: number
+  username: string
+  authKind: 'password' | 'key'
+}
+
+export interface SyncRemoteProbeProfile {
+  name: string
+  dshbInstalled: boolean
+  home: string
+}
+
+export interface SyncRemoteProbeHandshake {
+  port: number
+  instanceId: string
+}
+
+export interface SyncRemoteProbeResult {
+  homes: string[]
+  profiles: SyncRemoteProbeProfile[]
+  /** 握手命中的全部端口（同机多实例时可能有多个；配置端口的命中排最前）。 */
+  handshakes: SyncRemoteProbeHandshake[]
+  webPort?: number
+  instanceId?: string
+  processHints: string[]
+  hostKeyFingerprint: string
+}
+
+export const REMOTE_PROBE_BEGIN_MARKER = 'DSHB_PROBE_BEGIN'
+export const REMOTE_PROBE_END_MARKER = 'DSHB_PROBE_END'
+const REMOTE_PROBE_TIMEOUT_MS = 12_000
+const REMOTE_PROBE_MAX_OUTPUT_BYTES = 256 * 1024
+
+/**
+ * 生成远端发现脚本：纯 POSIX sh + 远端 node（DSH 所在机器必然有 node）。
+ * 三个动作：① 多候选定位 DSH_HOME（含桌面版常见路径）；② 列出 profiles 及
+ * dshb 安装标记；③ 握手探测真实 Web 端口（仅远端回环，桌面版 127.0.0.1:3080
+ * 即可命中）。输出以 BEGIN/END 标记包裹，逐行 "key value"。
+ */
+export function buildRemoteProbeScript(dshHome?: string, preferredWebPort?: number): string {
+  const homeOverride = dshHome === undefined ? '' : JSON.stringify(dshHome)
+  const homeCandidates = (homeOverride ? ` ${homeOverride}` : '')
+    + ' "$DSH_HOME" "$HOME/.dsh" "$HOME/Library/Application Support/dsh"'
+    + ' "$HOME/Library/Application Support/DeepSeek Harness"'
+  return [
+    `echo ${REMOTE_PROBE_BEGIN_MARKER}`,
+    `for c in${homeCandidates}; do`,
+    '  [ -n "$c" ] && [ -d "$c/profiles" ] && echo "home $c"',
+    'done',
+    `for c in${homeCandidates}; do`,
+    '  [ -n "$c" ] && [ -d "$c/profiles" ] || continue',
+    '  for p in "$c"/profiles/*/; do',
+    '    [ -d "$p" ] || continue',
+    '    b=no; [ -d "${p}node_modules/@artenx/dshb" ] && b=yes',
+    '    [ -f "${p}package.json" ] || continue',
+    '    echo "profile $(basename "$p") $b $c"',
+    '  done',
+    'done',
+    'ps -eo args= 2>/dev/null | grep -E "dsh .*--profile|--profile .*--port|dsh web" | grep -v grep | head -6',
+    `node -e '`
+    + 'const http=require("http");'
+    + 'const ports=process.argv.slice(1).map(Number).filter(Number.isInteger);'
+    + 'let i=0;'
+    + 'function probe(){'
+    + 'if(i>=ports.length)process.exit(0);'
+    + 'const port=ports[i++];'
+    + 'const req=http.get({host:"127.0.0.1",port,path:"/api/dshb/sync/internal/handshake",timeout:700},res=>{'
+    + 'let body="";res.on("data",c=>body+=c);res.on("end",()=>{'
+    + 'try{const j=JSON.parse(body);if(j&&j.ok===true&&typeof j.instanceId==="string")'
+    + '{console.log("handshake "+port+" "+j.instanceId)}}catch(e){}probe()})});'
+    + 'req.on("timeout",()=>{req.destroy();probe()});'
+    + 'req.on("error",()=>probe());'
+    + '}probe()'
+    + "' "
+    + (preferredWebPort !== undefined ? ` ${preferredWebPort}` : '')
+    + ' 3080 8080 3079 3204 3206 3207 9080'
+    + ` $(ps -eo args= 2>/dev/null | grep -o "\\-\\-port [0-9]\\+" | awk '{print $2}' | head -6)`,
+    `echo ${REMOTE_PROBE_END_MARKER}`,
+  ].join('\n')
+}
+
+/** 解析探测输出：仅在 BEGIN/END 标记之间取行，容忍未知行。 */
+export function parseRemoteProbeOutput(output: string, hostKeyFingerprint: string, preferredWebPort?: number): SyncRemoteProbeResult {
+  const begin = output.indexOf(REMOTE_PROBE_BEGIN_MARKER)
+  const end = output.indexOf(REMOTE_PROBE_END_MARKER)
+  if (begin < 0 || end < begin) throw new SyncSshProbeError('helper')
+  const lines = output.slice(begin + REMOTE_PROBE_BEGIN_MARKER.length, end).split('\n')
+    .map((line) => line.trim()).filter(Boolean)
+  const result: SyncRemoteProbeResult = { homes: [], profiles: [], handshakes: [], processHints: [], hostKeyFingerprint }
+  for (const line of lines) {
+    const [head, ...rest] = line.split(/\s+/)
+    const value = rest.join(' ')
+    if (head === 'home' && value) result.homes.push(value)
+    else if (head === 'profile' && rest.length >= 3) {
+      const [name, dshb, home] = rest
+      result.profiles.push({ name, dshbInstalled: dshb === 'yes', home })
+    } else if (head === 'handshake' && rest.length >= 2) {
+      const port = Number(rest[0])
+      if (Number.isInteger(port) && port >= 1 && port <= 65535
+        && !result.handshakes.some((hit) => hit.port === port)) {
+        result.handshakes.push({ port, instanceId: rest[1] })
+      }
+    } else if (line && !line.startsWith('home ') && !line.startsWith('profile ') && !line.startsWith('handshake ')) {
+      result.processHints.push(line)
+    }
+  }
+  result.homes = [...new Set(result.homes)]
+  result.profiles = result.profiles.filter((profile, index, all) =>
+    all.findIndex((candidate) => candidate.name === profile.name && candidate.home === profile.home) === index)
+  // 首选端口（已保存对端的配置值）的命中作为自动回填值；其余命中仅提示。
+  const preferred = result.handshakes.find((hit) => hit.port === preferredWebPort)
+    ?? result.handshakes[0]
+  if (preferred) {
+    result.webPort = preferred.port
+    result.instanceId = preferred.instanceId
+  }
+  return result
+}
+
+export class SyncRemoteProbe {
+  /** 探测远端：SSH 登录 + 单次 exec 发现脚本；主机密钥自动接受（只读发现，指纹随结果返回）。 */
+  async probeRemote(draft: SyncRemoteProbeDraft, secrets: SyncPeerSecrets, preferredWebPort?: number): Promise<SyncRemoteProbeResult> {
+    if (draft.authKind === 'password' && !secrets.password) throw new SyncSshProbeError('auth')
+    if (draft.authKind === 'key' && !secrets.privateKey) throw new SyncSshProbeError('auth')
+    let fingerprint = ''
+    const client = new Client()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        const finish = (error?: unknown): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(deadline)
+          if (error) reject(error)
+          else resolve()
+        }
+        const deadline = setTimeout(() => {
+          const timeout = new Error('Timed out while waiting for SSH handshake')
+          ;(timeout as Error & { level?: string }).level = 'client-timeout'
+          finish(timeout)
+          client.end()
+        }, SSH_READY_TIMEOUT_MS)
+        client.once('ready', () => finish())
+        client.on('error', (error: Error) => finish(error))
+        const config: ConnectConfig = {
+          host: draft.host,
+          port: draft.port,
+          username: draft.username,
+          hostHash: 'sha256',
+          readyTimeout: SSH_READY_TIMEOUT_MS,
+          // 只读探测：自动接受指纹并记录，随结果返回供 UI 展示；
+          // 保存对端后的真实同步仍走 run/trust-host-key 的显式信任流程。
+          hostVerifier: (sha256Hex: string): boolean => {
+            fingerprint = sha256Hex
+            return true
+          },
+          ...(draft.authKind === 'password'
+            ? { password: secrets.password }
+            : { privateKey: secrets.privateKey, ...(secrets.passphrase ? { passphrase: secrets.passphrase } : {}) }),
+        }
+        try {
+          client.connect(config)
+        } catch (error) {
+          finish(error)
+        }
+      })
+      const stdout = await new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = []
+        let size = 0
+        let settled = false
+        const finish = (error?: unknown, text?: string): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(deadline)
+          if (error) reject(error)
+          else resolve(text ?? '')
+        }
+        const deadline = setTimeout(() => finish(new Error('Timed out while waiting for the remote probe script')), REMOTE_PROBE_TIMEOUT_MS)
+        client.exec(buildRemoteProbeScript(undefined, preferredWebPort), (error, channel) => {
+          if (error) { finish(error); return }
+          channel.on('data', (chunk: Buffer) => {
+            size += chunk.length
+            if (size > REMOTE_PROBE_MAX_OUTPUT_BYTES) { finish(new Error('remote probe output exceeds size limit')); return }
+            chunks.push(chunk)
+          })
+          channel.on('error', (error: Error) => finish(error))
+          channel.on('close', (code: number | null) => {
+            const text = Buffer.concat(chunks).toString('utf8')
+            if (code !== 0 && !text.includes(REMOTE_PROBE_END_MARKER)) finish(new Error(`remote probe script exited with ${code}`))
+            else finish(undefined, text)
+          })
+          channel.stderr.resume()
+        })
+      })
+      return parseRemoteProbeOutput(stdout, fingerprint, preferredWebPort)
+    } catch (error) {
+      if (error instanceof SyncSshProbeError) throw error
+      const category = classifySshError(error)
+      if (category === 'auth' || category === 'network' || category === 'timeout') throw new SyncSshProbeError(category)
+      if (category === 'hostkey') throw new SyncSshProbeError('hostkey')
+      throw new SyncSshProbeError('helper')
+    } finally {
+      try {
+        client.end()
+      } catch {}
+    }
+  }
+}
