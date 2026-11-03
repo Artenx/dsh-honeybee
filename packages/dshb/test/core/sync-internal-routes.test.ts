@@ -138,6 +138,35 @@ describe('loopback sync handshake route', () => {
     expect(remoteResponse.body).not.toHaveProperty('manifest')
   })
 
+  it('exports selection catalog summaries through loopback without manifest secrets', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'dshb-sync-catalog-test-'))
+    homes.push(home)
+    mkdirSync(join(home, 'dshb'), { recursive: true, mode: 0o700 })
+    process.env.DSH_HOME = home
+    const registry = new NodeRegistry({
+      credentials: { readRecord: async () => undefined, modifyRecord: async () => undefined, deleteRecord: async () => {} },
+    } as never)
+    const state = new SyncStateStore(home)
+    const syncNodes = new SyncNodeService(registry, new WorkspaceBindingsStore(), state)
+    await registry.create({
+      name: 'Catalog node',
+      type: 'remote-ssh',
+      ssh: { host: 'catalog.example', port: 22, username: 'sync', auth: { kind: 'agent' } },
+    })
+    const sessionSync = {
+      exportCatalog: async () => ({ workspaces: [], sessions: [] }),
+    } as unknown as SyncSessionService
+    const { routes } = createRoute(syncNodes, sessionSync)
+
+    const local = await call(routes[2]!, 'GET', '127.0.0.1', '127.0.0.1:3080', '/api/dshb/sync/internal/catalog')
+    const remote = await call(routes[2]!, 'GET', '10.0.0.5', '127.0.0.1:3080', '/api/dshb/sync/internal/catalog')
+
+    expect(local.status).toBe(200)
+    expect(local.body.catalog).toMatchObject({ nodes: [{ name: 'Catalog node', type: 'remote-ssh' }], workspaces: [], sessions: [] })
+    expect(JSON.stringify(local.body.catalog)).not.toContain('credentials')
+    expect(remote.status).toBe(403)
+  })
+
   it('exports and applies session bundles only through loopback endpoints', async () => {
     const bundle = makeSyncSessionBundle('i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', [])
     const sessionSync = {

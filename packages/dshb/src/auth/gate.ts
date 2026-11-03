@@ -1,12 +1,19 @@
 import type { IncomingMessage } from 'node:http'
-import { isLoopbackRequest } from './loopback.js'
+import { isLoopbackAddress, isLoopbackRequest } from './loopback.js'
 import { readCookie, SESSION_COOKIE, verifySession } from './session.js'
 import type { CredentialStore } from './credentials.js'
 
 export type GateDecision = 'allow' | 'exempt' | 'redirect-login' | 'reject' | 'forbidden'
 
-function isTrustedLoopbackAuthRequest(req: IncomingMessage): boolean {
-  if (!isLoopbackRequest(req.socket.remoteAddress, req.headers.host)) return false
+/**
+ * 认证路由（登录/状态）的可信来源判定。
+ * - remoteAddress 必须回环：直连本机，或经可信反代（部署方边界）转发。
+ * - 跨站浏览器请求一律拒绝（sec-fetch-site / Origin 与 Host 一致性）。
+ * Host 头允许外部域名：预览反代会保留原始 Host，回环校验由
+ * remoteAddress 与反代信任承担，登录后再经 rewriteToLoopback 归一。
+ */
+export function isTrustedAuthRequest(req: IncomingMessage): boolean {
+  if (!isLoopbackAddress(req.socket.remoteAddress)) return false
   if (req.headers['sec-fetch-site'] === 'cross-site') return false
   const origin = req.headers.origin
   if (origin === undefined) return true
@@ -33,7 +40,7 @@ export class AuthGate {
     if (path === '/api/auth' || path.startsWith('/api/auth/')) {
       const trusted = this.isTrustedAuthRequest
         ? this.isTrustedAuthRequest(req)
-        : isTrustedLoopbackAuthRequest(req)
+        : isTrustedAuthRequest(req)
       return trusted ? 'exempt' : 'forbidden'
     }
     if (isLoopbackRequest(req.socket.remoteAddress, req.headers.host)) return 'allow'

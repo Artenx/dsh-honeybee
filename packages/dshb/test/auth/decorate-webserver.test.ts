@@ -51,14 +51,17 @@ function response(): ServerResponse & { statusCode?: number; body?: string } {
 }
 
 describe('webserver auth decoration', () => {
-  it('requires a same-origin loopback request for auth APIs before connection is ready', () => {
+  it('allows loopback and trusted-proxy auth requests while rejecting cross-site origins', () => {
     const gate = new AuthGate(new CredentialStore())
     const trusted = request('/api/auth/status', '127.0.0.1:3080')
     trusted.headers.origin = 'http://127.0.0.1:3080'
+    const proxied = request('/api/auth/status', '3206-57aa6cc7315ae197.monkeycode-ai.online')
+    proxied.headers.origin = 'https://3206-57aa6cc7315ae197.monkeycode-ai.online'
     const crossSite = request('/api/auth/status', '127.0.0.1:3080')
     crossSite.headers.origin = 'https://evil.example'
 
     expect(gate.decide(trusted)).toBe('exempt')
+    expect(gate.decide(proxied)).toBe('exempt')
     expect(gate.decide(crossSite)).toBe('forbidden')
   })
 

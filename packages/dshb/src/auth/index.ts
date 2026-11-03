@@ -1,11 +1,12 @@
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { IncomingMessage } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { sharedCredentialStore } from './credentials.js'
 import { decorateWebServer } from './decorate-webserver.js'
-import { AuthGate } from './gate.js'
+import { AuthGate, isTrustedAuthRequest } from './gate.js'
 import { installLoopbackCompat } from './loopback-compat.js'
 import { LoginRateLimiter } from './ratelimit.js'
 import { registerAuthRoutes } from './routes.js'
@@ -14,18 +15,67 @@ export const name = 'dshb-auth'
 
 export const inject = ['webServer']
 
+/**
+ * 定位 dshb 实际安装所在 profile 的 node_modules。
+ * link 安装（开发预览）下 ESM 真实路径解析会把 import.meta.url 指向仓库源码，
+ * 由此向上 resolve 会命中仓库工作区的 @deepseek-ai/dsh-web-app 副本；服务器
+ * 实际服务的却是 profile 内那份。通过 DSH_HOME/profiles 扫描 realpath 匹配
+ * 找回安装位置；常规安装（真实文件就在 profile 内）时现有解析本就正确。
+ */
+function profileNodeModulesFor(realSelfPath: string): string | undefined {
+  const home = process.env.DSH_HOME
+  if (!home) return undefined
+  const profilesDir = join(home, 'profiles')
+  let names: string[]
+  try {
+    names = readdirSync(profilesDir)
+  } catch {
+    return undefined
+  }
+  for (const name of names) {
+    const installed = join(profilesDir, name, 'node_modules', '@artenx', 'dshb')
+    try {
+      const realInstalled = realpathSync(installed)
+      if (realInstalled === realSelfPath || realSelfPath.startsWith(`${realInstalled}/`)) {
+        return join(profilesDir, name, 'node_modules')
+      }
+    } catch {
+      /* profile without this package */
+    }
+  }
+  return undefined
+}
+
 function registerFrontendBootRaceWorkaround(ctx: Context): void {
   try {
-    // Resolve the frontend through the same `dsh-web-app` bundle the webserver
+    // Resolve the frontend through the same runtime package tree the webserver
     // loads, so the patched hashed asset is the one the static fallback serves.
-    // `process.cwd()` may hold a different installation whose asset filename
-    // the server never requests, leaving the served bundle unpatched.
+    // A linked plugin profile may contain only @artenx/dshb; its DSH executable
+    // supplies the actual @deepseek-ai bundle tree.
     const resolver = createRequire(import.meta.url)
+    const realSelf = realpathSync(fileURLToPath(import.meta.url))
+    const profileModules = profileNodeModulesFor(realSelf)
+    const webAppResolvers: Array<() => string> = []
+    if (profileModules) {
+      webAppResolvers.push(() => resolver.resolve('@deepseek-ai/dsh-web-app/package.json', { paths: [profileModules] }))
+    }
+    if (process.argv[1]) {
+      webAppResolvers.push(() => createRequire(realpathSync(process.argv[1]!)).resolve('@deepseek-ai/dsh-web-app/package.json'))
+    }
+    webAppResolvers.push(() => resolver.resolve('@deepseek-ai/dsh-web-app/package.json'))
+    let webAppManifest: string | undefined
+    for (const resolveWebApp of webAppResolvers) {
+      try {
+        webAppManifest = resolveWebApp()
+        break
+      } catch {
+        // Try the next runtime-owned package tree.
+      }
+    }
     let manifestPath: string
-    try {
-      const webAppManifest = resolver.resolve('@deepseek-ai/dsh-web-app/package.json')
+    if (webAppManifest) {
       manifestPath = createRequire(webAppManifest).resolve('@deepseek-ai/dsh-web-frontend/package.json')
-    } catch {
+    } else {
       manifestPath = resolver.resolve('@deepseek-ai/dsh-web-frontend/package.json', {
         paths: [process.cwd()],
       })
@@ -109,7 +159,12 @@ export function apply(ctx: Context): void {
         gate.setAuthRequestTrustCheck((req) => {
           const rejection = conn.requestRejection!(req)
           // DSH 401 is its browser-cookie gate; DSHB owns that check for these routes.
-          return rejection === undefined || rejection === 401
+          if (rejection === undefined || rejection === 401) return true
+          // DSH fence rejects non-loopback authorities (403). Preview reverse
+          // proxies keep the external Host header, so DSHB falls back to its own
+          // source checks (loopback peer address + cross-site protection); the
+          // session gate still owns every authenticated route after login.
+          return isTrustedAuthRequest(req)
         })
       }
       return () => {

@@ -21,6 +21,8 @@ import { compareSyncRevision, HybridLogicalClock } from './revision.js'
 import type { SyncRevision } from './revision.js'
 import { isNonNegativeSafeInteger, isRecord, syncRecordKey, syncWorkspaceKey } from './model.js'
 import type {
+  SyncCatalogSession,
+  SyncCatalogWorkspace,
   SyncImportMethod,
   SyncOrigin,
   SyncRecordMetadata,
@@ -204,6 +206,7 @@ interface SessionExportOptions {
   manifestOnly?: boolean
   selectedKeys?: ReadonlySet<string>
   payloadCache?: SessionManifestPayloadCache
+  catalog?: { workspaces: Map<string, SyncCatalogWorkspace>; sessions: SyncCatalogSession[] }
   sharedObjects?: boolean
   deferredObjects?: boolean
 }
@@ -412,6 +415,7 @@ interface SessionSnapshotLike {
   formatStatus?: 'current' | 'migration-required'
   revision: unknown
   eventCount?: number
+  sizeBytes?: number
 }
 
 interface SessionMetadataSnapshot {
@@ -2115,6 +2119,34 @@ export class SyncSessionService {
     return Object.values(this.state.read().archives).sort((a, b) => a.archivedAt.localeCompare(b.archivedAt))
   }
 
+  exportCatalog(): Promise<{ workspaces: SyncCatalogWorkspace[]; sessions: SyncCatalogSession[] }> {
+    return this.serializeMutation(async () => {
+      const catalog = { workspaces: new Map<string, SyncCatalogWorkspace>(), sessions: [] as SyncCatalogSession[] }
+      for (const mapping of Object.values(this.state.read().workspaces)) {
+        const nodeOrigin = this.nodes.originForLocalNode(mapping.localNodeId)
+        if (!nodeOrigin) continue
+        const workspace: SyncCatalogWorkspace = {
+          origin: { originInstanceId: mapping.originInstanceId, originEntityId: mapping.originWorkspaceId },
+          nodeOrigin,
+          remotePath: mapping.remotePath,
+          title: mapping.title,
+        }
+        catalog.workspaces.set(syncWorkspaceKey(mapping.originInstanceId, mapping.originWorkspaceId, mapping.remotePath), workspace)
+      }
+      await this.exportBundleNow({ manifestOnly: true, catalog })
+      return { workspaces: [...catalog.workspaces.values()], sessions: catalog.sessions }
+    })
+  }
+
+  async listSessionSizes(): Promise<Array<{ sessionId: string; sizeBytes?: number }>> {
+    const persistence = this.requirePersistence()
+    const snapshots = await persistence.list()
+    return snapshots.map((snapshot) => ({
+      sessionId: String(snapshot.header.id),
+      ...(isNonNegativeSafeInteger(snapshot.sizeBytes) ? { sizeBytes: snapshot.sizeBytes } : {}),
+    }))
+  }
+
   restoreArchive(branchId: string): Promise<SessionId> {
     return this.serializeMutation(() => this.restoreArchiveNow(branchId))
   }
@@ -2215,6 +2247,45 @@ export class SyncSessionService {
       descriptorCache.set(key, descriptor)
       return descriptor
     }
+    const catalogWorkspacesByOrigin = new Map<string, SyncCatalogWorkspace>()
+    for (const workspace of options.catalog?.workspaces.values() ?? []) {
+      catalogWorkspacesByOrigin.set(JSON.stringify([workspace.origin.originInstanceId, workspace.origin.originEntityId]), workspace)
+    }
+    const collectWorkspace = (descriptor: SyncSessionWorkspace): SyncCatalogWorkspace | undefined => {
+      if (!options.catalog) return undefined
+      const origin = { originInstanceId: descriptor.originInstanceId, originEntityId: descriptor.originWorkspaceId }
+      const workspace: SyncCatalogWorkspace = {
+        origin,
+        nodeOrigin: descriptor.nodeOrigin,
+        remotePath: descriptor.remotePath,
+        title: descriptor.title,
+      }
+      options.catalog.workspaces.set(syncWorkspaceKey(origin.originInstanceId, origin.originEntityId, descriptor.remotePath), workspace)
+      catalogWorkspacesByOrigin.set(JSON.stringify([origin.originInstanceId, origin.originEntityId]), workspace)
+      return workspace
+    }
+    const collectSession = (
+      metadata: SyncRecordMetadata,
+      workspace: SyncCatalogWorkspace | undefined,
+      sessionId: string,
+      sizeBytes?: number,
+      extra: { branchId?: string; deleted?: boolean } = {},
+    ): void => {
+      if (!options.catalog) return
+      options.catalog.sessions.push({
+        origin: { originInstanceId: metadata.originInstanceId, originEntityId: metadata.originEntityId },
+        ...(workspace ? {
+          workspaceOrigin: workspace.origin,
+          workspaceRemotePath: workspace.remotePath,
+          nodeOrigin: workspace.nodeOrigin,
+        }
+          : metadata.workspaceOrigin ? { workspaceOrigin: metadata.workspaceOrigin } : {}),
+        sessionId,
+        ...(isNonNegativeSafeInteger(sizeBytes) ? { sizeBytes } : {}),
+        ...(extra.branchId ? { branchId: extra.branchId } : {}),
+        ...(extra.deleted ? { deleted: true } : {}),
+      })
+    }
 
     for (const workspace of workspaces) {
       workspaceById.set(String(workspace.id), workspace)
@@ -2224,6 +2295,10 @@ export class SyncSessionService {
       if (!node || !isNodeRemoteType(node.type)) continue
       const nodeOrigin = this.nodes.originForLocalNode(node.id)
       if (!nodeOrigin) continue
+
+      if (workspace.sessionIds.length > 0) {
+        collectWorkspace(getWorkspaceDescriptor(workspace, binding, nodeOrigin))
+      }
 
       for (let position = 0; position < workspace.sessionIds.length; position += 1) {
         const sessionId = String(workspace.sessionIds[position])
@@ -2235,6 +2310,7 @@ export class SyncSessionService {
           : syncRecordKey('session', { originInstanceId: instanceId, originEntityId: sessionId })
         if (selectedKeys && !selectedKeys.has(localKey)) continue
         const descriptor = getWorkspaceDescriptor(workspace, binding, nodeOrigin, currentSession?.workspaceOrigin)
+        const catalogWorkspace = collectWorkspace(descriptor)
         const snapshot = await persistence.stat(makeSessionId(sessionId))
         if (!snapshot) continue
         if (snapshot.formatStatus === 'migration-required') {
@@ -2254,6 +2330,7 @@ export class SyncSessionService {
           )
           if (cached) {
             entries.push(cached)
+            collectSession(cached.metadata, catalogWorkspace, sessionId, snapshot.sizeBytes)
             eligibleLocalIds.add(sessionId)
             continue
           }
@@ -2282,6 +2359,7 @@ export class SyncSessionService {
         }
         if (exported) {
           const { entry } = exported
+          collectSession(entry.metadata, catalogWorkspace, sessionId, snapshot.sizeBytes)
           if (manifestOnly && options.payloadCache) {
             const key = syncSessionEntryKey(entry)
             const size = estimateJsonBytes(entry, MAX_MANIFEST_PAYLOAD_CACHE_BYTES - options.payloadCache.bytes)
@@ -2312,6 +2390,11 @@ export class SyncSessionService {
       if (selectedKeys && !selectedKeys.has(syncSessionEntryKey({ metadata }))) continue
       if (metadata.deleted) {
         entries.push({ metadata })
+        const workspaceOrigin = metadata.workspaceOrigin
+        const catalogWorkspace = workspaceOrigin
+          ? catalogWorkspacesByOrigin.get(JSON.stringify([workspaceOrigin.originInstanceId, workspaceOrigin.originEntityId]))
+          : undefined
+        collectSession(metadata, catalogWorkspace, metadata.localEntityId, undefined, { deleted: true })
         const tombstoneKey = sessionExportCacheKey(metadata.localEntityId)
         this.exportCache.delete(tombstoneKey)
         this.exportCacheStore.delete(tombstoneKey)
@@ -2346,6 +2429,7 @@ export class SyncSessionService {
       if (!nodeOrigin) continue
       const archivedMetadata = stateIndex.archivesByLocalSessionId.get(archive.localSessionId)
       const descriptor = getWorkspaceDescriptor(workspace, binding, nodeOrigin, archivedMetadata?.workspaceOrigin)
+      const catalogWorkspace = collectWorkspace(descriptor)
       const snapshot = await persistence.stat(makeSessionId(archive.localSessionId))
       if (!snapshot) continue
       let exported: SessionExportResult | undefined
@@ -2372,6 +2456,7 @@ export class SyncSessionService {
       }
       if (exported) {
         const { entry } = exported
+        collectSession(entry.metadata, catalogWorkspace, archive.localSessionId, snapshot.sizeBytes, { branchId: archive.branchId })
         if (manifestOnly && options.payloadCache) {
           const key = syncSessionEntryKey(entry)
           const size = estimateJsonBytes(entry, MAX_MANIFEST_PAYLOAD_CACHE_BYTES - options.payloadCache.bytes)

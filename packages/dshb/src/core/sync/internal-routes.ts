@@ -10,9 +10,11 @@ import {
   SYNC_SESSION_EVENT_TAIL_CAPABILITY,
   SYNC_SESSION_MANIFEST_CAPABILITY,
   SYNC_SESSION_OBJECT_STREAM_CAPABILITY,
+  SYNC_CATALOG_CAPABILITY,
 } from './protocol.js'
 import { SyncSessionError, type SyncSessionEventPrefix, type SyncSessionService, validateObjectPayload } from './session-sync.js'
 import type { SyncStateStore } from './stores.js'
+import { exportSyncCatalog } from './catalog.js'
 
 // 与 MAX_SYNC_TRANSFER_BYTES 对齐的请求体硬上限：超限直接断开（resolve null → 400），
 // 避免对端（或恶意请求）把宿主堆吃满。协调器分批后正常请求远小于该值。
@@ -141,6 +143,7 @@ export function registerSyncInternalRoutes(
     'peer-handshake',
     ...(nodeSync ? ['node-sync'] : []),
     ...(sessionSync ? ['session-sync', SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY] : []),
+    ...(nodeSync && sessionSync ? [SYNC_CATALOG_CAPABILITY] : []),
   ]
   ctx.effect(() =>
     ctx.webServer.register({
@@ -207,6 +210,28 @@ export function registerSyncInternalRoutes(
           return
         }
         sendJson(res, 404, { ok: false, error: 'not found' })
+      },
+    }),
+  )
+
+  if (nodeSync && sessionSync) ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/dshb/sync/internal/catalog',
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req.socket.remoteAddress, req.headers.host)) {
+          sendJson(res, 403, { ok: false, error: 'loopback access required' })
+          return
+        }
+        if (req.method !== 'GET') {
+          sendJson(res, 405, { ok: false, error: 'method not allowed' })
+          return
+        }
+        try {
+          sendJson(res, 200, { ok: true, catalog: await exportSyncCatalog(nodeSync, sessionSync) })
+        } catch {
+          sendJson(res, 500, { ok: false, error: 'sync catalog export failed' })
+        }
       },
     }),
   )

@@ -8,10 +8,12 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { SyncNodeService, type SyncNodeManifest } from './node-sync.js'
-import { SyncSessionError, SyncSessionService, validateSyncSessionBundle, type SyncSessionBundle } from './session-sync.js'
+import { makeSyncSessionBundle, SyncSessionError, SyncSessionService, validateSyncSessionBundle, type SyncSessionBundle } from './session-sync.js'
 import { SyncOfflineArchiveJournalStore, type SyncOfflineImportJournal } from './offline-journal.js'
 import type { SyncStateStore } from './stores.js'
-import type { SyncImportMethod, SyncRecordMetadata } from './model.js'
+import { type SyncCatalog, type SyncImportMethod, type SyncRecordMetadata, type SyncSelection } from './model.js'
+import { exportSyncCatalog } from './catalog.js'
+import { resolveSyncSelection, selectionIncludesNode, selectionIncludesSession, syncOriginKey } from './selection.js'
 
 const ARCHIVE_MAGIC = Buffer.from('DSHBSYNC')
 const ARCHIVE_VERSION = 1
@@ -492,8 +494,12 @@ export class SyncOfflineArchiveService {
     this.journal = new SyncOfflineArchiveJournalStore(this.home)
   }
 
-  exportArchive(password: string, includeSessions = false): Promise<SyncOfflineArchiveFile> {
-    return this.serializeMutation(() => this.exportArchiveNow(password, includeSessions))
+  exportArchive(password: string, includeSessions = false, selection?: SyncSelection): Promise<SyncOfflineArchiveFile> {
+    return this.serializeMutation(() => this.exportArchiveNow(password, includeSessions, selection))
+  }
+
+  catalog(): Promise<SyncCatalog> {
+    return exportSyncCatalog(this.nodes, this.sessions)
   }
 
   importArchive(password: string, input: AsyncIterable<Uint8Array>): Promise<SyncOfflineImportResult> {
@@ -527,19 +533,44 @@ export class SyncOfflineArchiveService {
     }
   }
 
-  private async exportArchiveNow(passwordValue: string, includeSessions: boolean): Promise<SyncOfflineArchiveFile> {
+  private async exportArchiveNow(passwordValue: string, includeSessions: boolean, selection?: SyncSelection): Promise<SyncOfflineArchiveFile> {
     const password = validatePassword(passwordValue)
     if (typeof includeSessions !== 'boolean') throw new SyncOfflineArchiveError('request-invalid', 'Session inclusion option is invalid')
     const nodeManifest = await this.nodes.exportManifest()
     this.nodes.validateManifest(nodeManifest.records)
-    const sessionBundle = includeSessions ? await this.sessions.exportBundle() : undefined
-    const nodesData = Buffer.from(JSON.stringify(nodeManifest), 'utf8')
+    let sessionBundle = includeSessions ? await this.sessions.exportBundle() : undefined
+    let selectedNodeManifest = nodeManifest
+    if (selection?.mode === 'selected') {
+      const catalog = await exportSyncCatalog(this.nodes, this.sessions)
+      const scope = resolveSyncSelection(selection, catalog)
+      selectedNodeManifest = {
+        ...nodeManifest,
+        records: nodeManifest.records.filter((entry) => selectionIncludesNode(entry.metadata, scope)),
+      }
+      if (sessionBundle) {
+        const selectedSessionIds = new Set(catalog.sessions
+          .filter((session) => scope.sessions.has(syncOriginKey(session.origin)))
+          .map((session) => session.sessionId))
+        const selectedEntries = sessionBundle.entries.filter((entry) => selectionIncludesSession(entry.metadata, scope))
+        const entryIds = new Set(selectedEntries.map((entry) => entry.sourceLocalSessionId).filter((id): id is string => Boolean(id)))
+        const selectedSkipped = sessionBundle.skipped.filter((entry) => selectedSessionIds.has(entry.sessionId) || entryIds.has(entry.sessionId))
+        const selectedSharedIds = new Set(selectedEntries.flatMap((entry) => entry.sharedObjectIds ?? []))
+        const selectedObjects = sessionBundle.objects?.filter((object) => selectedSharedIds.has(object.id))
+        sessionBundle = makeSyncSessionBundle(
+          sessionBundle.instanceId,
+          selectedEntries,
+          selectedSkipped,
+          selectedObjects,
+        )
+      }
+    }
+    const nodesData = Buffer.from(JSON.stringify(selectedNodeManifest), 'utf8')
     const sessionsData = sessionBundle ? Buffer.from(JSON.stringify(sessionBundle), 'utf8') : undefined
-    const records = summaryRecords(nodeManifest, sessionBundle)
+    const records = summaryRecords(selectedNodeManifest, sessionBundle)
     const manifest: OfflineArchiveManifest = {
       format: 'dshb-sync',
       formatVersion: ARCHIVE_VERSION,
-      instanceId: nodeManifest.instanceId,
+      instanceId: selectedNodeManifest.instanceId,
       createdAt: new Date().toISOString(),
       includeSessions,
       ...(sessionBundle ? { sessionFormatVersion: SESSION_FORMAT_VERSION } : {}),

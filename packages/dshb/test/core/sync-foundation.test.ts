@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { compareSyncRevision, HybridLogicalClock } from '../../src/core/sync/revision.js'
-import { parseSyncPeer, syncRecordKey, type SyncPeerDraft, type SyncRecordMetadata } from '../../src/core/sync/model.js'
+import { parseSyncPeer, parseSyncSelection, syncRecordKey, type SyncPeerDraft, type SyncRecordMetadata } from '../../src/core/sync/model.js'
 import { getOrCreateSyncInstanceId, SyncPeerStore, SyncStateStore } from '../../src/core/sync/stores.js'
 
 const homes: string[] = []
@@ -27,6 +27,7 @@ const peerDraft: SyncPeerDraft = {
   remoteDshHome: '/home/deploy/.dsh',
   direction: 'pull',
   schedule: 'manual',
+  mode: 'full',
   syncSessions: false,
   enabled: true,
 }
@@ -67,6 +68,29 @@ describe('sync peer model and persistence', () => {
     expect(() => parseSyncPeer({ ...peerDraft, id: 'peer-1', remoteDshHome: '../outside' })).toThrow('absolute path')
     expect(() => parseSyncPeer({ ...peerDraft, id: 'peer-1', remoteDshHome: '/home/deploy/../other' })).toThrow('absolute path')
     expect(() => parseSyncPeer({ ...peerDraft, id: 'peer-1', direction: 'push' })).toThrow('direction')
+    expect(() => parseSyncPeer({ ...peerDraft, id: 'peer-1', mode: 'mirror' })).toThrow('mode')
+  })
+
+  it('defaults legacy peers without a mode field to full sync', () => {
+    const { mode, ...legacy } = peerDraft
+    void mode
+    expect(parseSyncPeer({ ...legacy, id: 'peer-1' }).mode).toBe('full')
+    expect(parseSyncPeer({ ...peerDraft, id: 'peer-1', mode: 'metadata' }).mode).toBe('metadata')
+  })
+
+  it('persists a selected sync scope by stable origin and normalized workspace path', () => {
+    const selection = {
+      mode: 'selected',
+      nodes: [{ originInstanceId: 'i-source', originEntityId: 'node-a' }],
+      workspaces: [{ originInstanceId: 'i-source', originEntityId: 'workspace-a', remotePath: '/work/app' }],
+      sessions: [{ originInstanceId: 'i-source', originEntityId: 'session-a' }],
+    } as const
+    const store = new SyncPeerStore(createHome())
+    const peer = store.create({ ...peerDraft, selection })
+
+    expect(peer.selection).toEqual(selection)
+    expect(parseSyncPeer({ ...peer, selection }).selection).toEqual(selection)
+    expect(() => parseSyncSelection({ ...selection, workspaces: [{ ...selection.workspaces[0], remotePath: '../outside' }] })).toThrow('invalid')
   })
 
   it('fails closed on malformed peer state', () => {

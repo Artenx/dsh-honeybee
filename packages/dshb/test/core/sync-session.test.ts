@@ -168,6 +168,7 @@ class MemorySessionPersistence {
       revision: `r${value.revision}`,
       eventCount: value.events.length,
       formatStatus: 'current' as const,
+      sizeBytes: Buffer.byteLength(JSON.stringify(value.events), 'utf8'),
     }
   }
 }
@@ -497,6 +498,38 @@ afterEach(() => {
 })
 
 describe('session sync', () => {
+  it('exports a redacted selection catalog with persistence artifact sizes', async () => {
+    const source = createEnvironment('source')
+    const id = addSourceSession(source)
+
+    const catalog = await source.service.exportCatalog()
+    const session = catalog.sessions.find((entry) => entry.origin.originEntityId === String(id))
+
+    expect(catalog.workspaces).toHaveLength(1)
+    expect(catalog.workspaces[0]).toMatchObject({
+      origin: { originEntityId: 'workspace-source' },
+      nodeOrigin,
+      remotePath: '/remote/project',
+    })
+    expect(session).toMatchObject({
+      origin: { originEntityId: String(id) },
+      workspaceRemotePath: '/remote/project',
+      nodeOrigin,
+      sizeBytes: expect.any(Number),
+    })
+    expect(session).not.toHaveProperty('events')
+  })
+
+  it('lists physical artifact sizes for persisted sessions', async () => {
+    const source = createEnvironment('source')
+    const id = addSourceSession(source)
+
+    const sizes = await source.service.listSessionSizes()
+
+    expect(sizes).toHaveLength(1)
+    expect(sizes[0]).toMatchObject({ sessionId: String(id), sizeBytes: expect.any(Number) })
+  })
+
   it('reuses one sync-state snapshot and skips writes for unchanged workspace mappings', async () => {
     const source = createEnvironment('source')
     addSourceSession(source)

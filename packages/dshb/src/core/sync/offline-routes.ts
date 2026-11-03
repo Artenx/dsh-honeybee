@@ -6,8 +6,9 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { pipeline } from 'node:stream/promises'
 import { MAX_OFFLINE_ARCHIVE_BYTES, SyncOfflineArchiveError, SyncOfflineArchiveService } from './offline-archive.js'
 import { SyncSessionError } from './session-sync.js'
+import { parseSyncSelection } from './model.js'
 
-const MAX_JSON_BYTES = 8 * 1024
+const MAX_JSON_BYTES = 2 * 1024 * 1024
 const UPLOAD_TOKEN_TTL_MS = 5 * 60 * 1000
 
 interface UploadToken {
@@ -94,6 +95,14 @@ export function registerSyncOfflineRoutes(ctx: Context, archives: SyncOfflineArc
       path: '/api/dshb/sync/offline',
       handler: async (req, res) => {
         const segments = pathSegments(req)
+        if (segments.length === 5 && segments[4] === 'catalog' && req.method === 'GET') {
+          try {
+            sendJson(res, 200, { ok: true, catalog: await archives.catalog() })
+          } catch {
+            sendJson(res, 500, { ok: false, error: 'sync catalog unavailable' })
+          }
+          return
+        }
         if (segments.length === 5 && segments[4] === 'export' && req.method === 'POST') {
           const body = await readJson(req)
           if (!body || typeof body.password !== 'string' ||
@@ -101,9 +110,16 @@ export function registerSyncOfflineRoutes(ctx: Context, archives: SyncOfflineArc
             sendJson(res, 400, { ok: false, code: 'request-invalid', error: 'Export request is invalid' })
             return
           }
+          let selection
+          try {
+            selection = body.selection === undefined ? undefined : parseSyncSelection(body.selection)
+          } catch {
+            sendJson(res, 400, { ok: false, code: 'request-invalid', error: 'Export selection is invalid' })
+            return
+          }
           let archive: Awaited<ReturnType<SyncOfflineArchiveService['exportArchive']>> | undefined
           try {
-            archive = await archives.exportArchive(body.password, body.includeSessions === true)
+            archive = await archives.exportArchive(body.password, body.includeSessions === true, selection)
             res.writeHead(200, {
               'content-type': 'application/octet-stream',
               'content-length': archive.bytes,

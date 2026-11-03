@@ -9,6 +9,7 @@ import { installMobile } from './mobile.js'
 import { registerWorkspaceInstructionMenu } from './workspace-instruction-menu.js'
 import { SyncPeersSection } from './sync-peers.js'
 import { SyncOfflineSection } from './sync-offline.js'
+import { SessionSizeHover, SessionSizeLeading } from './session-size.js'
 
 export const inject = ['connection', 'workspaces', 'slots', 'layout', 'conversation']
 
@@ -685,6 +686,12 @@ export function apply(ctx: ClientContext): void {
       )
       sub.slots.inject('sidebar.workspaces.directoryFlow', () =>
         sub.slots.register({ name: 'sidebar.workspaces.directoryFlow', priority: -10 }, DirectoryFlowOccupant),
+      )
+      sub.slots.inject('sidebar.session.row.leading', () =>
+        sub.slots.register({ name: 'sidebar.session.row.leading', id: 'dshb-session-size', order: 90 }, SessionSizeLeading),
+      )
+      sub.slots.inject('sidebar.session.row.hover', () =>
+        sub.slots.register({ name: 'sidebar.session.row.hover', id: 'dshb-session-size', order: 90 }, SessionSizeHover),
       )
     },
   })

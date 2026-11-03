@@ -1,6 +1,6 @@
 {
   "name": "@artenx/dshb",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "description": "让 DSH 变成随时可用的多设备 Agent 工作台，支持将远程节点添加到本地 DSH，并像操作本地内容一样访问远程节点，包括会话环境、文件目录、终端等。支持在安装了本插件的多个 DSH 实例间同步数据。若部署在云服务器，Web 端访问支持登录认证。真正实现远程节点本地化操作。最新版本已支持 DSH 桌面端。",
   "type": "module",
   "main": "lib/index.js",
@@ -47,6 +47,8 @@
     "./core/sync/session-journal": "./lib/core/sync/session-journal.js",
     "./core/sync/session-routes": "./lib/core/sync/session-routes.js",
     "./core/sync/session-sync": "./lib/core/sync/session-sync.js",
+    "./core/sync/remote-relay": "./lib/core/sync/remote-relay.js",
+    "./core/sync/relay-auth": "./lib/core/sync/relay-auth.js",
     "./core/sync/ssh-transport": "./lib/core/sync/ssh-transport.js",
     "./core/sync/stores": "./lib/core/sync/stores.js",
     "./router": "./lib/router/index.js",

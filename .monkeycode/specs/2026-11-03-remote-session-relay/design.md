@@ -1,0 +1,106 @@
+# 技术设计：远端会话中继与双模式同步
+
+Feature Name: 2026-11-03-remote-session-relay
+Updated: 2026-11-03
+
+## Description
+
+同步节点新增「同步模式」选项：**全量同步**（既有文件传输方案，行为不变）与**元数据同步**（只同步节点配置与目录，点击会话经 SSH + wss 通道实时操作远端 DSH）。元数据同步复用目录 API（`sync-selection-catalog-v1`）拉取并落盘远端目录；远端会话通道由本地 DSHB 的 `/api/dshb/remote/<peerId>/` 路由经 SSH direct-tcpip 转发 DSH Remote 协议调用，认证由远端 DSHB 铸造的短时效签名 cookie 完成。离线导入导出不变。
+
+## Architecture
+
+```mermaid
+sequenceDiagram
+    participant U as 浏览器（本地 DSH UI）
+    participant L as 本地 DSHB（远端通道路由）
+    participant S as SSH direct-tcpip 通道
+    participant R as 远端 DSH Web profile（回环 :webPort）
+
+    U->>L: POST /api/dshb/remote/<peerId>/call/session/page
+    L->>S: SSH forwardOut → 127.0.0.1:webPort
+    L->>R: POST /api/session/page（Relay cookie，Remote 信封）
+    R-->>U: server-response 信封（实时展示，不落盘）
+```
+
+```mermaid
+graph TD
+    Mode["同步模式选项"] -->|"全量同步"| Full["既有内容同步（不变）"]
+    Mode -->|"元数据同步"| Catalog["目录拉取 + 落盘 SyncState.catalogs"]
+    Catalog --> Entry["远端目录列表（节点/工作区/会话 + 大小）"]
+    Entry -->|"在远端打开"| Relay["本地 DSHB 远端通道"]
+    Ticket["远端 relay-ticket 路由（短时效 cookie）"] --> Relay
+    Relay -->|"SSH direct-tcpip"| RemoteWS["远端回环 Remote API / wss"]
+    Offline["离线导入导出（不变）"] --> LocalSession["本地会话副本"]
+```
+
+## Components and Interfaces
+
+| 组件 | 位置 | 责任 |
+|---|---|---|
+| 同步模式选项 | `sync-peer-form.ts`、`sync-peers.tsx` | 勾选「同步工作区会话」后显示模式选择器与说明；取消勾选则隐藏选择器并复位为全量模式 |
+| SyncPeer.mode | `src/core/sync/model.ts` | `'full' \| 'metadata'`；缺省 `full`（旧数据兼容） |
+| 元数据协调分支 | `src/core/sync/coordinator.ts` | mode=metadata：拉目录、落盘 `SyncState.catalogs[peerId]`、进度报目录计数、跳过会话内容交换；节点配置照常交换 |
+| 目录缓存读取 | `src/core/sync/routes.ts` | `GET /api/dshb/sync/peers/:id/catalog?cached=1` 读最近落盘目录 |
+| SyncMetadataCatalogView | `src/client/sync-metadata-view.tsx` | 目录展示（节点/工作区/会话 + sizeBytes）+「在远端打开」实时预览 |
+| RelayTicketRoutes | `src/core/sync/relay-auth.ts` | 远端 loopback-only `POST /api/dshb/sync/internal/relay-ticket`：读本机 credentials `client-connection/browser-session` 密钥铸造 ≤10 分钟 cookie |
+| RemoteRelayService | `src/core/sync/remote-relay.ts` | 本地远端通道：凭据缓存、`POST /call/<namespace>/<method>` 信封转发（SSH direct-tcpip） |
+| SshTransport 扩展 | `src/core/sync/ssh-transport.ts` | `connectClient` 提取复用；`openDirectChannel`（forwardOut）；`fetchRelayTicket` |
+
+### 数据模型
+
+```ts
+interface SyncPeer {
+  // …既有字段…
+  /** 全量同步传输会话内容；元数据同步只同步目录，点击会话时经 wss 实时操作远端。 */
+  mode: 'full' | 'metadata'
+}
+
+interface SyncState {
+  // …既有字段…
+  catalogs: Record<string, { fetchedAt: string; catalog: SyncCatalog }>
+}
+```
+
+### 元数据协调分支（关键语义）
+
+- 节点 manifest 交换与全量模式完全一致（方向、LWW、墓碑）。
+- `mode === 'metadata' && syncSessions`：要求对端具备 `sync-selection-catalog-v1` capability（否则 `metadata-catalog-unavailable`）；拉取目录并落盘；`fetchSessionManifest/fetchSessionEntries/applySessionBundle` 全部不调用；进度 `lastResult` 附 `catalogNodes/catalogWorkspaces/catalogSessions`。`syncSessions` 关闭时不拉目录且模式复位为 `full`。
+- `selection`（自选范围）仍只作用于全量模式。
+
+### 远端会话通道
+
+- 认证：远端 DSHB 与 Host 同进程同 DSH_HOME，用官方 credentials API 读 `credentialKey('client-connection', 'browser-session')`（`{version:1, secret: base64url 32B}`），按 browser-auth 格式铸造 `dsh-auth-<sha256(authority)>` 短时效 cookie；运行时校验记录与 secret 格式，缺失报 `relay-secret-unavailable`。
+- 转发：`http.request({ createConnection: () => sshStream })` 直连远端回环端口；请求头重写 `Host: 127.0.0.1:<webPort>`、注入中继 cookie、去除本地认证头；响应信封按远端状态码透传（64MB 上限）。
+- 凭据缓存：按对端与 authority 失效，到期前 60 秒重铸；仅存内存。
+- 后续任务：wss 流透传（`registerUpgrade` 原始字节管道）接入 `session/follow` 实时事件、`session/prompt` 发送与审批。
+
+## Correctness Properties
+
+1. 中继凭据仅由远端回环内部路由铸造，≤10 分钟有效，任何日志/状态/磁盘均无凭据内容。
+2. 远端通道每次传输都发生在已通过 host-key 校验的 SSH 连接上；远端地址固定为 peer 的 `127.0.0.1:remoteWebPort`。
+3. 元数据同步 SHALL NOT 写入任何会话事件、附件、spill 对象或本地会话文件；目录只含摘要。
+4. 全量同步与离线导入导出的全部既有测试保持通过。
+5. 无 mode 字段的旧 peer 数据按全量同步处理，行为与升级前一致。
+
+## Error Handling
+
+| 故障 | 表现 |
+|---|---|
+| 对端缺目录 capability | `metadata-catalog-unavailable`，提示升级 |
+| 远端未运行/端口不通 | ssh-* 分类错误，目录保留 |
+| 远端密钥记录缺失 | `relay-secret-unavailable`，提示先启动一次远端 Web profile |
+| 中继凭据过期 | 自动重铸一次；仍失败展示认证错误 |
+| 信封失败 | 按远端 `result.error.message` 透传展示 |
+
+## Test Strategy
+
+1. 单元：mode 解析与旧数据缺省（`sync-foundation`）；协调器元数据分支（目录落盘、跳过会话交换、capability 缺失错误码、进度计数）（`sync-coordinator`）；relay-ticket 铸造格式/回环门禁/速率限制（`sync-relay-auth`）；远端通道信封转发/凭据缓存/失败分类（`sync-remote-relay`）；表单 mode 往返（`sync-peer-form`）。
+2. 回归：全量同步路径与离线归档既有测试全部通过。
+3. 集成（后续）：A/B 双实例实测目录落盘、远端预览与 wss 流透传。
+
+## References
+
+- `node_modules/@deepseek-ai/dsh-client-connection`（browser-auth cookie 格式、`/connect`、API 信封）
+- `node_modules/@deepseek-ai/dsh-api-session-controller/lib/typert.remote-client.d.ts`（`session/list|page|prompt|follow` 端点）
+- `node_modules/@deepseek-ai/dsh-host-webserver/lib/types/index.d.ts`（`registerUpgrade`）
+- `.monkeycode/specs/2026-10-21-cloud-sync/`（目录、自选范围与离线归档既有设计）

@@ -39,3 +39,10 @@
 - [x] 8. 完成跨实例集成验证与发布构建
   - 验证 A→B→C 转发与回环去重、peer 单向/双向行为、节点和会话同步、定时运行、失败恢复及离线包往返（Requirements 8–12；Design: Correctness Properties 1–7、Test Strategy 5–7、Offline Archive Test Strategy）
   - [x] 8.1 运行并修复同步相关单元/集成测试、全量测试、类型检查与包构建；验证发布包导出与兼容元数据（Design: Test Strategy）
+
+- [ ] 9. 增加同步/导出的精细范围选择及会话文件大小
+  - [ ] 9.1 增加来源身份范围模型与本机/远端目录摘要 API；覆盖节点、工作区、会话、依赖展开、`sizeBytes` 和秘密/负载脱敏（Requirement 13.1–4、13.9、13.11）
+  - [ ] 9.2 在 peer 配置、UI 与协调器中保存自选范围；完整 manifest 比较后筛选传输计划，范围外实体和 tombstone 保持不变（Requirement 13.1–6）
+  - [ ] 9.3 扩展离线导出选择 UI/API；按本机选择过滤节点和会话归档并保持加密包导入幂等（Requirement 13.7）
+  - [ ] 9.4 在工作区会话列表展示简洁文件大小，并在行详情显示精确字节数、未知和未落盘状态（Requirement 13.9–11）
+  - [ ] 9.5 增加范围过滤、墓碑安全、目录脱敏、离线筛选、文件大小测试；运行定向/全量测试、类型检查和构建并同步项目文档（Requirement 13；Design: Correctness Properties 8–10、Test Strategy 8–9、Offline Archive Test Strategy 6）

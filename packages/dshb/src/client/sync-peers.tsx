@@ -1,5 +1,8 @@
 import type { CSSProperties, ReactElement } from 'react'
 import { useEffect, useState } from 'react'
+import type { SyncCatalog } from '../core/sync/model.js'
+import { SyncMetadataCatalogView } from './sync-metadata-view.js'
+import { SyncSelectionPicker } from './sync-selection-picker.js'
 import {
   applyRemoteProbeToForm,
   buildSyncPeerFormRequest,
@@ -168,6 +171,9 @@ export function SyncPeersSection(): ReactElement {
   const [probing, setProbing] = useState(false)
   const [probingRemote, setProbingRemote] = useState(false)
   const [remoteProbe, setRemoteProbe] = useState<SyncRemoteProbe | undefined>(undefined)
+  const [catalog, setCatalog] = useState<SyncCatalog | undefined>(undefined)
+  const [catalogFetchedAt, setCatalogFetchedAt] = useState<string | undefined>(undefined)
+  const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [notice, setNotice] = useState<Notice>(undefined)
@@ -216,6 +222,7 @@ export function SyncPeersSection(): ReactElement {
     setSelectedId(id)
     setNotice(undefined)
     setHostKeyChallenge(undefined)
+    setCatalog(undefined)
     const peer = id === 'new' ? undefined : peers.find((item) => item.id === id)
     setForm(peer ? toSyncPeerForm(peer) : EMPTY_SYNC_PEER_FORM)
   }
@@ -277,6 +284,41 @@ export function SyncPeersSection(): ReactElement {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'SSH 测试失败' })
     } finally {
       setProbing(false)
+    }
+  }
+
+  const loadCatalog = async (): Promise<void> => {
+    if (selectedId === 'new') return
+    setLoadingCatalog(true)
+    setHostKeyChallenge(undefined)
+    const preferCache = form.mode === 'metadata'
+    try {
+      const response = await fetch(`/api/dshb/sync/peers/${selectedId}/catalog${preferCache ? '?cached=1' : ''}`)
+      const data = await readJsonResponse<{
+        ok?: boolean
+        code?: string
+        fingerprint?: string
+        expected?: string
+        catalog?: SyncCatalog
+        fetchedAt?: string
+        error?: string
+      }>(response, '读取目标节点目录失败')
+      if (data.code === 'host-key-untrusted' || data.code === 'host-key-changed') {
+        setHostKeyChallenge({
+          code: data.code,
+          fingerprint: data.fingerprint ?? '',
+          ...(data.expected ? { expected: data.expected } : {}),
+        })
+        return
+      }
+      if (!response.ok || !data.ok || !data.catalog) throw new Error(data.error ?? '读取目标节点目录失败')
+      setCatalog(data.catalog)
+      setCatalogFetchedAt(data.fetchedAt)
+      setNotice({ kind: 'ok', text: `已读取目标节点目录：${data.catalog.nodes.length} 个工作节点、${data.catalog.workspaces.length} 个工作区、${data.catalog.sessions.length} 个会话` })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '读取目标节点目录失败' })
+    } finally {
+      setLoadingCatalog(false)
     }
   }
 
@@ -662,20 +704,76 @@ export function SyncPeersSection(): ReactElement {
         <div style={{ ...field, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
             <input type="checkbox" checked={form.syncSessions} style={{ marginTop: 2 }}
-              onChange={(e) => setForm((c) => ({ ...c, syncSessions: e.target.checked }))} />
+              onChange={(e) => setForm((c) => ({
+                ...c,
+                syncSessions: e.target.checked,
+                ...(e.target.checked ? {} : { mode: 'full' as const }),
+              }))} />
             <span>
               <span style={{ fontSize: 13 }}>同步工作区会话</span>
               <span style={{ display: 'block', fontSize: 11, opacity: 0.5, marginTop: 2 }}>
-                覆盖已绑定 SSH 或 Docker 远程节点的工作区，保留冲突分支供恢复
+                {form.mode === 'metadata'
+                  ? '同步远端工作区与会话列表，通过加密通道实时访问会话内容'
+                  : '同步会话完整内容，导入后可在本机继续；保留冲突分支供恢复'}
               </span>
             </span>
           </label>
+          {form.syncSessions && (
+            <div style={{ ...field, margin: 0 }}>
+              <span style={label}>同步模式</span>
+              <select style={inputStyle} value={form.mode}
+                onChange={(e) => setForm((c) => ({ ...c, mode: e.target.value as SyncPeerForm['mode'] }))}>
+                <option value="full">全量同步</option>
+                <option value="metadata">元数据同步</option>
+              </select>
+              <div style={hint}>
+                {form.mode === 'metadata'
+                  ? '仅同步工作节点与工作区会话列表，不传输会话内容；点击同步来的会话时，通过加密 SSH 通道读取远端内容；wss 实时事件流与发送消息将在后续版本接入。'
+                  : '将工作节点配置与工作区会话内容完整传输到对端；导入后可在本机离线继续会话，数据量大时耗时较长。'}
+              </div>
+            </div>
+          )}
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
             <input type="checkbox" checked={form.enabled}
               onChange={(e) => setForm((c) => ({ ...c, enabled: e.target.checked }))} />
             <span style={{ fontSize: 13 }}>启用此同步节点</span>
           </label>
         </div>
+
+        {selectedPeer && form.syncSessions && form.mode === 'metadata' && (
+          <div style={{ ...field, display: 'grid', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+              <span style={label}>远端目录</span>
+              <button type="button" style={secondaryBtn} disabled={loadingCatalog || probing || busy} onClick={() => void loadCatalog()}>
+                {loadingCatalog ? '读取目录中…' : catalog ? '刷新目录' : '读取远端目录'}
+              </button>
+            </div>
+            <div style={hint}>保存并执行一次同步后，此处展示远端工作节点、工作区与会话列表；点击会话可实时查看远端内容。</div>
+            {catalog && <SyncMetadataCatalogView peerId={selectedPeer.id} catalog={catalog} fetchedAt={catalogFetchedAt} />}
+          </div>
+        )}
+
+        {selectedPeer && (
+          <div style={{ ...field, display: 'grid', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+              <span style={label}>同步范围</span>
+              <button type="button" style={secondaryBtn} disabled={loadingCatalog || probing || busy} onClick={() => void loadCatalog()}>
+                {loadingCatalog ? '读取目录中…' : catalog ? '刷新目标目录' : '读取目标目录'}
+              </button>
+            </div>
+            <div style={hint}>节点选择同步节点配置；工作区选择包含其会话；单独选择会话时会自动纳入所需的工作区与节点。</div>
+            {catalog && (
+              <SyncSelectionPicker
+                catalog={catalog}
+                selection={form.selection}
+                name={`sync-selection-${selectedPeer.id}`}
+                onChange={(selection) => setForm((current) => ({ ...current, selection }))}
+                includeSessions={form.syncSessions}
+                disabled={busy}
+              />
+            )}
+          </div>
+        )}
 
         {/* 主机指纹 */}
         {selectedPeer?.hostKeyFingerprint && (

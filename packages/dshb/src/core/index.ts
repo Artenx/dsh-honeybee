@@ -22,6 +22,8 @@ import { SyncSessionService, type WorkspaceRegistryLike } from './sync/session-s
 import { registerSyncSessionRoutes } from './sync/session-routes.js'
 import { SyncOfflineArchiveService } from './sync/offline-archive.js'
 import { registerSyncOfflineRoutes } from './sync/offline-routes.js'
+import { registerRelayTicketRoutes } from './sync/relay-auth.js'
+import { RemoteRelayService, registerRemoteRelayRoutes } from './sync/remote-relay.js'
 import { SyncPeerStore, SyncStateStore } from './sync/stores.js'
 import { sharedSessionInstructionSnapshotStore } from './workspace-instructions.js'
 
@@ -91,10 +93,16 @@ export function apply(ctx: Context): void {
   void registerWorkspaceRoutes(ctx, registry, bindings, syncNodes)
   void registerRemoteDownloadRoutes(ctx, registry, bindings)
   void registerWorkspaceInstructionRoutes(ctx, sharedWorkspaceInstructionStore())
-  registerSyncPeerRoutes(ctx, syncPeerManager, syncSshTransport, syncCoordinator)
+  registerSyncPeerRoutes(ctx, syncPeerManager, syncSshTransport, syncCoordinator, syncState)
   registerSyncInternalRoutes(ctx, syncState, syncNodes, syncSessions)
   registerSyncSessionRoutes(ctx, syncSessions)
   registerSyncOfflineRoutes(ctx, syncOfflineArchives)
+  // 元数据同步（wss 方案）：远端侧铸造短时效凭据；本地侧经 SSH direct-tcpip
+  // 转发 Remote unary 调用。凭据仅存内存，路由由既有登录门保护。
+  registerRelayTicketRoutes(ctx, ctx.credentials as never)
+  const remoteRelay = new RemoteRelayService(syncPeerManager, syncSshTransport)
+  ctx.provide('remoteRelayService', remoteRelay)
+  registerRemoteRelayRoutes(ctx, remoteRelay)
   ctx.effect(() => {
     const stopScheduler = syncScheduler.start()
     // 带外对象收件箱 TTL 清扫：apply 失败/进程中断留下的孤儿文件按天回收。

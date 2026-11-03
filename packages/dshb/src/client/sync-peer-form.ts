@@ -1,3 +1,5 @@
+import type { SyncSelection } from '../core/sync/model.js'
+
 export interface SyncPeerSecretFlags {
   hasPassword: boolean
   hasKey: boolean
@@ -18,15 +20,19 @@ export interface SyncPeerForm {
   remoteWebPort: string
   direction: 'pull' | 'bidirectional'
   schedule: 'manual' | 'every-5m'
+  mode: 'full' | 'metadata'
   syncSessions: boolean
+  selection: SyncSelection
   enabled: boolean
 }
 
-export interface SyncPeerFormView extends Omit<SyncPeerForm, 'password' | 'privateKey' | 'passphrase' | 'port' | 'remoteWebPort' | 'remoteDshHome' | 'remoteProfile'> {
+export interface SyncPeerFormView extends Omit<SyncPeerForm, 'password' | 'privateKey' | 'passphrase' | 'port' | 'remoteWebPort' | 'remoteDshHome' | 'remoteProfile' | 'selection' | 'mode'> {
   port: number
   remoteDshHome?: string
   remoteProfile?: string
   remoteWebPort?: number
+  selection?: SyncSelection
+  mode?: 'full' | 'metadata'
   hasSecret: SyncPeerSecretFlags
 }
 
@@ -44,7 +50,9 @@ export const EMPTY_SYNC_PEER_FORM: SyncPeerForm = {
   remoteWebPort: '',
   direction: 'pull',
   schedule: 'manual',
+  mode: 'full',
   syncSessions: false,
+  selection: { mode: 'all', nodes: [], workspaces: [], sessions: [] },
   enabled: true,
 }
 
@@ -82,7 +90,9 @@ export function toSyncPeerForm(peer: SyncPeerFormView): SyncPeerForm {
     remoteWebPort: peer.remoteWebPort == null ? '' : String(peer.remoteWebPort),
     direction: peer.direction,
     schedule: peer.schedule,
+    mode: peer.syncSessions ? peer.mode ?? 'full' : 'full',
     syncSessions: peer.syncSessions,
+    selection: peer.selection ?? { mode: 'all', nodes: [], workspaces: [], sessions: [] },
     enabled: peer.enabled,
   }
 }
@@ -96,7 +106,9 @@ export function buildSyncPeerFormRequest(form: SyncPeerForm): SyncPeerFormReques
     authKind: form.authKind,
     direction: form.direction,
     schedule: form.schedule,
+    mode: form.mode,
     syncSessions: form.syncSessions,
+    selection: form.selection,
     enabled: form.enabled,
     ...(form.remoteDshHome.trim() ? { remoteDshHome: form.remoteDshHome.trim() } : {}),
     ...(form.remoteProfile.trim() ? { remoteProfile: form.remoteProfile.trim() } : {}),

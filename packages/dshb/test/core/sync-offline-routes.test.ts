@@ -8,6 +8,15 @@ function setup() {
   const disposers: Array<() => void> = []
   const imports: Array<{ password: string; bytes: Buffer }> = []
   const archives = {
+    async catalog() {
+      return {
+        protocolVersion: 1 as const,
+        instanceId: 'i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        nodes: [],
+        workspaces: [],
+        sessions: [],
+      }
+    },
     async importArchive(password: string, input: AsyncIterable<Uint8Array>) {
       const chunks: Uint8Array[] = []
       for await (const chunk of input) chunks.push(chunk)
@@ -45,6 +54,23 @@ async function call(
 }
 
 describe('offline sync routes', () => {
+  it('returns the local selection catalog without session payloads', async () => {
+    const { route, dispose } = setup()
+    try {
+      const response = await call(route, 'GET', '/api/dshb/sync/offline/catalog', {}, '')
+      expect(response.status).toBe(200)
+      expect(response.body.catalog).toEqual({
+        protocolVersion: 1,
+        instanceId: 'i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        nodes: [],
+        workspaces: [],
+        sessions: [],
+      })
+    } finally {
+      dispose()
+    }
+  })
+
   it('keeps the password out of the upload token response and consumes the token once', async () => {
     const { route, imports, dispose } = setup()
     try {

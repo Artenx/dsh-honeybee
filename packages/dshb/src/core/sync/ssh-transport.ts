@@ -3,7 +3,7 @@ import type { ClientChannel } from 'ssh2'
 import { once } from 'node:events'
 import { classifySshError } from '../../exec-ssh/connection.js'
 import { SyncPeerManager, SyncPeerNotFoundError, type SyncPeerSecrets } from './peer-manager.js'
-import { isRecord, type SyncPeer } from './model.js'
+import { isRecord, type SyncCatalog, type SyncPeer } from './model.js'
 import { SyncHostKeyChallengeError, SyncHostKeyChallenges, inspectSyncHostKey } from './host-key.js'
 import type { SyncNodeApplyResult, SyncNodeManifest } from './node-sync.js'
 import {
@@ -19,6 +19,7 @@ import {
 } from './protocol.js'
 import { REMOTE_SYNC_HELPER_COMMAND } from './remote-helper.js'
 import type { SyncSessionApplyResult, SyncSessionBundle, SyncSessionEventPrefix, SyncSessionManifest, SyncSessionObject } from './session-sync.js'
+import { validateSyncCatalog } from './catalog.js'
 
 const SSH_READY_TIMEOUT_MS = 30_000
 const SSH_READ_IDLE_TIMEOUT_MS = 60_000
@@ -241,14 +242,14 @@ export class SyncSshTransport {
     }
   }
 
-  async openSession(peerId: string): Promise<{ peer: SyncPeer; session: SyncSshSession }> {
+  /** 建立 peer 的 SSH 连接（含 host-key 校验与凭据）；调用方负责 client.end()。 */
+  private async connectClient(peerId: string): Promise<{ peer: SyncPeer; client: Client }> {
     const { peer, secrets } = await this.peerManager.connectionData(peerId)
     if (peer.authKind === 'password' && !secrets.password) throw new SyncSshProbeError('auth')
     if (peer.authKind === 'key' && !secrets.privateKey) throw new SyncSshProbeError('auth')
 
     const client = new Client()
     let challenge: SyncHostKeyChallengeError | undefined
-    let sessionOpened = false
     try {
       await new Promise<void>((resolve, reject) => {
         let settled = false
@@ -280,7 +281,57 @@ export class SyncSshTransport {
           finish(error)
         }
       })
+      return { peer, client }
+    } catch (error) {
+      try {
+        client.end()
+      } catch {}
+      throw error
+    }
+  }
 
+  /**
+   * 打开到远端回环 TCP 目标的 direct-tcpip 通道（元数据同步的远端会话
+   * wss 通道用）。通道复用 peer 的 host-key 校验与凭据；调用方负责
+   * client.end() 与流销毁。
+   */
+  async openDirectChannel(
+    peerId: string,
+    targetHost: string,
+    targetPort: number,
+  ): Promise<{ peer: SyncPeer; client: Client; stream: ClientChannel }> {
+    const { peer, client } = await this.connectClient(peerId)
+    try {
+      const stream = await new Promise<ClientChannel>((resolve, reject) => {
+        const deadline = setTimeout(() => {
+          reject(new Error('Timed out while waiting for the direct-tcpip channel'))
+          client.end()
+        }, SSH_READY_TIMEOUT_MS)
+        client.forwardOut('127.0.0.1', 0, targetHost, targetPort, (error, opened) => {
+          clearTimeout(deadline)
+          if (error) reject(error)
+          else resolve(opened!)
+        })
+      })
+      return { peer, client, stream }
+    } catch (error) {
+      try {
+        client.end()
+      } catch {}
+      if (error instanceof SyncHostKeyChallengeError || error instanceof SyncPeerNotFoundError || error instanceof SyncSshProbeError) {
+        throw error
+      }
+      const category = classifySshError(error)
+      if (category === 'auth' || category === 'network' || category === 'timeout') throw new SyncSshProbeError(category)
+      if (category === 'hostkey') throw new SyncSshProbeError('hostkey')
+      throw new SyncSshProbeError('helper')
+    }
+  }
+
+  async openSession(peerId: string): Promise<{ peer: SyncPeer; session: SyncSshSession }> {
+    let sessionOpened = false
+    const { peer, client } = await this.connectClient(peerId)
+    try {
       const channel = await new Promise<ClientChannel>((resolve, reject) => {
         const execDeadline = setTimeout(() => {
           reject(new Error('Timed out while waiting for the sync helper channel'))
@@ -300,7 +351,6 @@ export class SyncSshTransport {
       if (error instanceof SyncHostKeyChallengeError || error instanceof SyncPeerNotFoundError || error instanceof SyncSshProbeError) {
         throw error
       }
-      if (challenge) throw challenge
       const category = classifySshError(error)
       if (category === 'auth' || category === 'network' || category === 'timeout') {
         throw new SyncSshProbeError(category)
@@ -397,6 +447,30 @@ export class SyncSshTransport {
       throw new SyncSshProbeError('protocol')
     }
     return manifest as unknown as SyncSessionManifest
+  }
+
+  async fetchCatalog(peerId: string): Promise<SyncCatalog> {
+    const value = await this.fetchDataOperation(peerId, 'catalog')
+    if (!isRecord(value) || value.ok !== true || !isRecord(value.catalog)) throw new SyncSshProbeError('helper')
+    try {
+      return validateSyncCatalog(value.catalog)
+    } catch {
+      throw new SyncSshProbeError('protocol')
+    }
+  }
+
+  /** 取得远端铸造的中继凭据（≤10 分钟签名 cookie），供元数据同步的 wss 通道使用。 */
+  async fetchRelayTicket(peerId: string, authority: string): Promise<{ name: string; value: string; maxAgeSeconds: number }> {
+    const value = await this.fetchDataOperation(peerId, 'relay-ticket', { authority })
+    if (!isRecord(value) || value.ok !== true || !isRecord(value.cookie)) throw new SyncSshProbeError('helper')
+    const cookie = value.cookie
+    if (typeof cookie.name !== 'string' || !cookie.name.startsWith('dsh-auth-') ||
+      typeof cookie.value !== 'string' || cookie.value.length < 8 || cookie.value.length > 4096 ||
+      !Number.isSafeInteger(cookie.maxAgeSeconds) || (cookie.maxAgeSeconds as number) < 1 ||
+      (cookie.maxAgeSeconds as number) > 600) {
+      throw new SyncSshProbeError('protocol')
+    }
+    return { name: cookie.name, value: cookie.value, maxAgeSeconds: cookie.maxAgeSeconds as number }
   }
 
   async fetchSessionEntries(
@@ -581,9 +655,10 @@ export class SyncSshTransport {
     }
   }
 
+
   private async fetchDataOperation(
     peerId: string,
-    operation: 'node-manifest' | 'session-bundle' | 'session-manifest' | 'session-entries',
+    operation: 'node-manifest' | 'session-bundle' | 'session-manifest' | 'session-entries' | 'catalog' | 'relay-ticket',
     requestBody?: Record<string, unknown>,
   ): Promise<unknown> {
     const body = requestBody === undefined ? undefined : Buffer.from(JSON.stringify(requestBody), 'utf8')

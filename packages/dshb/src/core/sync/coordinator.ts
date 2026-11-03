@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { SyncNodeManifestError, type SyncNodeApplyResult, type SyncNodeEntry, type SyncNodeService } from './node-sync.js'
 import { SyncHostKeyChallengeError } from './host-key.js'
 import { compareSyncRevision } from './revision.js'
-import { syncRecordKey, type SyncPeer } from './model.js'
+import { syncRecordKey, type SyncCatalog, type SyncPeer } from './model.js'
 import { SyncPeerManager, SyncPeerNotFoundError } from './peer-manager.js'
 import type { SyncStateStore } from './stores.js'
 import { SyncSessionDeltaPrefixError, SyncSshProbeError, SyncSshTransport } from './ssh-transport.js'
@@ -25,7 +25,8 @@ import type {
   SyncSessionManifest,
   SyncSessionManifestEntry,
 } from './session-sync.js'
-import { SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY } from './protocol.js'
+import { SYNC_CATALOG_CAPABILITY, SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY } from './protocol.js'
+import { resolveSyncSelection, selectionIncludesNode, selectionIncludesSession } from './selection.js'
 
 const EMPTY_APPLY_RESULT: SyncNodeApplyResult = { created: 0, updated: 0, deleted: 0, pendingRemoval: 0, skipped: 0 }
 const TRANSPORT_RETRY_DELAY_MS = 250
@@ -329,7 +330,9 @@ export class SyncCoordinator {
     })
 
     try {
-      if (peer.syncSessions && !this.sessions) throw new SyncCoordinatorError('sessions-unavailable', '会话同步服务不可用')
+      if (peer.syncSessions && peer.mode !== 'metadata' && !this.sessions) {
+        throw new SyncCoordinatorError('sessions-unavailable', '会话同步服务不可用')
+      }
       const remoteNodeManifest = await this.retryTransport(signal, () => this.transport.fetchNodeManifest(peer.id))
       if (remoteNodeManifest.protocolVersion !== 1 || remoteNodeManifest.instanceId === this.state.instanceId()) {
         throw new SyncCoordinatorError('protocol-invalid', '同步 peer 协议版本或实例身份无效')
@@ -337,7 +340,42 @@ export class SyncCoordinator {
       const remoteEntries = this.nodes.validateManifest(remoteNodeManifest.records)
       const localManifest = await this.nodes.exportManifest()
       const localEntries = this.nodes.validateManifest(localManifest.records)
-      const plan = planNodeTransfers(peer.direction, localEntries, remoteEntries)
+      let catalog: SyncCatalog = {
+        protocolVersion: 1,
+        instanceId: remoteNodeManifest.instanceId,
+        nodes: [],
+        workspaces: [],
+        sessions: [],
+      }
+      let metadataCatalogFetchedAt: string | undefined
+      if (peer.mode === 'metadata' && peer.syncSessions) {
+        // 元数据同步：只拉目录（节点/工作区/会话列表），不交换会话内容；
+        // 点击同步来的会话时经远端会话通道（wss）实时操作远端 DSH。
+        if (!remoteNodeManifest.capabilities?.includes(SYNC_CATALOG_CAPABILITY)) {
+          throw new SyncCoordinatorError('metadata-catalog-unavailable', '目标同步节点需要升级以支持元数据同步')
+        }
+        catalog = await this.retryTransport(signal, () => this.transport.fetchCatalog(peer.id))
+        if (catalog.instanceId !== remoteNodeManifest.instanceId) {
+          throw new SyncCoordinatorError('protocol-invalid', '节点与目录清单的实例身份不一致')
+        }
+        metadataCatalogFetchedAt = new Date(this.now()).toISOString()
+      } else if (peer.selection?.mode === 'selected' && peer.syncSessions &&
+        (peer.selection.workspaces.length > 0 || peer.selection.sessions.length > 0)) {
+        if (!remoteNodeManifest.capabilities?.includes(SYNC_CATALOG_CAPABILITY)) {
+          throw new SyncCoordinatorError('selection-catalog-unavailable', '目标同步节点需要升级以支持自选范围')
+        }
+        catalog = await this.retryTransport(signal, () => this.transport.fetchCatalog(peer.id))
+        if (catalog.instanceId !== remoteNodeManifest.instanceId) {
+          throw new SyncCoordinatorError('protocol-invalid', '节点与目录清单的实例身份不一致')
+        }
+      }
+      const selection = resolveSyncSelection(peer.selection, catalog)
+      const fullNodePlan = planNodeTransfers(peer.direction, localEntries, remoteEntries)
+      const plan = selection.all ? fullNodePlan : {
+        ...fullNodePlan,
+        toLocal: fullNodePlan.toLocal.filter((entry) => selectionIncludesNode(entry.metadata, selection)),
+        toRemote: fullNodePlan.toRemote.filter((entry) => selectionIncludesNode(entry.metadata, selection)),
+      }
 
       const localResult = plan.toLocal.length > 0
         ? await this.nodes.applyManifest(plan.toLocal, peer.name, 'peer')
@@ -351,7 +389,12 @@ export class SyncCoordinator {
       let exportedSessions = 0
       let skippedSessions = 0
       let digest = manifestDigest(remoteEntries)
-      if (peer.syncSessions) {
+      if (peer.mode === 'metadata' && peer.syncSessions) {
+        // 目录落盘供 UI 展示远端节点/工作区/会话列表；会话内容交换整体跳过。
+        this.state.update((state) => {
+          state.catalogs[peer.id] = { fetchedAt: metadataCatalogFetchedAt!, catalog }
+        })
+      } else if (peer.syncSessions) {
         const sessionService = this.sessions!
         let plan: ReturnType<typeof planSessionTransfers>
         let remoteSkipped = 0
@@ -368,7 +411,12 @@ export class SyncCoordinator {
             throw new SyncCoordinatorError('protocol-invalid', '节点与会话 manifest 的实例身份不一致')
           }
           const localManifest = await sessionService.exportManifest()
-          plan = planSessionTransfers(peer.direction, localManifest.entries, remoteManifest.entries)
+          const fullSessionPlan = planSessionTransfers(peer.direction, localManifest.entries, remoteManifest.entries)
+          plan = selection.all ? fullSessionPlan : {
+            ...fullSessionPlan,
+            toLocal: fullSessionPlan.toLocal.filter((entry) => selectionIncludesSession(entry.metadata, selection)),
+            toRemote: fullSessionPlan.toRemote.filter((entry) => selectionIncludesSession(entry.metadata, selection)),
+          }
           remoteSessionDigest = remoteManifest.digest
           localSessionDigest = localManifest.digest
           localInstanceId = localManifest.instanceId
@@ -601,6 +649,11 @@ export class SyncCoordinator {
             importedSessions,
             exportedSessions,
             skippedSessions,
+            ...(peer.mode === 'metadata' && peer.syncSessions ? {
+              catalogNodes: catalog.nodes.length,
+              catalogWorkspaces: catalog.workspaces.length,
+              catalogSessions: catalog.sessions.length,
+            } : {}),
           },
         })
       } catch {}

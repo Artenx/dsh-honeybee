@@ -17,6 +17,10 @@ function setup() {
       workspacePosition: 0,
       archivedAt: '2026-10-26T00:00:00.000Z',
     }]),
+    listSessionSizes: vi.fn(async () => [
+      { sessionId: 'session-a', sizeBytes: 4096 },
+      { sessionId: 'session-b' },
+    ]),
     restoreArchive: vi.fn(async () => 'session-restored'),
   }
   const ctx = {
@@ -24,7 +28,7 @@ function setup() {
     effect(register: () => () => void) { register() },
   }
   registerSyncSessionRoutes(ctx as never, sessions as unknown as SyncSessionService)
-  return { route: routes[0]!, sessions }
+  return { route: routes[0]!, sizeRoute: routes[1]!, sessions }
 }
 
 async function call(route: { handler: (req: never, res: never) => unknown }, method: string, url: string) {
@@ -56,5 +60,16 @@ describe('sync session archive routes', () => {
     const response = await call(route, 'POST', '/api/dshb/sync/archives/not-valid/restore')
     expect(response.status).toBe(400)
     expect(sessions.restoreArchive).not.toHaveBeenCalled()
+  })
+
+  it('returns only per-session persistence sizes for the sidebar decoration', async () => {
+    const { sizeRoute, sessions } = setup()
+    const response = await call(sizeRoute, 'GET', '/api/dshb/sync/session-sizes')
+
+    expect(response).toEqual({
+      status: 200,
+      body: { ok: true, sessions: [{ sessionId: 'session-a', sizeBytes: 4096 }, { sessionId: 'session-b' }] },
+    })
+    expect(sessions.listSessionSizes).toHaveBeenCalledOnce()
   })
 })
