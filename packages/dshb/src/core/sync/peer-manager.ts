@@ -34,6 +34,7 @@ const PATCH_FIELDS = new Set([
   'direction',
   'schedule',
   'mode',
+  'syncNodes',
   'syncSessions',
   'selection',
   'enabled',

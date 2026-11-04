@@ -21,18 +21,20 @@ export interface SyncPeerForm {
   direction: 'pull' | 'bidirectional'
   schedule: 'manual' | 'every-5m'
   mode: 'full' | 'metadata'
+  syncNodes: boolean
   syncSessions: boolean
   selection: SyncSelection
   enabled: boolean
 }
 
-export interface SyncPeerFormView extends Omit<SyncPeerForm, 'password' | 'privateKey' | 'passphrase' | 'port' | 'remoteWebPort' | 'remoteDshHome' | 'remoteProfile' | 'selection' | 'mode'> {
+export interface SyncPeerFormView extends Omit<SyncPeerForm, 'password' | 'privateKey' | 'passphrase' | 'port' | 'remoteWebPort' | 'remoteDshHome' | 'remoteProfile' | 'selection' | 'mode' | 'syncNodes'> {
   port: number
   remoteDshHome?: string
   remoteProfile?: string
   remoteWebPort?: number
   selection?: SyncSelection
   mode?: 'full' | 'metadata'
+  syncNodes?: boolean
   hasSecret: SyncPeerSecretFlags
 }
 
@@ -51,6 +53,7 @@ export const EMPTY_SYNC_PEER_FORM: SyncPeerForm = {
   direction: 'pull',
   schedule: 'manual',
   mode: 'full',
+  syncNodes: true,
   syncSessions: false,
   selection: { mode: 'all', nodes: [], workspaces: [], sessions: [] },
   enabled: true,
@@ -76,6 +79,8 @@ export function syncPeerFormError(form: SyncPeerForm, savedSecrets?: SyncPeerSec
 }
 
 export function toSyncPeerForm(peer: SyncPeerFormView): SyncPeerForm {
+  const syncSessions = peer.syncSessions
+  const mode = syncSessions ? peer.mode ?? 'full' : 'full'
   return {
     name: peer.name,
     host: peer.host,
@@ -90,14 +95,26 @@ export function toSyncPeerForm(peer: SyncPeerFormView): SyncPeerForm {
     remoteWebPort: peer.remoteWebPort == null ? '' : String(peer.remoteWebPort),
     direction: peer.direction,
     schedule: peer.schedule,
-    mode: peer.syncSessions ? peer.mode ?? 'full' : 'full',
-    syncSessions: peer.syncSessions,
+    mode,
+    // 全量会话同步依赖节点配置；仅元数据模式允许关闭节点同步。
+    syncNodes: mode === 'metadata' ? peer.syncNodes ?? true : true,
+    syncSessions,
     selection: peer.selection ?? { mode: 'all', nodes: [], workspaces: [], sessions: [] },
-    enabled: peer.enabled,
+    enabled: true,
   }
 }
 
+/**
+ * 把表单归一化为保存请求：
+ * - 「启用此同步节点」已移除，enabled 恒 true（停用语义由删除节点承担）。
+ * - 元数据同步且不同步工作节点时没有任何调度内容，强制手动时机。
+ * - 全量会话同步依赖工作节点配置，强制开启节点同步。
+ */
 export function buildSyncPeerFormRequest(form: SyncPeerForm): SyncPeerFormRequest {
+  const syncSessions = form.syncSessions
+  const mode = syncSessions ? form.mode : 'full'
+  const syncNodes = mode === 'metadata' ? form.syncNodes : true
+  const schedule = mode === 'metadata' && !syncNodes ? 'manual' as const : form.schedule
   const fields: Record<string, unknown> = {
     name: form.name.trim(),
     host: form.host.trim(),
@@ -105,11 +122,12 @@ export function buildSyncPeerFormRequest(form: SyncPeerForm): SyncPeerFormReques
     username: form.username.trim(),
     authKind: form.authKind,
     direction: form.direction,
-    schedule: form.schedule,
-    mode: form.mode,
-    syncSessions: form.syncSessions,
+    schedule,
+    mode,
+    syncNodes,
+    syncSessions,
     selection: form.selection,
-    enabled: form.enabled,
+    enabled: true,
     ...(form.remoteDshHome.trim() ? { remoteDshHome: form.remoteDshHome.trim() } : {}),
     ...(form.remoteProfile.trim() ? { remoteProfile: form.remoteProfile.trim() } : {}),
     ...(form.remoteWebPort.trim() ? { remoteWebPort: Number(form.remoteWebPort) } : {}),

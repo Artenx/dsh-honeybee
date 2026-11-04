@@ -677,24 +677,46 @@ export function SyncPeersSection(): ReactElement {
         {/* 同步策略 */}
         <div style={{ ...groupTitle, marginTop: 20 }}>同步策略</div>
 
-        <div className="dshb-sync-two-col">
-          <div style={field}>
-            <span style={label}>同步方向</span>
-            <select style={inputStyle} value={form.direction}
-              onChange={(e) => setForm((c) => ({ ...c, direction: e.target.value as SyncPeerForm['direction'] }))}>
-              <option value="pull">单向拉取到本机</option>
-              <option value="bidirectional">双向同步</option>
-            </select>
+        <label style={{ ...field, display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+          <input type="checkbox" checked={form.syncNodes}
+            style={{ marginTop: 2 }}
+            disabled={!(form.syncSessions && form.mode === 'metadata')}
+            onChange={(e) => setForm((c) => ({
+              ...c,
+              syncNodes: e.target.checked,
+              ...(e.target.checked || (c.syncSessions && c.mode === 'metadata') ? {} : { schedule: 'manual' as const }),
+            }))} />
+          <span>
+            <span style={{ fontSize: 13 }}>同步工作节点</span>
+            <span style={{ display: 'block', fontSize: 11, opacity: 0.5, marginTop: 2 }}>
+              {form.syncSessions && form.mode === 'full'
+                ? '全量会话同步依赖工作节点配置，始终开启'
+                : '同步工作节点的 SSH 连接配置与远端目录'}
+            </span>
+          </span>
+        </label>
+
+        {(form.syncNodes || (form.syncSessions && form.mode === 'full')) && (
+          <div className="dshb-sync-two-col">
+            <div style={field}>
+              <span style={label}>同步方向</span>
+              <select style={inputStyle} value={form.direction}
+                onChange={(e) => setForm((c) => ({ ...c, direction: e.target.value as SyncPeerForm['direction'] }))}>
+                <option value="pull">单向拉取到本机</option>
+                <option value="bidirectional">双向同步</option>
+              </select>
+              <div style={hint}>作用于工作节点配置{form.syncSessions && form.mode === 'full' ? '与会话内容' : ''}</div>
+            </div>
+            <div style={field}>
+              <span style={label}>同步时机</span>
+              <select style={inputStyle} value={form.schedule}
+                onChange={(e) => setForm((c) => ({ ...c, schedule: e.target.value as SyncPeerForm['schedule'] }))}>
+                <option value="manual">手动</option>
+                <option value="every-5m">每 5 分钟</option>
+              </select>
+            </div>
           </div>
-          <div style={field}>
-            <span style={label}>同步时机</span>
-            <select style={inputStyle} value={form.schedule}
-              onChange={(e) => setForm((c) => ({ ...c, schedule: e.target.value as SyncPeerForm['schedule'] }))}>
-              <option value="manual">手动</option>
-              <option value="every-5m">每 5 分钟</option>
-            </select>
-          </div>
-        </div>
+        )}
 
         <div style={{ ...field, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
@@ -702,7 +724,7 @@ export function SyncPeersSection(): ReactElement {
               onChange={(e) => setForm((c) => ({
                 ...c,
                 syncSessions: e.target.checked,
-                ...(e.target.checked ? {} : { mode: 'full' as const }),
+                ...(e.target.checked ? { syncNodes: true } : { mode: 'full' as const }),
               }))} />
             <span>
               <span style={{ fontSize: 13 }}>同步工作区会话</span>
@@ -717,22 +739,21 @@ export function SyncPeersSection(): ReactElement {
             <div style={{ ...field, margin: 0 }}>
               <span style={label}>同步模式</span>
               <select style={inputStyle} value={form.mode}
-                onChange={(e) => setForm((c) => ({ ...c, mode: e.target.value as SyncPeerForm['mode'] }))}>
+                onChange={(e) => setForm((c) => ({
+                  ...c,
+                  mode: e.target.value as SyncPeerForm['mode'],
+                  ...(e.target.value === 'full' ? { syncNodes: true } : {}),
+                }))}>
                 <option value="full">全量同步</option>
                 <option value="metadata">元数据同步</option>
               </select>
               <div style={hint}>
                 {form.mode === 'metadata'
-                  ? '仅同步工作节点与工作区会话列表，不传输会话内容；点击同步来的会话时，通过加密 SSH 通道读取远端内容；wss 实时事件流与发送消息将在后续版本接入。'
+                  ? '仅同步工作区与会话列表，不传输会话内容；侧栏会话行的「打开远端会话」通过加密 SSH 通道实时读取远端内容并可直接继续对话与审批。'
                   : '将工作节点配置与工作区会话内容完整传输到对端；导入后可在本机离线继续会话，数据量大时耗时较长。'}
               </div>
             </div>
           )}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input type="checkbox" checked={form.enabled}
-              onChange={(e) => setForm((c) => ({ ...c, enabled: e.target.checked }))} />
-            <span style={{ fontSize: 13 }}>启用此同步节点</span>
-          </label>
         </div>
 
         {selectedPeer && form.syncSessions && form.mode === 'full' && (

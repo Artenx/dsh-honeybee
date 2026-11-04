@@ -26,6 +26,8 @@ export interface SyncPeer {
   direction: SyncDirection
   schedule: SyncSchedule
   mode: SyncMode
+  /** 同步工作节点配置；仅元数据同步可关闭（全量会话同步依赖节点配置）。缺省 true。 */
+  syncNodes?: boolean
   syncSessions: boolean
   selection?: SyncSelection
   enabled: boolean
@@ -184,6 +186,7 @@ const PEER_FIELDS = new Set([
   'direction',
   'schedule',
   'mode',
+  'syncNodes',
   'syncSessions',
   'selection',
   'enabled',
@@ -298,6 +301,9 @@ export function parseSyncPeer(value: unknown): SyncPeer {
   if (input.mode !== undefined && input.mode !== 'full' && input.mode !== 'metadata') {
     throw new Error('mode must be full or metadata')
   }
+  if (input.syncNodes !== undefined && typeof input.syncNodes !== 'boolean') {
+    throw new Error('syncNodes must be a boolean')
+  }
   if (typeof input.syncSessions !== 'boolean' || typeof input.enabled !== 'boolean') {
     throw new Error('syncSessions and enabled must be booleans')
   }
@@ -326,6 +332,8 @@ export function parseSyncPeer(value: unknown): SyncPeer {
     schedule: input.schedule,
     // 旧 peer 数据没有 mode 字段：缺省按全量同步处理，保持既有行为不变。
     mode: input.mode === undefined ? 'full' : input.mode,
+    // 旧 peer 数据没有 syncNodes 字段：缺省同步工作节点配置。
+    ...(input.syncNodes === undefined ? {} : { syncNodes: input.syncNodes }),
     syncSessions: input.syncSessions,
     ...(input.selection === undefined ? {} : { selection: parseSyncSelection(input.selection) }),
     enabled: input.enabled,

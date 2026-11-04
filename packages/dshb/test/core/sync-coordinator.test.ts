@@ -256,6 +256,60 @@ describe('sync coordinator', () => {
     await expect(test.coordinator.run(peer.id)).rejects.toMatchObject({ code: 'metadata-catalog-unavailable' })
   })
 
+  it('metadata mode with syncNodes disabled skips node config exchange but still fetches the catalog', async () => {
+    const metadataPeer: SyncPeerView = { ...peer, mode: 'metadata', syncNodes: false, syncSessions: true }
+    const nodeA = nodeEntry(remoteInstanceId, 'node-a', 10, 'a')
+    const catalog: SyncCatalog = {
+      protocolVersion: 1,
+      instanceId: remoteInstanceId,
+      nodes: [],
+      workspaces: [],
+      sessions: [],
+    }
+    const test = fakeCoordinator([nodeA], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [nodeA],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_CATALOG_CAPABILITY],
+      })),
+      fetchCatalog: vi.fn(async () => catalog),
+    }, metadataPeer)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(test.transport.fetchCatalog).toHaveBeenCalledOnce()
+    expect(test.nodes.applyManifest).not.toHaveBeenCalled()
+    expect(test.transport.applyNodeManifest).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ imported: 0, exported: 0 })
+  })
+
+  it('metadata mode with syncNodes enabled still exchanges node configuration', async () => {
+    const metadataPeer: SyncPeerView = { ...peer, mode: 'metadata', syncNodes: true, syncSessions: true }
+    const nodeA = nodeEntry(remoteInstanceId, 'node-a', 10, 'a')
+    const catalog: SyncCatalog = {
+      protocolVersion: 1,
+      instanceId: remoteInstanceId,
+      nodes: [],
+      workspaces: [],
+      sessions: [],
+    }
+    const test = fakeCoordinator([nodeA], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [nodeA],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_CATALOG_CAPABILITY],
+      })),
+      fetchCatalog: vi.fn(async () => catalog),
+    }, metadataPeer)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(test.nodes.applyManifest).toHaveBeenCalledOnce()
+    expect(result.imported).toBe(1)
+  })
+
   it('uses session manifests and fetches only entries selected for transfer', async () => {
     const sessionPeer = { ...peer, syncSessions: true }
     const remoteEntry = deletedSessionEntry(remoteInstanceId, 'remote-deleted')
