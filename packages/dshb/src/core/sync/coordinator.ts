@@ -347,7 +347,6 @@ export class SyncCoordinator {
         workspaces: [],
         sessions: [],
       }
-      let metadataCatalogFetchedAt: string | undefined
       if (peer.mode === 'metadata' && peer.syncSessions) {
         // 元数据同步：只拉目录（节点/工作区/会话列表），不交换会话内容；
         // 点击同步来的会话时经远端会话通道（wss）实时操作远端 DSH。
@@ -358,7 +357,6 @@ export class SyncCoordinator {
         if (catalog.instanceId !== remoteNodeManifest.instanceId) {
           throw new SyncCoordinatorError('protocol-invalid', '节点与目录清单的实例身份不一致')
         }
-        metadataCatalogFetchedAt = new Date(this.now()).toISOString()
       } else if (peer.selection?.mode === 'selected' && peer.syncSessions &&
         (peer.selection.workspaces.length > 0 || peer.selection.sessions.length > 0)) {
         if (!remoteNodeManifest.capabilities?.includes(SYNC_CATALOG_CAPABILITY)) {
@@ -369,7 +367,7 @@ export class SyncCoordinator {
           throw new SyncCoordinatorError('protocol-invalid', '节点与目录清单的实例身份不一致')
         }
       }
-      const selection = resolveSyncSelection(peer.selection, catalog)
+      const selection = resolveSyncSelection(peer.mode === 'metadata' ? undefined : peer.selection, catalog)
       const fullNodePlan = planNodeTransfers(peer.direction, localEntries, remoteEntries)
       const plan = selection.all ? fullNodePlan : {
         ...fullNodePlan,
@@ -390,10 +388,7 @@ export class SyncCoordinator {
       let skippedSessions = 0
       let digest = manifestDigest(remoteEntries)
       if (peer.mode === 'metadata' && peer.syncSessions) {
-        // 目录落盘供 UI 展示远端节点/工作区/会话列表；会话内容交换整体跳过。
-        this.state.update((state) => {
-          state.catalogs[peer.id] = { fetchedAt: metadataCatalogFetchedAt!, catalog }
-        })
+        // 每次同步实时拉取目录并报告计数；会话内容交换整体跳过。
       } else if (peer.syncSessions) {
         const sessionService = this.sessions!
         let plan: ReturnType<typeof planSessionTransfers>

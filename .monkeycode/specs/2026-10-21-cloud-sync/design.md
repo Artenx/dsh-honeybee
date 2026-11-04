@@ -324,8 +324,7 @@ SSH 是 peer 身份和传输通道。每个实例在运行中的 DSHB 进程内�
 | Remote SSH helper | 以固定程序入口和结构化输入调用远端 loopback Sync API；stdout/stderr 不输出秘密字段 |
 | SyncScheduler | 启动时读取已启用 peer，并为 `every-5m` peer 安排 300 秒任务；同一 peer 的运行任务不重叠 |
 | SyncCatalog | 汇总可迁移节点、工作区和会话摘要；不返回节点秘密或会话事件 |
-| SyncSelectionPicker | 以树形清单选择节点、工作区和会话；选择子级时自动纳入恢复依赖 |
-| SessionSizeDecoration | 经批量尺寸 API 读取 persistence snapshot 的 `sizeBytes`，显示行内短标签和详情值 |
+| SyncSelectionPicker | 每次读取同步范围时刷新目标 peer 目录；以树形清单选择节点、工作区和会话；会话显示可读标题（缺省显示“未命名会话”，完整 ID 放在提示中），文件大小显示在名称之后；选择子级时自动纳入恢复依赖 |
 
 #### Peer configuration
 
@@ -342,6 +341,7 @@ interface SyncPeer {
   remoteWebPort?: number
   direction: 'pull' | 'bidirectional'
   schedule: 'manual' | 'every-5m'
+  mode: 'full' | 'metadata'
   syncSessions: boolean
   selection?: SyncSelection
   enabled: boolean
@@ -372,6 +372,7 @@ interface SyncCatalog {
     workspaceRemotePath?: string
     nodeOrigin?: SyncOrigin
     sessionId: string
+    title?: string
     sizeBytes?: number
     branchId?: string
     deleted?: boolean
@@ -383,7 +384,7 @@ interface SyncCatalog {
 
 运行中的 DSHB 提供 loopback-only 的 peer handshake、manifest、export、apply 和 run-status 接口。远端 helper 通过自身主机上的 `127.0.0.1` 或 `::1` 调用接口；本机 SyncCoordinator 通过 SSH stdin/stdout 在两端传输长度前缀的 NDJSON 控制帧与二进制数据块。所有远端命令使用固定 helper 入口，参数通过 stdin 编码，不拼接用户输入到 shell 命令。
 
-`GET /api/dshb/sync/internal/catalog` 是 loopback-only 摘要目录接口，通过独立 `sync-selection-catalog-v1` capability 协商。已登录本机 API 提供 peer 目录与离线本机目录；`GET /api/dshb/sync/session-sizes` 仅返回 session ID 与可选物理 `sizeBytes`，供侧边栏行装饰使用。
+`GET /api/dshb/sync/internal/catalog` 是 loopback-only 摘要目录接口，通过独立 `sync-selection-catalog-v1` capability 协商。同步范围选择器每次打开或刷新时从目标 peer 实时拉取目录；离线导出选择器读取本机目录。会话标题从 session title projection cache 零 I/O 读取，缺少标题时显示“未命名会话”并将 session ID 放入提示；`sizeBytes` 仅在同步范围列表中显示，且位于会话名称之后。
 
 Handshake 返回 `instanceId`、DSHB sync protocol version、DSH session format version、数据根目录状态与能力集合。helper 优先发现 DSH WebServer 端口；桌面 profile 或自定义端口无法发现时由 peer 配置提供 `remoteWebPort`。未知协议版本、缺失 DSHB 插件或未运行的 WebServer 均在数据传输前失败。
 

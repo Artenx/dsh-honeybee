@@ -9,19 +9,6 @@ function workspaceKey(workspace: SyncCatalogWorkspace): string {
   return JSON.stringify([workspace.origin.originInstanceId, workspace.origin.originEntityId, workspace.remotePath])
 }
 
-function formatSize(sizeBytes: number | undefined): string {
-  if (sizeBytes === undefined) return '未知大小'
-  if (sizeBytes < 1024) return `${sizeBytes} B`
-  const units = ['KiB', 'MiB', 'GiB', 'TiB']
-  let size = sizeBytes
-  let unit = -1
-  do {
-    size /= 1024
-    unit += 1
-  } while (size >= 1024 && unit < units.length - 1)
-  return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unit]}`
-}
-
 function hasOrigin(origins: readonly SyncOrigin[], target: SyncOrigin): boolean {
   return origins.some((origin) => originKey(origin) === originKey(target))
 }
@@ -131,12 +118,14 @@ export function SyncSelectionPicker(props: {
                     </label>
                     {children.map((session) => {
                       const sessionSelected = selectedSessions.has(originKey(session.origin))
+                      const sessionName = session.title?.trim() || '未命名会话'
                       return (
                         <label key={`${originKey(session.origin)}:${session.branchId ?? ''}`} style={{ display: 'flex', alignItems: 'center', gap: 7, marginLeft: 20, cursor: disabled || workspaceSelected ? 'default' : 'pointer', opacity: workspaceSelected ? 0.55 : 0.82 }}>
                           <input type="checkbox" checked={workspaceSelected || sessionSelected} disabled={disabled || workspaceSelected}
                             onChange={() => toggleSession(session)} />
-                          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={session.sessionId}>
-                            {session.sessionId.slice(0, 18)} · {formatSize(session.sizeBytes)}{session.deleted ? ' · 已删除' : ''}
+                          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${sessionName} · ${session.sessionId}`}>
+                            {sessionName.slice(0, 48)}
+                            <span style={{ opacity: 0.55, marginLeft: 6 }}>{session.sizeBytes === undefined ? '未知大小' : `${session.sizeBytes.toLocaleString()} B`}{session.deleted ? ' · 已删除' : ''}</span>
                           </span>
                         </label>
                       )

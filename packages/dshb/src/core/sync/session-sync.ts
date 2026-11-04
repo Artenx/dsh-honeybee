@@ -1920,6 +1920,7 @@ export class SyncSessionService {
     private readonly now: () => number = Date.now,
     home?: string,
     workspaceInstructions?: WorkspaceInstructionStore,
+    private readonly getSessionTitle?: (header: SessionHeader) => string | undefined,
   ) {
     this.exportCacheStore = new SyncSessionExportCacheStore(home)
     this.objectInbox = new SyncSessionObjectInbox(home)
@@ -2138,15 +2139,6 @@ export class SyncSessionService {
     })
   }
 
-  async listSessionSizes(): Promise<Array<{ sessionId: string; sizeBytes?: number }>> {
-    const persistence = this.requirePersistence()
-    const snapshots = await persistence.list()
-    return snapshots.map((snapshot) => ({
-      sessionId: String(snapshot.header.id),
-      ...(isNonNegativeSafeInteger(snapshot.sizeBytes) ? { sizeBytes: snapshot.sizeBytes } : {}),
-    }))
-  }
-
   restoreArchive(branchId: string): Promise<SessionId> {
     return this.serializeMutation(() => this.restoreArchiveNow(branchId))
   }
@@ -2269,7 +2261,7 @@ export class SyncSessionService {
       workspace: SyncCatalogWorkspace | undefined,
       sessionId: string,
       sizeBytes?: number,
-      extra: { branchId?: string; deleted?: boolean } = {},
+      extra: { branchId?: string; deleted?: boolean; title?: string } = {},
     ): void => {
       if (!options.catalog) return
       options.catalog.sessions.push({
@@ -2279,8 +2271,9 @@ export class SyncSessionService {
           workspaceRemotePath: workspace.remotePath,
           nodeOrigin: workspace.nodeOrigin,
         }
-          : metadata.workspaceOrigin ? { workspaceOrigin: metadata.workspaceOrigin } : {}),
+        : metadata.workspaceOrigin ? { workspaceOrigin: metadata.workspaceOrigin } : {}),
         sessionId,
+        ...(extra.title ? { title: extra.title } : {}),
         ...(isNonNegativeSafeInteger(sizeBytes) ? { sizeBytes } : {}),
         ...(extra.branchId ? { branchId: extra.branchId } : {}),
         ...(extra.deleted ? { deleted: true } : {}),
@@ -2330,7 +2323,10 @@ export class SyncSessionService {
           )
           if (cached) {
             entries.push(cached)
-            collectSession(cached.metadata, catalogWorkspace, sessionId, snapshot.sizeBytes)
+            const title = this.getSessionTitle?.(snapshot.header)
+            collectSession(cached.metadata, catalogWorkspace, sessionId, snapshot.sizeBytes, {
+              ...(title ? { title } : {}),
+            })
             eligibleLocalIds.add(sessionId)
             continue
           }
@@ -2359,7 +2355,10 @@ export class SyncSessionService {
         }
         if (exported) {
           const { entry } = exported
-          collectSession(entry.metadata, catalogWorkspace, sessionId, snapshot.sizeBytes)
+          const title = this.getSessionTitle?.(snapshot.header)
+          collectSession(entry.metadata, catalogWorkspace, sessionId, snapshot.sizeBytes, {
+            ...(title ? { title } : {}),
+          })
           if (manifestOnly && options.payloadCache) {
             const key = syncSessionEntryKey(entry)
             const size = estimateJsonBytes(entry, MAX_MANIFEST_PAYLOAD_CACHE_BYTES - options.payloadCache.bytes)
@@ -2456,7 +2455,11 @@ export class SyncSessionService {
       }
       if (exported) {
         const { entry } = exported
-        collectSession(entry.metadata, catalogWorkspace, archive.localSessionId, snapshot.sizeBytes, { branchId: archive.branchId })
+        const title = this.getSessionTitle?.(snapshot.header)
+        collectSession(entry.metadata, catalogWorkspace, archive.localSessionId, snapshot.sizeBytes, {
+          branchId: archive.branchId,
+          ...(title ? { title } : {}),
+        })
         if (manifestOnly && options.payloadCache) {
           const key = syncSessionEntryKey(entry)
           const size = estimateJsonBytes(entry, MAX_MANIFEST_PAYLOAD_CACHE_BYTES - options.payloadCache.bytes)

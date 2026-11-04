@@ -19,7 +19,6 @@ import {
   parseSyncPeer,
   syncRecordKey,
   syncWorkspaceKey,
-  type SyncCatalog,
   type SyncPeer,
   type SyncPeerDraft,
   type SyncPeerProgress,
@@ -367,15 +366,6 @@ function requiredString(value: unknown, label: string, maxLength: number): strin
   return value
 }
 
-function validateCatalog(value: unknown): SyncCatalog {
-  if (!isRecord(value) || value.protocolVersion !== 1 || typeof value.instanceId !== 'string' ||
-    !/^i-[a-f0-9]{32}$/.test(value.instanceId) || !Array.isArray(value.nodes) ||
-    !Array.isArray(value.workspaces) || !Array.isArray(value.sessions)) {
-    throw new Error('Invalid sync catalog payload')
-  }
-  return value as unknown as SyncCatalog
-}
-
 function validateSyncState(value: unknown): SyncState {
   if (!isRecord(value) || value.version !== 1) throw new Error('Unsupported sync state version')
   if (
@@ -388,8 +378,7 @@ function validateSyncState(value: unknown): SyncState {
   if (!isRecord(value.peers) || !isRecord(value.records)) throw new Error('Invalid sync state maps')
   const workspaceValues = value.workspaces === undefined ? {} : value.workspaces
   const archiveValues = value.archives === undefined ? {} : value.archives
-  const catalogValues = value.catalogs === undefined ? {} : value.catalogs
-  if (!isRecord(workspaceValues) || !isRecord(archiveValues) || !isRecord(catalogValues)) throw new Error('Invalid sync session state maps')
+  if (!isRecord(workspaceValues) || !isRecord(archiveValues)) throw new Error('Invalid sync session state maps')
 
   const peers = Object.create(null) as Record<string, SyncPeerProgress>
   for (const [id, progress] of Object.entries(value.peers)) {
@@ -416,13 +405,6 @@ function validateSyncState(value: unknown): SyncState {
   const archives = Object.create(null) as Record<string, SyncSessionArchive>
   for (const [branchId, archive] of Object.entries(archiveValues)) archives[branchId] = validateArchive(archive, branchId)
 
-  const catalogs = Object.create(null) as Record<string, { fetchedAt: string; catalog: SyncCatalog }>
-  for (const [peerId, entryValue] of Object.entries(catalogValues)) {
-    if (!/^p-[a-f0-9]{24}$/.test(peerId)) throw new Error('Invalid sync peer ID in catalog state')
-    if (!isRecord(entryValue) || typeof entryValue.fetchedAt !== 'string') throw new Error('Invalid sync catalog entry')
-    catalogs[peerId] = { fetchedAt: entryValue.fetchedAt, catalog: validateCatalog(entryValue.catalog) }
-  }
-
   return {
     version: 1,
     clock: { physicalTimeMs: value.clock.physicalTimeMs, logicalCounter: value.clock.logicalCounter },
@@ -430,12 +412,11 @@ function validateSyncState(value: unknown): SyncState {
     records,
     workspaces,
     archives,
-    catalogs,
   }
 }
 
 function emptySyncState(): SyncState {
-  return { version: 1, clock: { physicalTimeMs: 0, logicalCounter: 0 }, peers: {}, records: {}, workspaces: {}, archives: {}, catalogs: {} }
+  return { version: 1, clock: { physicalTimeMs: 0, logicalCounter: 0 }, peers: {}, records: {}, workspaces: {}, archives: {} }
 }
 
 export class SyncStateStore {

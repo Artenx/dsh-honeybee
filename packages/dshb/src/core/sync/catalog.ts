@@ -42,8 +42,9 @@ function validateCatalogWorkspace(value: unknown): SyncCatalogWorkspace {
 
 function validateCatalogSession(value: unknown): SyncCatalogSession {
   if (!isRecord(value) || Object.keys(value).some((key) => ![
-    'origin', 'workspaceOrigin', 'workspaceRemotePath', 'nodeOrigin', 'sessionId', 'sizeBytes', 'branchId', 'deleted',
+    'origin', 'workspaceOrigin', 'workspaceRemotePath', 'nodeOrigin', 'sessionId', 'title', 'sizeBytes', 'branchId', 'deleted',
   ].includes(key)) || typeof value.sessionId !== 'string' || !value.sessionId || value.sessionId.length > 512 ||
+    (value.title !== undefined && (typeof value.title !== 'string' || value.title.length > 512 || /[\u0000-\u001f\u007f]/.test(value.title))) ||
     (value.workspaceRemotePath !== undefined && (typeof value.workspaceRemotePath !== 'string' || value.workspaceRemotePath.length > 4096 ||
       !posix.isAbsolute(value.workspaceRemotePath) || posix.normalize(value.workspaceRemotePath) !== value.workspaceRemotePath)) ||
     (value.sizeBytes !== undefined && !isNonNegativeSafeInteger(value.sizeBytes)) ||
@@ -57,6 +58,7 @@ function validateCatalogSession(value: unknown): SyncCatalogSession {
     ...(value.workspaceRemotePath === undefined ? {} : { workspaceRemotePath: value.workspaceRemotePath as string }),
     ...(value.nodeOrigin === undefined ? {} : { nodeOrigin: parseOrigin(value.nodeOrigin) }),
     sessionId: value.sessionId,
+    ...(value.title === undefined ? {} : { title: value.title as string }),
     ...(value.sizeBytes === undefined ? {} : { sizeBytes: value.sizeBytes as number }),
     ...(value.branchId === undefined ? {} : { branchId: value.branchId }),
     ...(value.deleted === undefined ? {} : { deleted: value.deleted }),

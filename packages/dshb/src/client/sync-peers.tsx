@@ -1,7 +1,6 @@
 import type { CSSProperties, ReactElement } from 'react'
 import { useEffect, useState } from 'react'
 import type { SyncCatalog } from '../core/sync/model.js'
-import { SyncMetadataCatalogView } from './sync-metadata-view.js'
 import { SyncSelectionPicker } from './sync-selection-picker.js'
 import {
   applyRemoteProbeToForm,
@@ -172,7 +171,6 @@ export function SyncPeersSection(): ReactElement {
   const [probingRemote, setProbingRemote] = useState(false)
   const [remoteProbe, setRemoteProbe] = useState<SyncRemoteProbe | undefined>(undefined)
   const [catalog, setCatalog] = useState<SyncCatalog | undefined>(undefined)
-  const [catalogFetchedAt, setCatalogFetchedAt] = useState<string | undefined>(undefined)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -291,16 +289,14 @@ export function SyncPeersSection(): ReactElement {
     if (selectedId === 'new') return
     setLoadingCatalog(true)
     setHostKeyChallenge(undefined)
-    const preferCache = form.mode === 'metadata'
     try {
-      const response = await fetch(`/api/dshb/sync/peers/${selectedId}/catalog${preferCache ? '?cached=1' : ''}`)
+      const response = await fetch(`/api/dshb/sync/peers/${selectedId}/catalog`)
       const data = await readJsonResponse<{
         ok?: boolean
         code?: string
         fingerprint?: string
         expected?: string
         catalog?: SyncCatalog
-        fetchedAt?: string
         error?: string
       }>(response, '读取目标节点目录失败')
       if (data.code === 'host-key-untrusted' || data.code === 'host-key-changed') {
@@ -313,7 +309,6 @@ export function SyncPeersSection(): ReactElement {
       }
       if (!response.ok || !data.ok || !data.catalog) throw new Error(data.error ?? '读取目标节点目录失败')
       setCatalog(data.catalog)
-      setCatalogFetchedAt(data.fetchedAt)
       setNotice({ kind: 'ok', text: `已读取目标节点目录：${data.catalog.nodes.length} 个工作节点、${data.catalog.workspaces.length} 个工作区、${data.catalog.sessions.length} 个会话` })
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : '读取目标节点目录失败' })
@@ -740,28 +735,15 @@ export function SyncPeersSection(): ReactElement {
           </label>
         </div>
 
-        {selectedPeer && form.syncSessions && form.mode === 'metadata' && (
-          <div style={{ ...field, display: 'grid', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-              <span style={label}>远端目录</span>
-              <button type="button" style={secondaryBtn} disabled={loadingCatalog || probing || busy} onClick={() => void loadCatalog()}>
-                {loadingCatalog ? '读取目录中…' : catalog ? '刷新目录' : '读取远端目录'}
-              </button>
-            </div>
-            <div style={hint}>保存并执行一次同步后，此处展示远端工作节点、工作区与会话列表；点击会话可实时查看远端内容。</div>
-            {catalog && <SyncMetadataCatalogView peerId={selectedPeer.id} catalog={catalog} fetchedAt={catalogFetchedAt} />}
-          </div>
-        )}
-
-        {selectedPeer && (
+        {selectedPeer && form.syncSessions && form.mode === 'full' && (
           <div style={{ ...field, display: 'grid', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
               <span style={label}>同步范围</span>
               <button type="button" style={secondaryBtn} disabled={loadingCatalog || probing || busy} onClick={() => void loadCatalog()}>
-                {loadingCatalog ? '读取目录中…' : catalog ? '刷新目标目录' : '读取目标目录'}
+                {loadingCatalog ? '读取范围中…' : catalog ? '重新读取同步范围' : '读取同步范围'}
               </button>
             </div>
-            <div style={hint}>节点选择同步节点配置；工作区选择包含其会话；单独选择会话时会自动纳入所需的工作区与节点。</div>
+            <div style={hint}>每次点击都会从目标同步节点实时拉取可选项。选择工作区会包含其会话；单独选择会话时会自动纳入所需的工作区与节点。</div>
             {catalog && (
               <SyncSelectionPicker
                 catalog={catalog}

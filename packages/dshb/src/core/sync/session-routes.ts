@@ -51,21 +51,4 @@ export function registerSyncSessionRoutes(ctx: Context, sessions: SyncSessionSer
     }),
   )
 
-  ctx.effect(() =>
-    ctx.webServer.register({
-      kind: 'exact',
-      path: '/api/dshb/sync/session-sizes',
-      handler: async (req, res) => {
-        if (req.method !== 'GET') {
-          sendJson(res, 405, { ok: false, error: 'method not allowed' })
-          return
-        }
-        try {
-          sendJson(res, 200, { ok: true, sessions: await sessions.listSessionSizes() })
-        } catch {
-          sendJson(res, 500, { ok: false, error: 'session size list unavailable' })
-        }
-      },
-    }),
-  )
 }

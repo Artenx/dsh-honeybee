@@ -5,7 +5,7 @@ Updated: 2026-11-03
 
 ## Description
 
-同步节点新增「同步模式」选项：**全量同步**（既有文件传输方案，行为不变）与**元数据同步**（只同步节点配置与目录，点击会话经 SSH + wss 通道实时操作远端 DSH）。元数据同步复用目录 API（`sync-selection-catalog-v1`）拉取并落盘远端目录；远端会话通道由本地 DSHB 的 `/api/dshb/remote/<peerId>/` 路由经 SSH direct-tcpip 转发 DSH Remote 协议调用，认证由远端 DSHB 铸造的短时效签名 cookie 完成。离线导入导出不变。
+同步节点新增「同步模式」选项：**全量同步**（既有文件传输方案，行为不变）与**元数据同步**（只同步节点配置与目录；侧边栏会话页通过 SSH + wss 通道实时操作远端 DSH）。元数据同步复用目录 API（`sync-selection-catalog-v1`）从目标 peer 实时拉取元数据；同步范围选择器承载节点/工作区/会话选取，不提供独立的远端目录浏览面板。远端会话通道由本地 DSHB 的 `/api/dshb/sync/relay/<peerId>/` 路由经 SSH direct-tcpip 转发 DSH Remote 协议调用，认证由远端 DSHB 铸造的短时效签名 cookie 完成。离线导入导出不变。
 
 ## Architecture
 
@@ -16,18 +16,18 @@ sequenceDiagram
     participant S as SSH direct-tcpip 通道
     participant R as 远端 DSH Web profile（回环 :webPort）
 
-    U->>L: POST /api/dshb/remote/<peerId>/call/session/page
+    U->>L: 侧边栏打开远端会话
     L->>S: SSH forwardOut → 127.0.0.1:webPort
     L->>R: POST /api/session/page（Relay cookie，Remote 信封）
-    R-->>U: server-response 信封（实时展示，不落盘）
+    R-->>U: 远端最新会话内容（不在同步表单展示）
 ```
 
 ```mermaid
 graph TD
     Mode["同步模式选项"] -->|"全量同步"| Full["既有内容同步（不变）"]
-    Mode -->|"元数据同步"| Catalog["目录拉取 + 落盘 SyncState.catalogs"]
-    Catalog --> Entry["远端目录列表（节点/工作区/会话 + 大小）"]
-    Entry -->|"在远端打开"| Relay["本地 DSHB 远端通道"]
+    Mode -->|"元数据同步"| Catalog["每次从目标 peer 拉取元数据"]
+    Catalog --> Scope["同步范围选择器"]
+    Sidebar["侧边栏远端会话"] -->|"打开"| Relay["本地 DSHB 远端通道"]
     Ticket["远端 relay-ticket 路由（短时效 cookie）"] --> Relay
     Relay -->|"SSH direct-tcpip"| RemoteWS["远端回环 Remote API / wss"]
     Offline["离线导入导出（不变）"] --> LocalSession["本地会话副本"]
@@ -39,9 +39,8 @@ graph TD
 |---|---|---|
 | 同步模式选项 | `sync-peer-form.ts`、`sync-peers.tsx` | 勾选「同步工作区会话」后显示模式选择器与说明；取消勾选则隐藏选择器并复位为全量模式 |
 | SyncPeer.mode | `src/core/sync/model.ts` | `'full' \| 'metadata'`；缺省 `full`（旧数据兼容） |
-| 元数据协调分支 | `src/core/sync/coordinator.ts` | mode=metadata：拉目录、落盘 `SyncState.catalogs[peerId]`、进度报目录计数、跳过会话内容交换；节点配置照常交换 |
-| 目录缓存读取 | `src/core/sync/routes.ts` | `GET /api/dshb/sync/peers/:id/catalog?cached=1` 读最近落盘目录 |
-| SyncMetadataCatalogView | `src/client/sync-metadata-view.tsx` | 目录展示（节点/工作区/会话 + sizeBytes）+「在远端打开」实时预览 |
+| 元数据协调分支 | `src/core/sync/coordinator.ts` | mode=metadata：每次同步实时拉目录、进度报目录计数、跳过会话内容交换；节点配置照常交换 |
+| SyncSelectionPicker | `src/client/sync-selection-picker.tsx` | 同步范围选择；每次读取目标 peer 目录，会话显示标题（缺省“未命名会话”，完整 ID 放在提示中），大小显示在名称之后 |
 | RelayTicketRoutes | `src/core/sync/relay-auth.ts` | 远端 loopback-only `POST /api/dshb/sync/internal/relay-ticket`：读本机 credentials `client-connection/browser-session` 密钥铸造 ≤10 分钟 cookie |
 | RemoteRelayService | `src/core/sync/remote-relay.ts` | 本地远端通道：凭据缓存、`POST /call/<namespace>/<method>` 信封转发（SSH direct-tcpip） |
 | SshTransport 扩展 | `src/core/sync/ssh-transport.ts` | `connectClient` 提取复用；`openDirectChannel`（forwardOut）；`fetchRelayTicket` |
@@ -51,20 +50,17 @@ graph TD
 ```ts
 interface SyncPeer {
   // …既有字段…
-  /** 全量同步传输会话内容；元数据同步只同步目录，点击会话时经 wss 实时操作远端。 */
+  /** 全量同步传输会话内容；元数据同步只同步目录。 */
   mode: 'full' | 'metadata'
 }
-
-interface SyncState {
-  // …既有字段…
-  catalogs: Record<string, { fetchedAt: string; catalog: SyncCatalog }>
-}
 ```
+
+远端目录不写入 `SyncState`；同步范围读取与 metadata 同步执行均实时拉取。远端最新内容属于侧边栏会话页，目录选择器只负责选择同步范围。
 
 ### 元数据协调分支（关键语义）
 
 - 节点 manifest 交换与全量模式完全一致（方向、LWW、墓碑）。
-- `mode === 'metadata' && syncSessions`：要求对端具备 `sync-selection-catalog-v1` capability（否则 `metadata-catalog-unavailable`）；拉取目录并落盘；`fetchSessionManifest/fetchSessionEntries/applySessionBundle` 全部不调用；进度 `lastResult` 附 `catalogNodes/catalogWorkspaces/catalogSessions`。`syncSessions` 关闭时不拉目录且模式复位为 `full`。
+- `mode === 'metadata' && syncSessions`：要求对端具备 `sync-selection-catalog-v1` capability（否则 `metadata-catalog-unavailable`）；每次同步实时拉取目录；`fetchSessionManifest/fetchSessionEntries/applySessionBundle` 全部不调用；进度 `lastResult` 附 `catalogNodes/catalogWorkspaces/catalogSessions`。`syncSessions` 关闭时不拉目录且模式复位为 `full`。
 - `selection`（自选范围）仍只作用于全量模式。
 
 ### 远端会话通道
@@ -94,9 +90,9 @@ interface SyncState {
 
 ## Test Strategy
 
-1. 单元：mode 解析与旧数据缺省（`sync-foundation`）；协调器元数据分支（目录落盘、跳过会话交换、capability 缺失错误码、进度计数）（`sync-coordinator`）；relay-ticket 铸造格式/回环门禁/速率限制（`sync-relay-auth`）；远端通道信封转发/凭据缓存/失败分类（`sync-remote-relay`）；表单 mode 往返（`sync-peer-form`）。
+1. 单元：mode 解析与旧数据缺省（`sync-foundation`）；协调器元数据分支（实时拉目录、跳过会话交换、capability 缺失错误码、进度计数）（`sync-coordinator`）；relay-ticket 铸造格式/回环门禁/速率限制（`sync-relay-auth`）；远端通道信封转发/凭据缓存/失败分类（`sync-remote-relay`）；表单 mode 往返（`sync-peer-form`）。
 2. 回归：全量同步路径与离线归档既有测试全部通过。
-3. 集成（后续）：A/B 双实例实测目录落盘、远端预览与 wss 流透传。
+3. 集成（后续）：A/B 双实例实测目录实时拉取、侧边栏远端会话页与 wss 流透传。
 
 ## References
 

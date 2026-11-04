@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { sharedWorldResolver } from '../router/resolve.js'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import { sharedAuditLogger } from './audit.js'
 import { KnownHostsStore } from './known-hosts.js'
 import { NodeRegistry } from './node-registry.js'
@@ -64,6 +65,14 @@ export function apply(ctx: Context): void {
     undefined,
     undefined,
     process.env.DSH_HOME,
+    undefined,
+    (header: SessionHeader) => {
+      const cache = ctx.get('sessionProjectionCache') as {
+        cachedSnapshot?: (meta: SessionHeader, keys?: readonly string[]) => { values?: Record<string, unknown> } | undefined
+      } | undefined
+      const title = cache?.cachedSnapshot?.(header, ['title'])?.values?.title
+      return typeof title === 'string' && title.trim() ? title : undefined
+    },
   )
   const syncOfflineArchives = new SyncOfflineArchiveService(syncNodes, syncSessions, undefined, undefined, syncState)
   try {
@@ -93,7 +102,7 @@ export function apply(ctx: Context): void {
   void registerWorkspaceRoutes(ctx, registry, bindings, syncNodes)
   void registerRemoteDownloadRoutes(ctx, registry, bindings)
   void registerWorkspaceInstructionRoutes(ctx, sharedWorkspaceInstructionStore())
-  registerSyncPeerRoutes(ctx, syncPeerManager, syncSshTransport, syncCoordinator, syncState)
+  registerSyncPeerRoutes(ctx, syncPeerManager, syncSshTransport, syncCoordinator)
   registerSyncInternalRoutes(ctx, syncState, syncNodes, syncSessions)
   registerSyncSessionRoutes(ctx, syncSessions)
   registerSyncOfflineRoutes(ctx, syncOfflineArchives)

@@ -5,7 +5,6 @@ import { SyncHostKeyChallengeError, SyncHostKeyChallengeExpiredError } from './h
 import { SyncPeerInputError, SyncPeerManager, SyncPeerNotFoundError } from './peer-manager.js'
 import { SyncRemoteProbe, SyncSshProbeError, SyncSshTransport } from './ssh-transport.js'
 import { SyncCoordinator, SyncCoordinatorError } from './coordinator.js'
-import type { SyncStateStore } from './stores.js'
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024
 
@@ -123,7 +122,6 @@ export function registerSyncPeerRoutes(
   manager: SyncPeerManager,
   transport?: SyncSshTransport,
   coordinator?: SyncCoordinator,
-  state?: SyncStateStore,
 ): void {
   ctx.effect(() =>
     ctx.webServer.register({
@@ -216,16 +214,6 @@ export function registerSyncPeerRoutes(
         }
 
         if (action === 'catalog' && req.method === 'GET') {
-          // ?cached=1 读取元数据同步最近一次落盘目录；默认实时拉取远端。
-          if (typeof req.url === 'string' && new URL(req.url, 'http://x').searchParams.get('cached') === '1') {
-            const entry = state?.read().catalogs[peerId]
-            if (!entry) {
-              sendJson(res, 404, { ok: false, error: '尚未同步过目录' })
-              return
-            }
-            sendJson(res, 200, { ok: true, catalog: entry.catalog, fetchedAt: entry.fetchedAt })
-            return
-          }
           if (!transport) {
             sendJson(res, 503, { ok: false, error: 'SSH sync transport unavailable' })
             return

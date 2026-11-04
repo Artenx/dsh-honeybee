@@ -62,6 +62,7 @@ export interface SyncCatalogSession {
   workspaceRemotePath?: string
   nodeOrigin?: SyncOrigin
   sessionId: string
+  title?: string
   sizeBytes?: number
   branchId?: string
   deleted?: boolean
@@ -168,8 +169,6 @@ export interface SyncState {
   records: Record<string, SyncRecordMetadata>
   workspaces: Record<string, SyncWorkspaceMapping>
   archives: Record<string, SyncSessionArchive>
-  /** 元数据同步的远端目录缓存：peer ID → 最近一次拉取的目录快照。 */
-  catalogs: Record<string, { fetchedAt: string; catalog: SyncCatalog }>
 }
 
 const PEER_FIELDS = new Set([
