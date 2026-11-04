@@ -138,7 +138,18 @@ Entries discovered by the Agent during task execution should follow this format:
 
 [Project Knowledge Summary]
 - Date: 2026-11-04
-- Context: Agent 排查 193 上 TX_4-8 工作区全部会话假死（turn/start 后零步进、cancel 无效），根因是 dshb exec-ssh 层；修复为 keepalive + 操作级超时（未发版）
+- Context: Agent 实现规格任务 3（远端会话页 wss 流式交互）时的架构结论与端到端验证方式
+- Category: Operations & Deployment
+- Instructions:
+  - 远端会话页方案 = 本地反代 + iframe 加载远端完整官方 UI（不做自研消息渲染）。可行性的前提已核实：官方前端（dsh-web-frontend dist）无 URL 路由（无 pushState/hashchange 路由）、资源引用与 fetch 全部是文档相对路径（`fetch('api/...')` 无前导斜杠），因此放在本地代理前缀 `/api/dshb/sync/relay/<peerId>/app/` 下时所有子请求自然落在代理前缀内
+  - 浏览器实时通道是 `/api/remote.mux` 升级（dsh-api-gateway REMOTE_STREAM_MUX_PATH，admitConnection 认证）；本地侧 per-peer 懒注册 `registerUpgrade` 精确路径透传（registerUpgrade 是 exact-path 匹配，不能动态通配）；升级透传必须用 piping 状态标志防「101 头边界后重复解析」（echo 服务器上会回环放大）
+  - 测试双工透传时不要给浏览器侧 PassThrough 挂 data 监听（会拉成 flowing 使 read() 返回 undefined）；断言用收集数组。mock req 用 setTimeout(end) 而非 emit('end')（PassThrough 的 end 需真实调用才能传播）
+  - 端到端验证脚本：/tmp/opencode/ws-e2e.mjs（WebSocket 连 3206 的 relay upgrade 路径，期望 101）；A(3206)/B(3207) 的 dshb 是 symlink 指向 workspace 构建产物
+  - 193 发布流程：本地 tar lib+package.json → scp /tmp → 备份 TARGET/lib → 解压 → chown 1001:1001 → docker restart dsh（~2s healthy）；备份目录 /root/dshb-backup-<stamp>
+
+[Project Knowledge Summary]
+- Date: 2026-11-04
+- Context: Agent 排查 193 上 TX_4-8 工作区全部会话假死（turn/start 后零步进、cancel 无效），根因是 dshb exec-ssh 层；0.1.41 修复（keepalive + 操作级超时）并已部署 193
 - Category: Troubleshooting & Debugging
 - Instructions:
   - 假死特征：会话 running:true、inbox 可进可消费，但 turn/start 之后无 step/start、sessionStats 全 0、无 error/turn/end 事件 —— 挂点必在 preStep 的 systemPrompt.assemble 内（system-prompt/assemble waterfall），首查 dsh-working-directory 的 ensure → ctx.fs.stat(cwd)
