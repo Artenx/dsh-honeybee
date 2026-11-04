@@ -138,6 +138,15 @@ Entries discovered by the Agent during task execution should follow this format:
 
 [Project Knowledge Summary]
 - Date: 2026-11-04
+- Context: 0.1.46 部署 193 后容器重启循环（webStartup 缺失），根因是 tar 部署从不覆盖 dshb 包内 cordis.patch.yml
+- Category: Operations & Deployment
+- Instructions:
+  - tar 部署（lib+package.json）会保留 193 上 dshb 包内的旧 cordis.patch.yml——该文件属于包内容（npm files 含它），随版本演进；部署 tar 必须包含并覆盖它，否则包内补丁定义（如 0.1.34 已删除的 dshb-web-startup → @artenx/dshb/auth/startup）会潜伏到某次重启引爆 ERR_PACKAGE_PATH_NOT_EXPORTED
+  - profile 根的 cordis.patch.yml（用户配置）与 dshb 包内的 cordis.patch.yml（包自带补丁层）是两个文件：前者 tar 不覆盖，后者必须覆盖
+  - 诊断启动循环：docker ps 显示 Restarting (1)；诊断日志在宿主 /home/mt/.dsh/logs/startup-*.log（容器反复重启时 docker exec 不可用，必须走宿主 bind 路径读）
+
+[Project Knowledge Summary]
+- Date: 2026-11-04
 - Context: Agent 实现规格任务 3（远端会话页 wss 流式交互）时的架构结论与端到端验证方式
 - Category: Operations & Deployment
 - Instructions:
