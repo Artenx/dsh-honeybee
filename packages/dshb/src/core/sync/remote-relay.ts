@@ -55,6 +55,12 @@ export class RemoteRelayService {
     private readonly now: () => number = Date.now,
   ) {}
 
+  /** 全部已配置 peer 的 id（供启动时预注册升级路径）。 */
+  async peerIds(): Promise<string[]> {
+    const peers = await this.peers.list()
+    return peers.map((peer) => peer.id)
+  }
+
   /** peer 的远端回环权威名；铸造 cookie 与改写 Host 头都必须用它。 */
   remoteAuthority(peerId: string): Promise<string> {
     return this.withPeer(peerId, (peer) => `127.0.0.1:${peer.remoteWebPort ?? DEFAULT_REMOTE_WEB_PORT}`)
@@ -494,6 +500,18 @@ export function registerRemoteRelayRoutes(ctx: Context, relay: RemoteRelayServic
       },
     }),
   )
+  // 启动时为全部已配置 peer 预注册 mux 升级路径；懒注册（app 首访）仅作兜底，
+  // 避免任何直连 wss 的场景因路由未注册而失败。
+  setImmediate(() => {
+    void relay
+      .peerIds()
+      .then((ids) => {
+        for (const peerId of ids) ensureRelayUpgrade(peerId)
+      })
+      .catch(() => {
+        // 注册失败不阻塞启动；app 首访时仍会兜底注册
+      })
+  })
   if (deps.resolveSessionOrigin) {
     ctx.effect(() =>
       ctx.webServer.register({

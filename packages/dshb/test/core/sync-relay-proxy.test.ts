@@ -28,7 +28,10 @@ function peerView(port: number): SyncPeerView {
 
 function createRelay(serverPort: number): RemoteRelayService {
   const peer = peerView(serverPort)
-  const peers = { get: async (id: string) => (id === peerId ? peer : undefined) }
+  const peers = {
+    get: async (id: string) => (id === peerId ? peer : undefined),
+    list: async () => [peer],
+  }
   const transport = {
     fetchRelayTicket: vi.fn(async () => ({ name: 'dsh-auth-x', value: 'v1.body.sig', maxAgeSeconds: 600 })),
     openDirectChannel: vi.fn(async (_id: string, host: string, port: number) => {
@@ -233,6 +236,15 @@ describe('session-origin 查询路由', () => {
     const method = mockRes()
     await originRoute(routes).handler(mockReq('POST', '/api/dshb/sync/session-origin?sessionId=session-local-1') as never, method as never)
     expect(method.status).toBe(405)
+  })
+})
+
+describe('升级路径预注册', () => {
+  it('服务启动时为全部 peer 预注册 mux 升级路径', async () => {
+    const relay = createRelay(3080)
+    const { upgrades } = setupRoutes(relay, { resolveSessionOrigin: () => undefined })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(upgrades).toContain(`/api/dshb/sync/relay/${peerId}/app/api/remote.mux`)
   })
 })
 
