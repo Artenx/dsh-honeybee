@@ -23,10 +23,12 @@ export interface SyncPeer {
   remoteDshHome?: string
   remoteProfile?: string
   remoteWebPort?: number
+  /** 已取消的方向逻辑；读取旧数据时恒为 'bidirectional'。 */
   direction: SyncDirection
+  /** 已取消的时机逻辑；读取旧数据时恒为 'manual'（同步仅由「立即同步」触发）。 */
   schedule: SyncSchedule
   mode: SyncMode
-  /** 同步工作节点配置；仅元数据同步可关闭（全量会话同步依赖节点配置）。缺省 true。 */
+  /** 已废弃：工作节点配置恒同步；字段仅为兼容旧持久化数据保留。 */
   syncNodes?: boolean
   syncSessions: boolean
   selection?: SyncSelection
@@ -292,10 +294,12 @@ export function parseSyncPeer(value: unknown): SyncPeer {
   if (input.authKind !== 'password' && input.authKind !== 'key') {
     throw new Error('authKind must be password or key')
   }
-  if (input.direction !== 'pull' && input.direction !== 'bidirectional') {
+  // direction/schedule/syncNodes 旧字段仅用于读取旧数据不报错；值一律忽略——
+  // 方向与时机逻辑已取消（同步恒为手动触发 + 双向交换），工作节点配置恒同步。
+  if (input.direction !== undefined && input.direction !== 'pull' && input.direction !== 'bidirectional') {
     throw new Error('direction must be pull or bidirectional')
   }
-  if (input.schedule !== 'manual' && input.schedule !== 'every-5m') {
+  if (input.schedule !== undefined && input.schedule !== 'manual' && input.schedule !== 'every-5m') {
     throw new Error('schedule must be manual or every-5m')
   }
   if (input.mode !== undefined && input.mode !== 'full' && input.mode !== 'metadata') {
@@ -328,12 +332,11 @@ export function parseSyncPeer(value: unknown): SyncPeer {
     ...(remoteDshHome === undefined ? {} : { remoteDshHome: posix.normalize(remoteDshHome) }),
     ...(remoteProfile === undefined ? {} : { remoteProfile }),
     ...(input.remoteWebPort === undefined ? {} : { remoteWebPort: port(input.remoteWebPort, 'remoteWebPort') }),
-    direction: input.direction,
-    schedule: input.schedule,
+    // 方向与时机逻辑已取消：读取旧数据时一律归一为双向交换 + 手动触发。
+    direction: 'bidirectional',
+    schedule: 'manual',
     // 旧 peer 数据没有 mode 字段：缺省按全量同步处理，保持既有行为不变。
     mode: input.mode === undefined ? 'full' : input.mode,
-    // 旧 peer 数据没有 syncNodes 字段：缺省同步工作节点配置。
-    ...(input.syncNodes === undefined ? {} : { syncNodes: input.syncNodes }),
     syncSessions: input.syncSessions,
     ...(input.selection === undefined ? {} : { selection: parseSyncSelection(input.selection) }),
     enabled: input.enabled,

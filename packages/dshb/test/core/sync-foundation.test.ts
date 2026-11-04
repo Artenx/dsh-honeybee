@@ -53,9 +53,9 @@ describe('sync peer model and persistence', () => {
     result[0].name = 'mutated'
 
     expect(store.get(peer.id)?.name).toBe('Build host')
-    expect(store.update(peer.id, { schedule: 'every-5m', enabled: false })).toMatchObject({
+    expect(store.update(peer.id, { schedule: 'manual', enabled: false })).toMatchObject({
       id: peer.id,
-      schedule: 'every-5m',
+      schedule: 'manual',
       enabled: false,
     })
     expect(store.remove(peer.id)).toBe(true)
