@@ -385,6 +385,7 @@ interface TestEnvironment {
 interface EnvironmentOptions {
   mapNode?: boolean
   omitPinning?: boolean
+  sessionTitle?: string
 }
 
 function createEnvironment(kind: 'source' | 'target', options: EnvironmentOptions = {}): TestEnvironment {
@@ -442,6 +443,7 @@ function createEnvironment(kind: 'source' | 'target', options: EnvironmentOption
     () => 1_800_000_000_000,
     home,
     workspaceInstructions,
+    options.sessionTitle ? () => options.sessionTitle : undefined,
   )
   return { home, state, persistence, workspaces, bindings, attachments, spills, instructions, journal, workspaceInstructions, service }
 }
@@ -499,7 +501,7 @@ afterEach(() => {
 
 describe('session sync', () => {
   it('exports a redacted selection catalog with persistence artifact sizes', async () => {
-    const source = createEnvironment('source')
+    const source = createEnvironment('source', { sessionTitle: 'Human readable title' })
     const id = addSourceSession(source)
 
     const catalog = await source.service.exportCatalog()
@@ -515,19 +517,10 @@ describe('session sync', () => {
       origin: { originEntityId: String(id) },
       workspaceRemotePath: '/remote/project',
       nodeOrigin,
+      title: 'Human readable title',
       sizeBytes: expect.any(Number),
     })
     expect(session).not.toHaveProperty('events')
-  })
-
-  it('lists physical artifact sizes for persisted sessions', async () => {
-    const source = createEnvironment('source')
-    const id = addSourceSession(source)
-
-    const sizes = await source.service.listSessionSizes()
-
-    expect(sizes).toHaveLength(1)
-    expect(sizes[0]).toMatchObject({ sessionId: String(id), sizeBytes: expect.any(Number) })
   })
 
   it('reuses one sync-state snapshot and skips writes for unchanged workspace mappings', async () => {

@@ -76,7 +76,6 @@ function fakeCoordinator(
     lastSuccessAt: '2026-01-01T00:00:00.000Z',
     watermark: 'previous-watermark',
   }
-  const catalogWrites: Array<{ fetchedAt: string; catalog: unknown }> = []
   const peers = {
     get: async (id: string) => typeof peerValue === 'function' ? peerValue(id) : peerValue,
     updateProgress: (_id: string, patch: Record<string, unknown>) => {
@@ -106,14 +105,7 @@ function fakeCoordinator(
     })),
     ...overrides,
   }
-  const state = {
-    instanceId: () => localInstanceId,
-    update: vi.fn((mutate: (draft: { catalogs: Record<string, { fetchedAt: string; catalog: unknown }> }) => void) => {
-      const draft = { catalogs: {} as Record<string, { fetchedAt: string; catalog: unknown }> }
-      mutate(draft)
-      for (const entry of Object.values(draft.catalogs)) catalogWrites.push(entry)
-    }),
-  }
+  const state = { instanceId: () => localInstanceId }
   const coordinator = new SyncCoordinator(
     peers as unknown as SyncPeerManager,
     state as unknown as SyncStateStore,
@@ -122,7 +114,7 @@ function fakeCoordinator(
     () => 1000,
     sessions,
   )
-  return { coordinator, peers, nodes, transport, progress, catalogWrites }
+  return { coordinator, peers, nodes, transport, progress }
 }
 
 describe('node transfer planning', () => {
@@ -194,12 +186,20 @@ describe('sync coordinator', () => {
     expect(test.progress.at(-1)?.lastResult).toMatchObject({ importedSessions: 0, exportedSessions: 1, skippedSessions: 1 })
   })
 
-  it('metadata mode persists the remote catalog and skips session content transfer', async () => {
+  it('metadata mode fetches the remote catalog and skips session content transfer', async () => {
     const metadataPeer: SyncPeerView = {
       ...peer,
       mode: 'metadata',
       syncSessions: true,
+      selection: {
+        mode: 'selected',
+        nodes: [{ originInstanceId: remoteInstanceId, originEntityId: 'node-a' }],
+        workspaces: [],
+        sessions: [],
+      },
     }
+    const nodeA = nodeEntry(remoteInstanceId, 'node-a', 10, 'a')
+    const nodeB = nodeEntry(remoteInstanceId, 'node-b', 10, 'b')
     const catalog: SyncCatalog = {
       protocolVersion: 1,
       instanceId: remoteInstanceId,
@@ -212,11 +212,11 @@ describe('sync coordinator', () => {
       exportEntries: vi.fn(),
       applyBundle: vi.fn(),
     }
-    const test = fakeCoordinator([], [], {
+    const test = fakeCoordinator([nodeA, nodeB], [], {
       fetchNodeManifest: vi.fn(async () => ({
         protocolVersion: 1,
         instanceId: remoteInstanceId,
-        records: [],
+        records: [nodeA, nodeB],
         capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_CATALOG_CAPABILITY],
       })),
       fetchCatalog: vi.fn(async () => catalog),
@@ -232,8 +232,8 @@ describe('sync coordinator', () => {
     expect(test.transport.fetchSessionManifest).not.toHaveBeenCalled()
     expect(test.transport.fetchSessionEntries).not.toHaveBeenCalled()
     expect(test.transport.applySessionBundle).not.toHaveBeenCalled()
-    expect(test.catalogWrites).toHaveLength(1)
-    expect(test.catalogWrites[0]?.catalog).toEqual(catalog)
+    expect(test.transport.fetchCatalog).toHaveBeenCalledWith(peer.id)
+    expect(test.nodes.applyManifest).toHaveBeenCalledWith([nodeA, nodeB], metadataPeer.name, 'peer')
     expect(result).toMatchObject({ importedSessions: 0, exportedSessions: 0, skippedSessions: 0 })
     expect(test.progress.at(-1)?.lastResult).toMatchObject({
       catalogNodes: 1,

@@ -26,6 +26,7 @@ import { registerSyncOfflineRoutes } from './sync/offline-routes.js'
 import { registerRelayTicketRoutes } from './sync/relay-auth.js'
 import { RemoteRelayService, registerRemoteRelayRoutes } from './sync/remote-relay.js'
 import { SyncPeerStore, SyncStateStore } from './sync/stores.js'
+import { SyncSessionJournalStore } from './sync/session-journal.js'
 import { sharedSessionInstructionSnapshotStore } from './workspace-instructions.js'
 
 export const name = 'dshb-core'
@@ -111,7 +112,29 @@ export function apply(ctx: Context): void {
   registerRelayTicketRoutes(ctx, ctx.credentials as never)
   const remoteRelay = new RemoteRelayService(syncPeerManager, syncSshTransport)
   ctx.provide('remoteRelayService', remoteRelay)
-  registerRemoteRelayRoutes(ctx, remoteRelay)
+  const sessionJournal = new SyncSessionJournalStore(process.env.DSH_HOME)
+  registerRemoteRelayRoutes(ctx, remoteRelay, {
+    resolveSessionOrigin: (sessionId: string) => {
+      const state = syncState.read()
+      let recordKey: string | undefined
+      let remoteSessionId: string | undefined
+      for (const [key, meta] of Object.entries(state.records)) {
+        if (meta.kind !== 'session' || meta.localEntityId !== sessionId) continue
+        recordKey = key
+        remoteSessionId = meta.originEntityId
+        break
+      }
+      if (!recordKey || !remoteSessionId) {
+        const archive = Object.values(state.archives).find((a) => a.localSessionId === sessionId)
+        if (!archive) return undefined
+        remoteSessionId = archive.originSessionId
+        recordKey = archive.branchId
+      }
+      const peerId = sessionJournal.peerIdForRecordKey(recordKey)
+      if (!peerId) return undefined
+      return syncPeers.list().some((p) => p.id === peerId && p.enabled) ? { peerId, remoteSessionId } : undefined
+    },
+  })
   ctx.effect(() => {
     const stopScheduler = syncScheduler.start()
     // 带外对象收件箱 TTL 清扫：apply 失败/进程中断留下的孤儿文件按天回收。
