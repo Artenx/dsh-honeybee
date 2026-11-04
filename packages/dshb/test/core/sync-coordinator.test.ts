@@ -655,7 +655,7 @@ describe('sync coordinator', () => {
     await vi.waitFor(() => expect(fetchNodeManifest).toHaveBeenCalledTimes(1))
     expect(fetchNodeManifest).toHaveBeenCalledTimes(1)
     finishFetch?.({ protocolVersion: 1, instanceId: remoteInstanceId, records: [remote] })
-    await expect(first).resolves.toMatchObject({ imported: 1, exported: 1 })
+    await expect(first).resolves.toMatchObject({ imported: 1, exported: 0 })
     expect(test.progress.map((entry) => entry.lastRunStatus)).toEqual(['running', 'succeeded'])
   })
 

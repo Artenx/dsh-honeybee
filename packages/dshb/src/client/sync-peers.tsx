@@ -678,7 +678,7 @@ export function SyncPeersSection(): ReactElement {
 
         <div style={field}>
           <span style={label}>工作节点配置</span>
-          <div style={hint}>始终随同步双向交换，无需配置；点击「立即同步」时执行一次。</div>
+          <div style={hint}>点击「立即同步」时从远端 DSH 实例拉取。</div>
         </div>
 
         <div style={field}>

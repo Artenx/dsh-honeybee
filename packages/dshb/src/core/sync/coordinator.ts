@@ -371,7 +371,8 @@ export class SyncCoordinator {
       // 节点配置交换：全量模式恒开（会话导入依赖节点/工作区映射）；元数据模式
       // 可由「同步工作节点」关闭——关闭后仅校验对端身份并拉取目录。
       const syncNodes = peer.mode !== 'metadata' || peer.syncNodes !== false
-      const fullNodePlan: NodeTransferPlan = syncNodes ? planNodeTransfers(peer.direction, localEntries, remoteEntries) : { toLocal: [], toRemote: [], skipped: 0 }
+      // 节点配置固定从远端拉取（同步语义简化后方向仅作用于会话内容交换）。
+      const fullNodePlan: NodeTransferPlan = syncNodes ? planNodeTransfers('pull', localEntries, remoteEntries) : { toLocal: [], toRemote: [], skipped: 0 }
       const plan = !syncNodes || selection.all ? fullNodePlan : {
         ...fullNodePlan,
         toLocal: fullNodePlan.toLocal.filter((entry) => selectionIncludesNode(entry.metadata, selection)),
