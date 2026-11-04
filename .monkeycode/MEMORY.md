@@ -137,6 +137,18 @@ Entries discovered by the Agent during task execution should follow this format:
   - 当前远端 DSHB 版本号 0.1.18 与本地相同（本地含未提交的 delivery marker 修复与 202 异步受理修复），故验证靠 lib 文件哈希而非版本号
 
 [Project Knowledge Summary]
+- Date: 2026-11-04
+- Context: Agent 排查 193 上 TX_4-8 工作区全部会话假死（turn/start 后零步进、cancel 无效），根因是 dshb exec-ssh 层；修复为 keepalive + 操作级超时（未发版）
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 假死特征：会话 running:true、inbox 可进可消费，但 turn/start 之后无 step/start、sessionStats 全 0、无 error/turn/end 事件 —— 挂点必在 preStep 的 systemPrompt.assemble 内（system-prompt/assemble waterfall），首查 dsh-working-directory 的 ensure → ctx.fs.stat(cwd)
+  - dshb decorateFileSystem（src/router/decorate-fs.ts）按路径前缀把 DSH 的 fs.stat/readText 等包装为远程世界转发：cwd 命中 dshb mirror 绑定（/home/mt/.dsh/dshb/mirrors/<nodeId>/...）就经 SSH 转发到该节点。故「某节点 mirror 路径下新 turn 全挂、其他路径正常」= 该节点 SSH 通道冻结 + 无超时
+  - exec-ssh 原缺陷：keepaliveInterval:0（半开 TCP 永不报错）+ 连接池复用死 client + SFTP/exec 无操作超时。修复（connection.ts/executor.ts）：keepalive 15s×3、invalidate() 作废重建、guard() 按 DSHB_SSH_OP_TIMEOUT_MS（默认 20s）超时并作废连接；连接池持有同一 SshConnection 对象即可自愈
+  - 远程进程断点定位法（本次成功实践）：docker exec dsh sh -c "kill -USR1 1" 激活 inspector → 容器内跑 CDP WebSocket 脚本（/tmp/cdp-bp.mjs，源码在 /tmp/opencode/）→ Debugger.setBreakpointByUrl 按 node_modules 文件名+行号（先 sha256sum 对比本地 node_modules 确认同版本）→ 触发探针看 PAUSED 序列缺失处即挂点
+  - 193 排障通道：root@193.112.17.199 密码在 /tmp/opencode/dshv19preview/.credentials.yaml 的 dshb-core/p-16dc7e8241fa9de58cbe4533 记录（sshpass -e + SSHPASS 环境变量注入，勿外泄）；本地 3204 实例经 /api/dshb/sync/relay/p-16dc7e8241fa9de58cbe4533/call/<ns>/<method> 可调远端 DSH Remote API（session/list、session/page、session/projections、workspace/archiveSession 等）
+  - 193 dshb 部署为普通 npm 目录（/home/mt/.dsh/profiles/web/node_modules/@artenx/dshb），无 symlink；本地 sync-a/sync-b（3206/3207）的 dshb 是 symlink 指向 workspace 构建产物，pnpm build 后重启进程即加载新代码
+
+[Project Knowledge Summary]
 - Date: 2026-10-31
 - Context: Agent 为 0.1.23/0.1.24 同步优化做双实例 SSH 同步实测时排查沙箱网络冻结
 - Category: Troubleshooting & Debugging
