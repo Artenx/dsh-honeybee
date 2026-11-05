@@ -69,6 +69,7 @@ interface SyncPeer {
 - 转发：`http.request({ createConnection: () => sshStream })` 直连远端回环端口；请求头重写 `Host: 127.0.0.1:<webPort>`、注入中继 cookie、去除本地认证头；响应信封按远端状态码透传（64MB 上限）。
 - 凭据缓存：按对端与 authority 失效，到期前 60 秒重铸；仅存内存。
 - wss 流透传：本地 `webServer.registerUpgrade`（per-peer 懒注册 `/api/dshb/sync/relay/<peerId>/app/api/remote.mux`），handler 构造原始升级请求（`Host` 改写、注入中继 cookie、透传 `Sec-WebSocket-*`），等远端 101 后进入双向原始字节管道；`piping` 状态标志防止头部边界后的重复解析。
+- 活跃会话语义：全量同步时内容快照落后于 manifest 的会话（对端正被活跃使用）按 staleSkippedSessions 跳过并留待下次同步，不再使整次同步失败；其实时展示由远端会话通道（wss）承担，与 dsh-plugin-mobile-gateway 的 projection 转发思路一致（gateway 在同进程内用 ctx.on(session/event) 与 control 流转发，跨机场景由 wss 反代天然承载）。
 - 远端会话页反向代理：`GET /api/dshb/sync/relay/<peerId>/app/...` 流式转发远端 Web 前端与 API（剥离 `/app` 前缀、注入中继 cookie、剥离 hop-by-hop/set-cookie/CSP/X-Frame-Options 头、剥离浏览器 fetch 元数据头），响应完成即回收 SSH 通道。远端官方 SPA 无 URL 路由、资源引用为文档相对路径，故其全部请求（unary API、`/api/remote.mux` 升级、静态资源）自然落在此前缀下。
 - 会话来源查询：`GET /api/dshb/sync/session-origin?sessionId=` 按同步记录（`localEntityId` → 记录键 → 导入批次 `peerId`）返回 `{peerId, remoteSessionId}`；客户端在侧栏会话行悬停按钮（`sidebar.workspaces.session.row.action` 槽位）显示「打开远端会话」，全屏 iframe 加载远端完整官方 UI（实时事件、发送消息与审批由远端会话页承载）。
 

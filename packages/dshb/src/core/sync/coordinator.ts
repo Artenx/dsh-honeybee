@@ -185,15 +185,28 @@ function mergeSessionSkipped(...reports: Array<readonly { sessionId: string; rea
   return [...merged.values()]
 }
 
-function assertSelectedSessionEntries(
+/**
+ * 把内容快照与 manifest 清单比对，剔除了「manifest 之后发生变化」的条目
+ * （例如对端正被活跃使用的会话：边抓取边推进，快照必然落后）。剔除的条目
+ * 由调用方计入 skippedSessions 并留待下次同步；对端仍在活跃的会话经远端
+ * 会话通道（wss）实时展示，不依赖内容同步。
+ */
+function partitionStaleSessionEntries(
   expectedEntries: readonly SyncSessionManifestEntry[],
   selectedEntries: readonly SyncSessionEntry[],
-  side: string,
-): void {
+): { retained: SyncSessionEntry[]; stale: Array<{ key: string; fields: string; detail: string }> } {
   const expected = new Map(expectedEntries.map((entry) => [syncSessionEntryKey(entry), entry]))
   const selected = new Map(selectedEntries.map((entry) => [syncSessionEntryKey(entry), entry]))
+  const retained: SyncSessionEntry[] = []
+  const stale: Array<{ key: string; fields: string; detail: string }> = []
   if (selected.size !== selectedEntries.length || selected.size !== expected.size) {
-    throw new SyncCoordinatorError('session-manifest-stale', `${side}会话内容与 manifest 清单不一致`)
+    for (const [key, expectedEntry] of expected) {
+      if (!selected.has(key)) stale.push({ key, fields: 'entry-missing', detail: '' })
+    }
+    for (const key of selected.keys()) {
+      if (!expected.has(key)) stale.push({ key, fields: 'unexpected-entry', detail: '' })
+    }
+    return { retained: [], stale }
   }
   for (const [key, expectedEntry] of expected) {
     const metadata = expectedEntry.metadata
@@ -236,9 +249,12 @@ function assertSelectedSessionEntries(
         ? ` expected(eventCount=${expectedEntry.eventCount}, inherited=${expectedEntry.inheritedEventCount}, digest=${expectedEntry.eventDigest})` +
           ` actual(${eventSummary ? `eventCount=${eventSummary.eventCount}, inherited=${eventSummary.inheritedEventCount}, digest=${eventSummary.eventDigest}` : 'no-events'})`
         : ''
-      throw new SyncCoordinatorError('session-manifest-stale', `${side}会话内容在 manifest 之后发生变化（key=${key}，字段=${mismatches.join(',')}）${detail}`)
+      stale.push({ key, fields: mismatches.join(','), detail })
+      continue
     }
+    if (currentEntry) retained.push(currentEntry)
   }
+  return { retained, stale }
 }
 
 function sessionEventPrefixesFor(
@@ -390,6 +406,7 @@ export class SyncCoordinator {
       let importedSessions = 0
       let exportedSessions = 0
       let skippedSessions = 0
+      let staleSessionCount = 0
       let digest = manifestDigest(remoteEntries)
       if (peer.mode === 'metadata' && peer.syncSessions) {
         // 每次同步实时拉取目录并报告计数；会话内容交换整体跳过。
@@ -453,8 +470,12 @@ export class SyncCoordinator {
               if (fetched.instanceId !== remoteManifest.instanceId) {
                 throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
               }
-              assertSelectedSessionEntries(chunkManifest, fetched.entries, '远端')
+              const pullPartition = partitionStaleSessionEntries(chunkManifest, fetched.entries)
+              staleSessionCount += pullPartition.stale.length
               remoteSkippedReports.push(fetched.skipped)
+              if (pullPartition.stale.length > 0) {
+                fetched = { ...fetched, entries: pullPartition.retained }
+              }
               if (useObjectStream) {
                 // 带外对象：bundle 里 deferred 描述符的载荷经对象流 RPC 拉到本地
                 // 收件箱（磁盘流式，内存 O(帧)），随后 applyBundle 按摘要水合。
@@ -483,8 +504,10 @@ export class SyncCoordinator {
                 if (fullRemoteEntries.instanceId !== remoteManifest.instanceId) {
                   throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
                 }
-                assertSelectedSessionEntries(chunkManifest, fullRemoteEntries.entries, '远端')
+                const pullRetryPartition = partitionStaleSessionEntries(chunkManifest, fullRemoteEntries.entries)
+                staleSessionCount += pullRetryPartition.stale.length
                 remoteSkippedReports.push(fullRemoteEntries.skipped)
+                fullRemoteEntries.entries = pullRetryPartition.retained
                 const applied = await sessionService.applyBundle(
                   makeSyncSessionBundle(
                     remoteManifest.instanceId,
@@ -527,14 +550,18 @@ export class SyncCoordinator {
               const chunkManifest = plan.toRemote.filter((entry) => chunkKeySet.has(syncSessionEntryKey(entry)))
               const prefixes = useEventDeltas ? sessionEventPrefixesFor(chunkManifest, remoteManifest.entries) : []
               this.throwIfStopped(signal)
-              const exported = await sessionService.exportEntries(
+              let exported = await sessionService.exportEntries(
                 chunkKeys,
                 localManifest.digest,
                 prefixes,
                 { sharedObjects: useSharedObjects, deferredObjects: useObjectStream },
               )
               this.throwIfStopped(signal)
-              assertSelectedSessionEntries(chunkManifest, exported.entries, '本地')
+              const pushPartition = partitionStaleSessionEntries(chunkManifest, exported.entries)
+              staleSessionCount += pushPartition.stale.length
+              if (pushPartition.stale.length > 0) {
+                exported = { ...exported, entries: pushPartition.retained }
+              }
               const wireSkipped = firstChunk ? mergeSessionSkipped(localManifest.skipped, exported.skipped) : exported.skipped
               let wireBundle = exported.objects !== undefined
                 ? makeSyncSessionBundle(exported.instanceId, exported.entries, wireSkipped, exported.objects)
@@ -564,7 +591,9 @@ export class SyncCoordinator {
                   [],
                   { sharedObjects: wireBundle.objects !== undefined, deferredObjects: false },
                 )
-                assertSelectedSessionEntries(chunkManifest, fullLocalEntries.entries, '本地')
+                const pushRetryPartition = partitionStaleSessionEntries(chunkManifest, fullLocalEntries.entries)
+                staleSessionCount += pushRetryPartition.stale.length
+                fullLocalEntries.entries = pushRetryPartition.retained
                 const skippedReport = firstChunk ? mergeSessionSkipped(localManifest.skipped, fullLocalEntries.skipped) : fullLocalEntries.skipped
                 wireBundle = fullLocalEntries.objects !== undefined
                   ? makeSyncSessionBundle(fullLocalEntries.instanceId, fullLocalEntries.entries, skippedReport, fullLocalEntries.objects)
@@ -611,7 +640,7 @@ export class SyncCoordinator {
         }
         importedSessions = sessionResultCount(sessionLocalResult)
         exportedSessions = sessionResultCount(sessionRemoteResult)
-        skippedSessions = plan.skipped + sessionLocalResult.skipped + sessionRemoteResult.skipped
+        skippedSessions = plan.skipped + sessionLocalResult.skipped + sessionRemoteResult.skipped + staleSessionCount
         digest = `sha256:${createHash('sha256').update(`${digest}\0${remoteSessionDigest}\0${localSessionDigest}`).digest('hex')}`
       }
       const finishedAt = new Date(this.now()).toISOString()
@@ -648,6 +677,7 @@ export class SyncCoordinator {
             importedSessions,
             exportedSessions,
             skippedSessions,
+            ...(staleSessionCount > 0 ? { staleSkippedSessions: staleSessionCount } : {}),
             ...(peer.mode === 'metadata' && peer.syncSessions ? {
               catalogNodes: catalog.nodes.length,
               catalogWorkspaces: catalog.workspaces.length,

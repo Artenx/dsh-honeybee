@@ -879,7 +879,7 @@ function attachmentReferences(events: readonly SessionEvent[]): { images: ImageA
   return { images: [...images.values()], files: [...files.values()] }
 }
 
-function sessionEventDigest(
+export function sessionEventDigest(
   header: SessionHeader,
   inheritedEventCount: number,
   events: readonly SessionEvent[],
@@ -993,7 +993,7 @@ export function sessionEventListDigest(events: readonly SessionEvent[]): string 
   return `sha256:${hash.digest('hex')}`
 }
 
-function sessionStateDigest(
+export function sessionStateDigest(
   workspace: SyncSessionWorkspace,
   workspacePosition: number,
   archived: boolean,
@@ -1312,7 +1312,7 @@ function findSessionOriginByLocalId(state: SyncState, localSessionId: string): S
   return metadata ? { originInstanceId: metadata.originInstanceId, originEntityId: metadata.originEntityId } : undefined
 }
 
-function workspaceDigest(workspace: Omit<SyncSessionWorkspace, 'revision' | 'contentDigest'>): string {
+export function workspaceDigest(workspace: Omit<SyncSessionWorkspace, 'revision' | 'contentDigest'>): string {
   return sha256(canonicalJson(workspace))
 }
 

@@ -137,6 +137,8 @@ export interface SyncPeerProgress {
     catalogNodes?: number
     catalogWorkspaces?: number
     catalogSessions?: number
+    /** 内容快照落后于 manifest 而跳过的活跃会话数（可选，旧状态缺省）。 */
+    staleSkippedSessions?: number
   }
 }
 
