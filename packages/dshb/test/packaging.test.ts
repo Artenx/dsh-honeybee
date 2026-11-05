@@ -28,9 +28,12 @@ describe('single-package distribution', () => {
       devDependencies: Record<string, string>
     }
 
-    expect(pkg.version).toBe('0.1.39')
-    expect(pkg.engines.dsh).toBe('>=0.1.7-rc.1 <0.2.2-rc.1')
+    expect(pkg.version).toBe('0.1.48')
     expect(pkg.dsh.compatibility.dshReleases).toBe(pkg.engines.dsh)
+    expect(pkg.engines.dsh).toContain('>=0.2.2-rc.1 <0.2.3')
+    for (const [name, range] of Object.entries(pkg.peerDependencies)) {
+      if (name.startsWith('@deepseek-ai/dsh-')) expect(range).toContain('>=0.2.2-rc.1 <0.2.3')
+    }
     expect(pkg.dsh.compatibility.nodeVersions).toBe('>=22.13')
     expect(pkg.peerDependencies).not.toHaveProperty('@deepseek-ai/dsh-client-runtime')
     expect(pkg.devDependencies).toHaveProperty('@deepseek-ai/dsh-client-runtime')

@@ -1,6 +1,6 @@
 {
   "name": "@artenx/dshb",
-  "version": "0.1.47",
+  "version": "0.1.48",
   "description": "让 DSH 变成随时可用的多设备 Agent 工作台，支持将远程节点添加到本地 DSH，并像操作本地内容一样访问远程节点，包括会话环境、文件目录、终端等。支持在安装了本插件的多个 DSH 实例间同步数据。若部署在云服务器，Web 端访问支持登录认证。真正实现远程节点本地化操作。最新版本已支持 DSH 桌面端。",
   "type": "module",
   "main": "lib/index.js",
@@ -101,7 +101,7 @@
       ]
     },
     "compatibility": {
-      "dshReleases": ">=0.1.7-rc.1 <0.2.2-rc.1",
+      "dshReleases": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
       "nodeVersions": ">=22.13"
     }
   },
@@ -115,22 +115,22 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-layout": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-workspace": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-cmdline": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-credentials": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-fs": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-fs-sandbox": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-host-directory-picker": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-host-webserver": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-sandbox": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-shell": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-bash-sandbox": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-subprocess": ">=0.1.7-rc.1 <0.2.1-rc.2",
-    "@deepseek-ai/dsh-subprocess-local": ">=0.1.7-rc.1 <0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-client-ui-layout": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-client-ui-workspace": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-cmdline": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-credentials": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-fs": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-fs-sandbox": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-host-directory-picker": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-sandbox": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-shell": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-bash-sandbox": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-subprocess": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
+    "@deepseek-ai/dsh-subprocess-local": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3",
     "react": "^19.0.0"
   },
   "devDependencies": {
@@ -159,7 +159,7 @@
   },
   "engines": {
     "node": ">=22.13",
-    "dsh": ">=0.1.7-rc.1 <0.2.2-rc.1"
+    "dsh": ">=0.1.7-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2-rc.0 || >=0.2.2-rc.1 <0.2.3"
   },
   "sideEffects": false,
   "keywords": [

@@ -17,6 +17,6 @@ The Authentication settings entry appears in the browser-based Web app. The DSH 
 ## Requirements
 
 - Node.js 22.13 or newer
-- DeepSeek Harness 0.1.7-rc.1 or 0.2.1-rc.2 (Web or Desktop)
+- DeepSeek Harness 0.1.7-rc.1, 0.2.1-rc.2, or 0.2.2-rc.1 (Web or Desktop)
 
 Source code and complete documentation: https://github.com/Artenx/dsh-honeybee
