@@ -126,6 +126,20 @@ describe('移动端页面兼容', () => {
     expect(html).not.toContain('[class*="7KE1Ra_menu"]')
     expect(html).not.toContain('[class*="_menu"]:has([class*="modelName"])')
   })
+
+  it('注入 Promise.withResolvers polyfill 供旧 WebKit 使用', () => {
+    const html = installLoopbackCompat('<html><head></head><body></body></html>')
+    expect(html).toContain('Promise.withResolvers = function')
+  })
+
+  it('dshb-debug 屏幕错误面板默认关闭、带标记时激活', () => {
+    const html = installLoopbackCompat('<html><head></head><body></body></html>')
+    expect(html).toContain('dshb-debug-panel')
+    const gate = html.indexOf('if (!/')
+    const panel = html.indexOf('dshb-debug-panel')
+    expect(gate).toBeGreaterThan(-1)
+    expect(panel).toBeGreaterThan(gate)
+  })
 })
 
 describe('登录限速（需求 1.5）', () => {

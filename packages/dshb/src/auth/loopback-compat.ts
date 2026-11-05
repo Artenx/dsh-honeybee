@@ -24,6 +24,13 @@ input,textarea,select,[contenteditable="true"]{font-size:16px!important}
 export function loopbackCompatScript(): string {
   return `<script>
 ;(function () {
+  if (typeof Promise !== 'undefined' && typeof Promise.withResolvers !== 'function') {
+    Promise.withResolvers = function () {
+      var resolve, reject
+      var promise = new Promise(function (res, rej) { resolve = res; reject = rej })
+      return { promise: promise, resolve: resolve, reject: reject }
+    }
+  }
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function' && typeof crypto.getRandomValues === 'function') {
     crypto.randomUUID = function () {
       var b = crypto.getRandomValues(new Uint8Array(16))
@@ -72,6 +79,63 @@ export function loopbackCompatScript(): string {
   }
   function tryInstall() { if (!installIsLoopbackOverride()) setTimeout(tryInstall, 0) }
   tryInstall()
+})()
+;(function () {
+  if (!/(?:^|[?&#])dshb-debug(?:=|&|#|$)/.test(window.location.search + '&' + window.location.hash)) return
+  var entries = []
+  var panel = null
+  function fmt(value) {
+    try {
+      if (typeof value === 'string') return value
+      if (value instanceof Error) return value.stack || (value.message ? value.name + ': ' + value.message : String(value))
+      return JSON.stringify(value)
+    } catch (e) { return String(value) }
+  }
+  function fmtArgs(args) {
+    var out = []
+    for (var i = 0; i < args.length; i++) out.push(fmt(args[i]))
+    return out.join(' ')
+  }
+  function render() {
+    if (!panel) {
+      panel = document.createElement('div')
+      panel.id = 'dshb-debug-panel'
+      panel.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:60%;overflow:auto;background:rgba(12,12,12,.94);color:#7dff7d;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;padding:10px 12px 14px;z-index:2147483647;white-space:pre-wrap;word-break:break-all;-webkit-overflow-scrolling:touch'
+      var head = document.createElement('div')
+      head.style.cssText = 'position:sticky;top:-10px;background:rgba(12,12,12,.94);padding:2px 0 6px;color:#fff;font-weight:700'
+      head.textContent = 'dshb-debug (entries: 0)'
+      panel.appendChild(head)
+      ;(document.body || document.documentElement).appendChild(panel)
+    }
+    var head = panel.firstChild
+    head.textContent = 'dshb-debug (entries: ' + entries.length + ')'
+    while (panel.childNodes.length > 1) panel.removeChild(panel.lastChild)
+    for (var i = Math.max(0, entries.length - 40); i < entries.length; i++) {
+      var line = document.createElement('div')
+      line.textContent = entries[i]
+      line.style.borderBottom = '1px solid rgba(255,255,255,.12)'
+      panel.appendChild(line)
+    }
+  }
+  function push(kind, text) {
+    entries.push(kind + ' ' + text)
+    if (entries.length > 200) entries.splice(0, entries.length - 200)
+    render()
+  }
+  var origError = console.error
+  console.error = function () { push('console.error', fmtArgs(arguments)); try { origError.apply(console, arguments) } catch (e) {} }
+  var origWarn = console.warn
+  console.warn = function () { push('console.warn', fmtArgs(arguments)); try { origWarn.apply(console, arguments) } catch (e) {} }
+  window.addEventListener('error', function (event) {
+    var where = event.filename ? ' @' + event.filename.split('/').pop() + ':' + event.lineno : ''
+    push('window.onerror', (event.message || 'unknown') + where)
+  })
+  window.addEventListener('unhandledrejection', function (event) {
+    var reason = event.reason
+    push('unhandledrejection', fmt(reason))
+  })
+  push('boot', 'UA=' + navigator.userAgent)
+  push('boot', 'url=' + window.location.href)
 })()
 ;(async function () {
   try {
