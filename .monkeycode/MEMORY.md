@@ -137,6 +137,16 @@ Entries discovered by the Agent during task execution should follow this format:
   - 当前远端 DSHB 版本号 0.1.18 与本地相同（本地含未提交的 delivery marker 修复与 202 异步受理修复），故验证靠 lib 文件哈希而非版本号
 
 [Project Knowledge Summary]
+- Date: 2026-11-05
+- Context: 排查「同步协议不兼容：SSH channel error: remote helper exited with code 1」（用户桌面端与 3204 均复现）
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 「同步协议不兼容」（ssh-protocol）有两类触发：远端 helper 请求内部路由返回非 200（helper exitCode=1），或 readFrames/帧解码失败。看 lastResult 里 catalog 计数是否已写入——已写说明失败在会话内容阶段，未写说明在节点/目录阶段
+  - 手动复刻 helper：从构建产物取 REMOTE_SYNC_HELPER_COMMAND 的 b64（node -e eval 自包含），经 ssh2 exec + 帧协议喂 request control；data 帧头 36 字节（4 序列+32 摘要）；TCP 粘包必须逐帧解（SyncFrameDecoder），按 chunk 偏移会错位
+  - 「session ... contains event type unknown to this harness」= 本地 dsh CLI 依赖树里 dsh-session 版本过旧（0.1.7-rc.1 缺 job/registered 等），远端 0.2.1-rc.4 会话含新类型。修复：全新 npm install @deepseek-ai/dsh@0.2.1-rc.4 建独立运行树（勿在旧树 --no-save 补装，会打断依赖链接），再建 @artenx/dshb symlink
+  - 沙箱到 193 的 SSH 通道对大流量（全量同步几十 MB）触发透明代理冻结 → ssh-protocol/ssh-timeout；元数据同步（目录 ~17KB）稳定；全量大同步在桌面端（用户网络直连 193）不受影响
+  - 实例进程长期运行后即使 dshb 是 symlink 也用着启动时的旧模块；对比 sync/peers API 返回的 direction 等归一化字段可判断进程构建代次，重启实例即加载新构建
+[Project Knowledge Summary]
 - Date: 2026-11-04
 - Context: 0.1.46 部署 193 后容器重启循环（webStartup 缺失），根因是 tar 部署从不覆盖 dshb 包内 cordis.patch.yml
 - Category: Operations & Deployment
