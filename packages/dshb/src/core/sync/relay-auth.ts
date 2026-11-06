@@ -108,6 +108,48 @@ export function relayCookieHeader(cookie: RelayCookie): string {
   return `${cookie.name}=${cookie.value}`
 }
 
+/**
+ * 校验一个 dsh browser-auth 格式的 relay cookie 值是否由本机 secret 为
+ * 指定 authority 铸造且未过期。与 mintRelayCookie 对称：拆分 v1.body.sig，
+ * 重算 HMAC 做常量时间比较，并校验 body 内的 authority 与过期时间。
+ */
+export function verifyRelayCookie(value: unknown, secret: Buffer, authority: string, now: number): boolean {
+  if (typeof value !== 'string' || !value.startsWith('v1.')) return false
+  const firstDot = value.indexOf('.', 3)
+  if (firstDot < 0) return false
+  const body = value.slice(3, firstDot)
+  const signature = value.slice(firstDot + 1)
+  if (!body || !signature) return false
+  const expectedSig = encodeBase64Url(createHmac('sha256', secret).update(body).digest())
+  if (!constantTimeEquals(signature, expectedSig)) return false
+  const decoded = decodeBase64Url(body)
+  if (decoded === undefined) return false
+  let payload: { authority?: unknown; expiresAt?: unknown; issuedAt?: unknown }
+  try {
+    payload = JSON.parse(decoded.toString('utf8'))
+  } catch {
+    return false
+  }
+  if (payload.authority !== authority) return false
+  if (typeof payload.expiresAt !== 'number' || payload.expiresAt <= now) return false
+  return true
+}
+
+/** 从请求 Cookie 头中提取并校验绑定到 req Host 的 relay cookie。 */
+export function requestHasValidRelayCookie(
+  cookieHeader: string | undefined,
+  secret: Buffer,
+  host: string | undefined,
+  now: number,
+): boolean {
+  if (!cookieHeader || !host || !secret) return false
+  const name = relayCookieName(host)
+  const re = new RegExp(`(?:^|;\\s*)${name}=([^;]+)`)
+  const match = cookieHeader.match(re)
+  if (!match) return false
+  return verifyRelayCookie(match[1], secret, host, now)
+}
+
 function constantTimeEquals(actual: string, expected: string): boolean {
   const actualBytes = Buffer.from(actual, 'utf8')
   const expectedBytes = Buffer.from(expected, 'utf8')

@@ -4,16 +4,18 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
+import { credentialKey } from '@deepseek-ai/dsh-credentials'
 import { sharedCredentialStore } from './credentials.js'
 import { decorateWebServer } from './decorate-webserver.js'
-import { AuthGate, isTrustedAuthRequest } from './gate.js'
+import { AuthGate, isTrustedAuthRequest, type BrowserSessionSecretProvider } from './gate.js'
 import { installLoopbackCompat } from './loopback-compat.js'
 import { LoginRateLimiter } from './ratelimit.js'
 import { registerAuthRoutes } from './routes.js'
+import { browserSessionSecret } from '../core/sync/relay-auth.js'
 
 export const name = 'dshb-auth'
 
-export const inject = ['webServer']
+export const inject = ['webServer', 'credentials']
 
 /**
  * 定位 dshb 实际安装所在 profile 的 node_modules。
@@ -123,7 +125,26 @@ function registerFrontendBootRaceWorkaround(ctx: Context): void {
 
 export function apply(ctx: Context): void {
   const store = sharedCredentialStore()
-  const gate = new AuthGate(store)
+  // relay cookie 校验需读 dsh browser-session 密钥；credentials 可能晚于
+  // auth 插件就绪，provider 每次按需读取并缓存（密钥仅在凭据重置时变化）。
+  let cachedBrowserSecret: Buffer | null | undefined
+  let browserSecretFetchInFlight = false
+  const credentialsLike = (ctx as unknown as { credentials?: { readRecord: (key: unknown) => Promise<unknown> } }).credentials
+  const browserSecretProvider: BrowserSessionSecretProvider = async () => {
+    if (cachedBrowserSecret !== undefined) return cachedBrowserSecret ?? undefined
+    if (!credentialsLike || browserSecretFetchInFlight) return undefined
+    browserSecretFetchInFlight = true
+    try {
+      const record = await credentialsLike.readRecord(credentialKey('client-connection', 'browser-session'))
+      cachedBrowserSecret = browserSessionSecret(record) ?? null
+    } catch {
+      cachedBrowserSecret = null
+    } finally {
+      browserSecretFetchInFlight = false
+    }
+    return cachedBrowserSecret ?? undefined
+  }
+  const gate = new AuthGate(store, browserSecretProvider)
   ctx.effect(() => decorateWebServer(ctx.webServer, store, gate))
   registerFrontendBootRaceWorkaround(ctx)
   ctx.effect(() => ctx.webServer.tapIndex(installLoopbackCompat))

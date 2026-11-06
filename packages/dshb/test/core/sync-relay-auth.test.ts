@@ -6,7 +6,9 @@ import {
   RELAY_TICKET_MAX_AGE_MS,
   registerRelayTicketRoutes,
   relayCookieName,
+  requestHasValidRelayCookie,
   validateRelayAuthority,
+  verifyRelayCookie,
   RelayTicketError,
 } from '../../src/core/sync/relay-auth.js'
 
@@ -81,6 +83,37 @@ describe('relay ticket minting', () => {
   it('derives the cookie name from the authority alone', () => {
     expect(relayCookieName('127.0.0.1:3080')).toBe('dsh-auth-' + encodeBase64Url(createHash('sha256').update('127.0.0.1:3080').digest()))
     expect(relayCookieName('127.0.0.1:3207')).toBe(relayCookieName('127.0.0.1:3207'))
+  })
+
+  it('verifyRelayCookie 与 mint 对称：合法放行、篡改/过期/错密钥/错 authority 拒绝', () => {
+    const authority = '127.0.0.1:13080'
+    const now = 5_000_000
+    const cookie = mintRelayCookie(SECRET, authority, now)
+    expect(verifyRelayCookie(cookie.value, SECRET, authority, now + 1)).toBe(true)
+    // 过期拒绝
+    expect(verifyRelayCookie(cookie.value, SECRET, authority, now + RELAY_TICKET_MAX_AGE_MS + 1)).toBe(false)
+    // 错密钥拒绝
+    expect(verifyRelayCookie(cookie.value, Buffer.alloc(32, 9), authority, now + 1)).toBe(false)
+    // 错 authority 拒绝
+    expect(verifyRelayCookie(cookie.value, SECRET, '127.0.0.1:9999', now + 1)).toBe(false)
+    // 篡改签名拒绝
+    const tampered = cookie.value.slice(0, -2) + 'XX'
+    expect(verifyRelayCookie(tampered, SECRET, authority, now + 1)).toBe(false)
+    // 非法格式拒绝
+    expect(verifyRelayCookie('garbage', SECRET, authority, now)).toBe(false)
+    expect(verifyRelayCookie(undefined, SECRET, authority, now)).toBe(false)
+  })
+
+  it('requestHasValidRelayCookie 从 Cookie 头按 Host 提取并校验', () => {
+    const authority = 'dsh.artenx.top:9080'
+    const cookie = mintRelayCookie(SECRET, authority, 1_000)
+    const header = `other=1; ${cookie.name}=${cookie.value}; foo=bar`
+    expect(requestHasValidRelayCookie(header, SECRET, authority, 2_000)).toBe(true)
+    // Host 不匹配 → cookie 名不同 → 提取不到
+    expect(requestHasValidRelayCookie(header, SECRET, '127.0.0.1:13080', 2_000)).toBe(false)
+    // 缺头/缺密钥
+    expect(requestHasValidRelayCookie(undefined, SECRET, authority, 2_000)).toBe(false)
+    expect(requestHasValidRelayCookie(header, Buffer.alloc(0), authority, 2_000)).toBe(false)
   })
 })
 
