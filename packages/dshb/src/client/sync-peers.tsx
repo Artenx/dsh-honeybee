@@ -54,7 +54,10 @@ function copyText(value: string): void {
 function resultSummary(peer: SyncPeerView): string | undefined {
   const result = peer.progress?.lastResult
   if (!result) return undefined
-  return `节点导入 ${result.imported}、导出 ${result.exported}；会话导入 ${result.importedSessions}、导出 ${result.exportedSessions}；跳过 ${result.skipped}`
+  // skipped 混含节点与跳过计数；会话部分单列，元数据模式下（会话内容交换整体跳过）
+  // 也便于区分「跳过的都是节点」与「会话被选区/水位跳过」。
+  const sessionPart = result.skippedSessions > 0 ? `（其中会话 ${result.skippedSessions}）` : ''
+  return `节点导入 ${result.imported}、导出 ${result.exported}；会话导入 ${result.importedSessions}、导出 ${result.exportedSessions}；跳过 ${result.skipped}${sessionPart}`
 }
 
 interface HostKeyChallenge {

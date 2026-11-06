@@ -827,23 +827,44 @@ export function buildRemoteProbeScript(dshHome?: string, preferredWebPort?: numb
     'done',
     'ps -eo args= 2>/dev/null | grep -E "dsh .*--profile|--profile .*--port|dsh web" | grep -v grep | head -6',
     `node -e '`
-    + 'const http=require("http");'
-    + 'const ports=process.argv.slice(1).map(Number).filter(Number.isInteger);'
-    + 'let i=0;'
+    + 'const http=require("http"),fs=require("fs");'
+    + 'const seed=process.argv.slice(1).map(Number).filter(Number.isInteger);'
+    + 'const ports=new Set(seed);'
+    // Linux：把宿主全部 TCP 监听端口纳入候选（docker 映射场景 127.0.0.1:13080 之类
+    // 无法从进程参数推断）。macOS 无 /proc，静默跳过、由静态候选兜底。
+    + 'for(const f of ["/proc/net/tcp","/proc/net/tcp6"]){'
+    + 'try{const t=fs.readFileSync(f,"utf8");'
+    + 'for(const line of t.split("\\n").slice(1)){'
+    + 'const c=line.trim().split(/\\s+/);'
+    + 'if(c[3]==="0A"){const p=parseInt((c[1]||"").split(":")[1],16);'
+    + 'if(p>=1024&&p<=65535)ports.add(p)}}}catch(e){}}'
+    + 'const list=[...ports];'
+    // 已保存的对端配置端口最先探测，静态候选次之，宿主全量监听最后；
+    // 本机回环 ECONNREFUSED 立即返回，仅挂起连接吃满 700ms 超时，4 路并发控制最坏耗时。
+    + 'const preferred=' + (preferredWebPort !== undefined ? String(preferredWebPort) : 'null') + ';'
+    + 'const rank=p=>p===preferred?0:(seed.includes(p)?1:2);'
+    + 'list.sort((a,b)=>rank(a)-rank(b));'
+    + 'let i=0;let active=0;'
+    + 'function done(){active--;if(i>=list.length&&active===0)process.exit(0);probe()}'
     + 'function probe(){'
-    + 'if(i>=ports.length)process.exit(0);'
-    + 'const port=ports[i++];'
+    + 'while(i<list.length&&active<4){'
+    + 'const port=list[i++];'
+    + 'let settled=false;'
+    + 'function finish(){if(settled)return;settled=true;done()}'
     + 'const req=http.get({host:"127.0.0.1",port,path:"/api/dshb/sync/internal/handshake",timeout:700},res=>{'
     + 'let body="";res.on("data",c=>body+=c);res.on("end",()=>{'
     + 'try{const j=JSON.parse(body);if(j&&j.ok===true&&typeof j.instanceId==="string")'
-    + '{console.log("handshake "+port+" "+j.instanceId)}}catch(e){}probe()})});'
-    + 'req.on("timeout",()=>{req.destroy();probe()});'
-    + 'req.on("error",()=>probe());'
-    + '}probe()'
+    + '{console.log("handshake "+port+" "+j.instanceId)}}catch(e){}finish()})});'
+    + 'req.on("timeout",()=>{req.destroy();finish()});'
+    + 'req.on("error",()=>finish());'
+    + 'active++}'
+    + '}'
+    + 'probe()'
     + "' "
     + (preferredWebPort !== undefined ? ` ${preferredWebPort}` : '')
     + ' 3080 8080 3079 3204 3206 3207 9080'
-    + ` $(ps -eo args= 2>/dev/null | grep -o "\\-\\-port [0-9]\\+" | awk '{print $2}' | head -6)`,
+    // docker 端口映射（docker-proxy -host-port 13080）与裸 dsh --port 均纳入。
+    + ` $(ps -eo args= 2>/dev/null | grep -oE "(--port|-host-port) [0-9]+" | awk '{print $2}' | head -8)`,
     `echo ${REMOTE_PROBE_END_MARKER}`,
   ].join('\n')
 }

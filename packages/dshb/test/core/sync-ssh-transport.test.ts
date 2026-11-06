@@ -209,6 +209,24 @@ describe('远端配置探测', () => {
     expect(script).toContain('/api/dshb/sync/internal/handshake')
   })
 
+  it('探测循环必须回填并发窗口（否则超出首批 4 个的候选永不探测）', () => {
+    // 0.1.51 及之前的实机 bug：done() 只递减计数，13080 排第 9 位从未被探测。
+    const script = buildRemoteProbeScript()
+    expect(script).toContain('function done(){active--;if(i>=list.length&&active===0)process.exit(0);probe()}')
+    // timeout 触发 destroy 后 error 事件会重复回调，须防重入
+    expect(script).toContain('function finish(){if(settled)return;settled=true;done()}')
+  })
+
+  it('发现脚本扫描宿主监听端口与 docker 映射端口（193 场景 13080 可被发现）', () => {
+    const script = buildRemoteProbeScript(undefined, 13080)
+    // docker 端口映射：docker-proxy 参数是 -host-port，而非 --port
+    expect(script).toContain('-host-port')
+    // Linux 宿主全量 TCP 监听端口兜底（macOS 无 /proc 时静默跳过）
+    expect(script).toContain('/proc/net/tcp')
+    // 已保存的对端端口优先探测
+    expect(script).toContain(' 13080 ')
+  })
+
   it('解析探测输出：home/profile/握手端口与指纹', () => {
     const output = [
       'DSHB_PROBE_BEGIN',
