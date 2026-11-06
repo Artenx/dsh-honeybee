@@ -132,13 +132,10 @@ describe('移动端页面兼容', () => {
     expect(html).toContain('Promise.withResolvers = function')
   })
 
-  it('dshb-debug 屏幕错误面板默认关闭、带标记时激活', () => {
+  it('dshb-debug 屏幕错误面板已移除（0.1.51）', () => {
     const html = installLoopbackCompat('<html><head></head><body></body></html>')
-    expect(html).toContain('dshb-debug-panel')
-    const gate = html.indexOf('if (!/')
-    const panel = html.indexOf('dshb-debug-panel')
-    expect(gate).toBeGreaterThan(-1)
-    expect(panel).toBeGreaterThan(gate)
+    expect(html).not.toContain('dshb-debug-panel')
+    expect(html).not.toContain('dshb-debug')
   })
 })
 

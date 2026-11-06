@@ -28,7 +28,7 @@ describe('single-package distribution', () => {
       devDependencies: Record<string, string>
     }
 
-    expect(pkg.version).toBe('0.1.50')
+    expect(pkg.version).toBe('0.1.51')
     expect(pkg.dsh.compatibility.dshReleases).toBe(pkg.engines.dsh)
     expect(pkg.engines.dsh).toContain('>=0.2.2-rc.1 <0.2.3')
     for (const [name, range] of Object.entries(pkg.peerDependencies)) {
