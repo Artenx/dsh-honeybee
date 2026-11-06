@@ -28,7 +28,7 @@ describe('single-package distribution', () => {
       devDependencies: Record<string, string>
     }
 
-    expect(pkg.version).toBe('0.1.49')
+    expect(pkg.version).toBe('0.1.50')
     expect(pkg.dsh.compatibility.dshReleases).toBe(pkg.engines.dsh)
     expect(pkg.engines.dsh).toContain('>=0.2.2-rc.1 <0.2.3')
     for (const [name, range] of Object.entries(pkg.peerDependencies)) {
@@ -68,5 +68,22 @@ describe('single-package distribution', () => {
     expect(pkg.dsh.bundle.patch).toBe('./cordis.patch.yml')
     expect(pkg.dsh.client.platform).toBe('web')
     expect(pkg.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-settings')
+  })
+
+  it('yields the mobile drawer to the upstream native drawer (dsh >= 0.2.2)', () => {
+    // 0.2.2 起 AppFrame 自带 data-sidebar-drawer 抽屉且 centerCol 固定 grid-area:1/2；
+    // dshb 若继续强设 grid-template-columns: minmax(0,1fr) 0 0，第 2 列会被压成 0 宽，
+    // 手机端会话区整体移出屏幕（白屏根因）。客户端必须：探测上游抽屉 -> 改打
+    // frame-native 标记（不触发 dshb 抽屉 CSS）-> 停用 dshb 切换按钮/遮罩。
+    const client = read('../lib/client.js')
+
+    expect(client).toContain('data-sidebar-drawer')
+    expect(client).toContain('frame-native')
+    // 探测函数必须扫描 style 标签而非仅 matchMedia，避免上游 CSS 晚注入时漏判
+    expect(client).toMatch(/querySelectorAll\((["'])style\1\)/)
+    // 切换按钮与 FAB/遮罩必须在上游抽屉存在时退场（防双按钮/双遮罩）
+    expect(client).toContain('if (native) return null')
+    expect(client).toMatch(/upstreamHandlesDrawer\(\) ?\|\| ?!narrow\.matches/)
+    expect(client.match(/upstreamHandlesDrawer/g)?.length ?? 0).toBeGreaterThanOrEqual(4)
   })
 })

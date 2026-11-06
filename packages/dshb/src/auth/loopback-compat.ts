@@ -136,6 +136,41 @@ export function loopbackCompatScript(): string {
   })
   push('boot', 'UA=' + navigator.userAgent)
   push('boot', 'url=' + window.location.href)
+  function dumpLayout() {
+    function rect(el) {
+      var r = el.getBoundingClientRect()
+      return Math.round(r.x) + ',' + Math.round(r.y) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)
+    }
+    push('layout', 'viewport=' + window.innerWidth + 'x' + window.innerHeight + ' vvH=' + (window.visualViewport ? Math.round(window.visualViewport.height) : 'n/a') + ' scroll=' + document.documentElement.scrollWidth + 'x' + document.documentElement.scrollHeight)
+    push('layout', 'dshbCss=' + !!document.getElementById('dshb-mobile-fix'))
+    var root = document.getElementById('root')
+    if (root) push('layout', '#root ' + rect(root) + ' kids=' + root.children.length)
+    var slots = document.querySelectorAll('[data-slot]')
+    var seen = {}
+    for (var i = 0; i < slots.length && i < 300; i++) {
+      var s = slots[i].getAttribute('data-slot')
+      if (!s || seen[s]) continue
+      seen[s] = 1
+      if (/^(root|sidebar|main|centerCol|sidebarCol|rightbarCol|bottomRow|overlayLayer|main\.conversation|conversation\.session|shell\.overlay)$/.test(s)) {
+        push('layout', '[data-slot=' + s + '] ' + rect(slots[i]))
+      }
+    }
+    if (root && root.children.length === 0) push('layout', '#root EMPTY — app not mounted')
+  }
+  push('boot', 'tap "LAYOUT" below to dump layout; or wait 8s for auto dump')
+  setTimeout(dumpLayout, 8000)
+  window.addEventListener('load', function () { setTimeout(dumpLayout, 4000) })
+  document.addEventListener('click', function (event) {
+    if (event.target && event.target.id === 'dshb-layout-btn') dumpLayout()
+  }, true)
+  setTimeout(function () {
+    if (!panel) return
+    var btn = document.createElement('div')
+    btn.id = 'dshb-layout-btn'
+    btn.textContent = '[dump layout]'
+    btn.style.cssText = 'color:#ffd24d;font-weight:700;padding:2px 0 4px'
+    panel.insertBefore(btn, panel.firstChild.nextSibling)
+  }, 300)
 })()
 ;(async function () {
   try {
