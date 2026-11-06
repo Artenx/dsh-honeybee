@@ -28,7 +28,7 @@ describe('single-package distribution', () => {
       devDependencies: Record<string, string>
     }
 
-    expect(pkg.version).toBe('0.1.52')
+    expect(pkg.version).toBe('0.1.53')
     expect(pkg.dsh.compatibility.dshReleases).toBe(pkg.engines.dsh)
     expect(pkg.engines.dsh).toContain('>=0.2.2-rc.1 <0.2.3')
     for (const [name, range] of Object.entries(pkg.peerDependencies)) {
@@ -68,6 +68,15 @@ describe('single-package distribution', () => {
     expect(pkg.dsh.bundle.patch).toBe('./cordis.patch.yml')
     expect(pkg.dsh.client.platform).toBe('web')
     expect(pkg.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-settings')
+  })
+
+  it('ships the sidebar remote-catalog entry for metadata sync browsing', () => {
+    // 元数据同步的远端目录浏览：侧栏 footer 入口 + 目录浮层 + relay 打开
+    const client = read('../lib/client.js')
+    expect(client).toContain('sidebar.footer.action')
+    expect(client).toContain('dshb-remote-catalog')
+    expect(client).toContain('/api/dshb/sync/peers/')
+    expect(client).toContain('data-dshb-remote-overlay')
   })
 
   it('yields the mobile drawer to the upstream native drawer (dsh >= 0.2.2)', () => {

@@ -80,8 +80,47 @@ const OVERLAY_STYLE = `
 [data-dshb-remote-overlay] > iframe { flex: 1; width: 100%; border: 0; background: transparent; }
 `
 
-function RemoteSessionOverlay({ peerId, onClose }: { peerId: string; onClose: () => void }): ReactElement {
-  return (
+export const REMOTE_CATALOG_PANEL_STYLE = `
+[data-dshb-remote-catalog="open"] {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border: none; border-radius: 8px; background: none;
+  color: inherit; cursor: pointer; opacity: .7; padding: 0;
+}
+[data-dshb-remote-catalog="open"]:hover { opacity: 1; background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.18)); }
+[data-dshb-remote-catalog-panel] {
+  position: fixed; left: 0; top: 0; bottom: 0; width: min(340px, 92vw); z-index: 2147482900;
+  background: var(--dsw-alias-bg-layer-1, #15171b); color: var(--dsw-alias-label-primary, #e8eaed);
+  border-right: 1px solid var(--dsw-alias-border-l2, rgba(255,255,255,.08));
+  box-shadow: 8px 0 28px rgba(0,0,0,.35); display: flex; flex-direction: column;
+  font-size: 13px; overflow: hidden;
+}
+[data-dshb-remote-catalog-panel] > header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(255,255,255,.08)); flex: none;
+}
+[data-dshb-remote-catalog-panel] > header .title { font-weight: 600; flex: 1; }
+[data-dshb-remote-catalog-panel] > header button { cursor: pointer; background: none; border: none; color: inherit; padding: 4px; }
+[data-dshb-remote-catalog-body] { flex: 1; overflow-y: auto; padding: 8px 6px 16px; }
+[data-dshb-remote-catalog-body] .peer { margin: 6px 4px 12px; }
+[data-dshb-remote-catalog-body] .peer-name { font-weight: 600; padding: 4px 8px; display: flex; align-items: center; gap: 6px; }
+[data-dshb-remote-catalog-body] .peer-meta { opacity: .55; font-size: 11px; font-weight: 400; }
+[data-dshb-remote-catalog-body] .ws { margin: 2px 0 2px 10px; }
+[data-dshb-remote-catalog-body] .ws-title { padding: 4px 8px; opacity: .8; display: flex; gap: 6px; align-items: baseline; }
+[data-dshb-remote-catalog-body] .ws-path { font-size: 11px; opacity: .5; font-family: ui-monospace, Menlo, Consolas, monospace; }
+[data-dshb-remote-catalog-body] .sess {
+  display: flex; align-items: center; gap: 8px; width: calc(100% - 18px); margin: 1px 0 1px 18px;
+  padding: 5px 8px; border: none; border-radius: 8px; background: none; color: inherit;
+  text-align: left; cursor: pointer; font-size: 13px;
+}
+[data-dshb-remote-catalog-body] .sess:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
+[data-dshb-remote-catalog-body] .sess .s-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-dshb-remote-catalog-body] .sess .s-size { font-size: 11px; opacity: .45; flex: none; }
+[data-dshb-remote-catalog-body] .empty { padding: 8px 12px; opacity: .55; }
+[data-dshb-remote-catalog-body] .err { padding: 6px 10px; margin: 4px 8px; border-radius: 8px; background: var(--dsw-alias-state-error-tertiary, rgba(220,60,60,.15)); font-size: 12px; }
+[data-dshb-remote-catalog-backdrop] { position: fixed; inset: 0; z-index: 2147482800; background: rgba(0,0,0,.32); }
+`
+
+export function RemoteSessionOverlay({ peerId, onClose }: { peerId: string; onClose: () => void }): ReactElement {  return (
     <div data-dshb-remote-overlay role="dialog" aria-label="远端会话">
       <style>{OVERLAY_STYLE}</style>
       <header>

@@ -8,6 +8,7 @@ import { DirectoryFlowOccupant } from './directory-flow.js'
 import { installMobile } from './mobile.js'
 import { registerWorkspaceInstructionMenu } from './workspace-instruction-menu.js'
 import { installRemoteSessionEntry } from './remote-session.js'
+import { installRemoteCatalogEntry } from './remote-catalog.js'
 import { SyncPeersSection } from './sync-peers.js'
 import { SyncOfflineSection } from './sync-offline.js'
 
@@ -688,6 +689,7 @@ export function apply(ctx: ClientContext): void {
         sub.slots.register({ name: 'sidebar.workspaces.directoryFlow', priority: -10 }, DirectoryFlowOccupant),
       )
       installRemoteSessionEntry(sub)
+      installRemoteCatalogEntry(sub)
     },
   })
 
