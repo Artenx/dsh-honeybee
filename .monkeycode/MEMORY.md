@@ -198,3 +198,14 @@ Entries discovered by the Agent during task execution should follow this format:
   - 桌面端（Electron 宿主堆约 1.4GB）节点同步 OOM 崩溃的根因是单次传输/驻留全部会话：导出端 canonicalJson 巨型字符串 + events.map 深拷贝（4-5 倍放大）、附件 base64 内联 JSON、导出对象缓存无上限、接收端整包 JSON.parse。0.1.31 起的修复约定：传输限额 128MB（MAX_SYNC_TRANSFER_BYTES）、摘要必须流式逐事件哈希且与 canonicalJson 逐字节等价（改算法需两端同版，否则 revision-conflict）、附件缓存 64MB LRU、超大附件记 session-payload-too-large 跳过该会话、协调器按 12MB/批自适应分批（单会话独占一批）。改动同步内存逻辑时必须保持这些边界
   - 上游 dsh-client-ui-model-selection 自 0.2.1-rc.2 起菜单已 position:fixed 并自带 place() 视口钳制（portal 到 body）；插件此前写入的 left/width !important 兜底会覆盖上游计算，对菜单内搜索框自动聚焦做 blur 会触发上游 onBlur 的 close()（焦点移出菜单即关闭）——手机上表现为菜单刚打开就被关掉。插件只保留模型名换行与字号适配，定位与焦点完全交还上游
   - 3204 预览 profile 的 `profiles/web/package.json` 的 `dsh.profile.bundles` 曾丢失 `@artenx/dshb` 导致插件不激活（/login 404、内部路由 401 unauthorized 来自 DSH 自身围栏）；修复为手补 bundles 数组并重启
+
+[Project Knowledge Summary]
+- Date: 2026-11-06
+- Context: Agent 排查 193 升级 DSH 0.2.2-rc.1 后 iPhone Safari 打开 Web UI 白屏（桌面正常）
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 白屏根因是 dshb mobile.tsx 自绘抽屉与 0.2.2 原生抽屉冲突：0.2.2 起 AppFrame 在 viewport<768 给 frame 加 data-sidebar-drawer（侧栏列自带绝对定位+translate+drawerMask+leadingSeat），且 centerCol 从无 grid-area 改为固定 grid-area:1/2；dshb 旧规则 `[data-dshb-mobile="frame"]{grid-template-columns:minmax(0,1fr) 0 0!important}` 会把第 2 列压成 0 宽 → 会话区 0x844@390 移出屏幕（实测：正确态 columns=0px 390px 0px，冲突态=390px 0px 0px）。0.2.1 无 grid-area 靠自动布局落在第 1 列，故旧规则当时可用
+  - 0.1.50 修复模式：运行时扫描 style 标签探测 `data-sidebar-drawer`（上游 CSS 晚注入，须 MutationObserver 内复查升级标记），命中则 frame 标记改打 frame-native 使 dshb 抽屉 CSS 整体失效，并停用 dshb 切换按钮/FAB/遮罩防重复；打包测试锁定该让位逻辑
+  - 通用教训：dshb 引用上游 hashed class（1gdtu_/4qrvp_/7KE1Ra_ 等）的规则在上游升级后会静默失效（0.2.2 实测 23 个选择器 21 个 0 命中），排障时先在真实 DOM 上 querySelectorAll 数命中再谈冲突；凡基于上游布局结构的覆盖（grid 列、绝对定位、z-index）必须做能力探测而非写死
+  - headless Chrome 无法复现该 bug 的原因：MOBILE_QUERY=`(max-width:1023px) and (pointer:coarse)`，headless 报 pointer:fine，dshb 抽屉标记根本没打上（CDP setEmulatedMedia 不支持 pointer 特性，模拟粗指针无效）；真机差异要靠 dshb-debug 面板（#dshb-debug，含 layout 转储）在真机上取证
+  - 193 dshb 增量部署流程（0.1.49/0.1.50 实测）：本地 `tar czf lib cordis.patch.yml package.json` → scp 到 /tmp → 服务器校验旧版本号 → `cp -a` 备份到 /root/dshb-backup-* → tar 解压覆盖 `/home/mt/.dsh/profiles/web/node_modules/@artenx/dshb` → chown 1001:1001 lib → docker restart dsh → 轮询 /api/dshb/sync/peers 健康检查；npm staged 发布（pnpm --filter @artenx/dshb publish --no-git-checks）需 npmjs.com 审批后 latest 才生效，急用时走增量部署
