@@ -57,6 +57,7 @@ const serverEntries = {
   'core/sync/scheduler': 'src/core/sync/scheduler.ts',
   'core/sync/session-journal': 'src/core/sync/session-journal.ts',
   'core/sync/session-routes': 'src/core/sync/session-routes.ts',
+  'core/sync/session-open-routes': 'src/core/sync/session-open-routes.ts',
   'core/sync/session-sync': 'src/core/sync/session-sync.ts',
   'core/sync/ssh-transport': 'src/core/sync/ssh-transport.ts',
   'core/sync/stores': 'src/core/sync/stores.ts',

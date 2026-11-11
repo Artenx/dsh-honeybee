@@ -68,7 +68,7 @@ function RemoteSessionRowAction({ sessionId }: RowActionProps): ReactElement | n
           <path d="M8 3.5a4.5 4.5 0 0 1 4.5 4.5M8 3.5A4.5 4.5 0 0 0 3.5 8M8 12.5a4.5 4.5 0 0 0 3.2-1.3M8 12.5a4.5 4.5 0 0 1-3.2-1.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
         </svg>
       </button>
-      {open ? <RemoteSessionOverlay peerId={origin.peerId} onClose={() => setOpen(false)} /> : null}
+      {open ? <RemoteSessionOverlay peerId={origin.peerId} sessionId={origin.remoteSessionId} onClose={() => setOpen(false)} /> : null}
     </>
   )
 }
@@ -120,7 +120,12 @@ export const REMOTE_CATALOG_PANEL_STYLE = `
 [data-dshb-remote-catalog-backdrop] { position: fixed; inset: 0; z-index: 2147482800; background: rgba(0,0,0,.32); }
 `
 
-export function RemoteSessionOverlay({ peerId, onClose }: { peerId: string; onClose: () => void }): ReactElement {  return (
+export function RemoteSessionOverlay({ peerId, sessionId, onClose }: { peerId: string; sessionId?: string; onClose: () => void }): ReactElement {
+  // sessionId 为远端实例的原始会话 ID：经 hash 传给对端 dshb 的定位引导
+  // （remote-session-bootstrap），iframe 落地后自动打开该会话；未传时
+  // 打开远端首页（对端旧版/无目标会话场景）。
+  const hash = sessionId ? `#dshb-session=${encodeURIComponent(sessionId)}` : ''
+  return (
     <div data-dshb-remote-overlay role="dialog" aria-label="远端会话">
       <style>{OVERLAY_STYLE}</style>
       <header>
@@ -130,8 +135,9 @@ export function RemoteSessionOverlay({ peerId, onClose }: { peerId: string; onCl
           </svg>
         </button>
         <span>远端会话视图 · 实时操作远端 DSH</span>
+        {!sessionId ? <span style={{ opacity: 0.55 }}>若未自动定位，请在页面中选择工作区与会话</span> : null}
       </header>
-      <iframe src={`/api/dshb/sync/relay/${encodeURIComponent(peerId)}/app/`} title="远端会话" />
+      <iframe src={`/api/dshb/sync/relay/${encodeURIComponent(peerId)}/app/${hash}`} title="远端会话" />
     </div>
   )
 }

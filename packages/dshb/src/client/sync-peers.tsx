@@ -448,13 +448,27 @@ export function SyncPeersSection(): ReactElement {
   }
 
   const remove = async (): Promise<void> => {
-    if (selectedId === 'new' || !window.confirm('删除此同步节点及其连接凭据？')) return
+    if (selectedId === 'new') return
+    const isMetadata = selectedPeer?.mode === 'metadata' && selectedPeer?.syncSessions
+    const confirmation = isMetadata
+      ? '删除此元数据同步节点后，本机从该节点导入的会话会被归档（从活动工作区移除，原始数据保留在归档中可恢复）；仅含这些会话的远端工作区注册也会删除。继续？'
+      : '删除此全量同步节点后，本机已同步的会话和工作区保留不变，可像本地会话一样归档。继续？'
+    if (!window.confirm(confirmation)) return
     setBusy(true)
     try {
       const response = await fetch(`/api/dshb/sync/peers/${selectedId}`, { method: 'DELETE' })
-      const data = await readJsonResponse<{ ok?: boolean; error?: string }>(response, '删除同步节点失败')
+      const data = await readJsonResponse<{
+        ok?: boolean
+        error?: string
+        cleanup?: { sessionsArchived?: number; workspacesRemoved?: number; workspacesDetached?: number }
+      }>(response, '删除同步节点失败')
       if (!response.ok || !data.ok) throw new Error(data.error ?? '删除同步节点失败')
-      setNotice({ kind: 'ok', text: '同步节点已删除' })
+      const cleanup = data.cleanup
+      const text = isMetadata && cleanup
+        ? '同步节点已删除；' + (cleanup.sessionsArchived ?? 0) + ' 个导入会话已归档（可从归档恢复），' + (cleanup.workspacesRemoved ?? 0) + ' 个远端工作区已移除' + (cleanup.workspacesDetached ? '，' + cleanup.workspacesDetached + ' 个含其他会话的工作区已保留' : '')
+        : isMetadata ? '同步节点已删除；本机归档清理未返回结果，请检查相关工作区' : '同步节点已删除；全量同步的本地会话和工作区已保留不变'
+      setNotice({ kind: 'ok', text })
+      window.dispatchEvent(new Event('dshb:sync-peers-changed'))
       setSelectedId('new')
       setForm(EMPTY_SYNC_PEER_FORM)
       reload()

@@ -194,8 +194,17 @@ export class SyncSshTransport {
   private readonly hostKeyChallenges = new SyncHostKeyChallenges()
   /** 每对端当前打开的 SSH 会话：手动停止同步时立即关闭通道，等待中的 readFrames 随即返回。 */
   private readonly openSessions = new Map<string, Set<SyncSshSession>>()
+  /** wss 中继数据面（可选注入）：会话 manifest/entries 优先经 direct-tcpip 通道读取，失败降级 helper。 */
+  private relayDataPlane: {
+    relayInternal(peerId: string, method: 'GET' | 'POST', path: string, body?: Buffer): Promise<{ status: number; body: Buffer }>
+  } | undefined
 
   constructor(private readonly peerManager: SyncPeerManager) {}
+
+  /** 注入 wss 中继数据面（RemoteRelayService）；index.ts 在两者都就绪后调用。 */
+  setRelayDataPlane(relay: NonNullable<SyncSshTransport['relayDataPlane']>): void {
+    this.relayDataPlane = relay
+  }
 
   private trackSession(peerId: string, session: SyncSshSession): void {
     const sessions = this.openSessions.get(peerId) ?? new Set<SyncSshSession>()
@@ -219,6 +228,19 @@ export class SyncSshTransport {
       } catch {}
     }
     return sessions.size
+  }
+
+  /**
+   * 拉取远端超限会话的原始会话文件（session.v4.jsonl.zstd 字节）。
+   * 仅经 wss 中继数据面：file 端点由远端 dshb 按 mirror 映射定位文件。
+   */
+  async fetchSessionFileViaInternal(peerId: string, sessionId: string, remotePath: string): Promise<Buffer> {
+    if (this.relayDataPlane === undefined) {
+      throw new SyncSshProbeError('helper')
+    }
+    const { body } = await this.relayDataPlane.relayInternal(peerId, 'POST', '/api/dshb/sync/internal/sessions/file',
+      Buffer.from(JSON.stringify({ sessionId, remotePath }), 'utf8'))
+    return body
   }
 
   async probe(peerId: string): Promise<SyncRemoteHandshake> {
@@ -439,6 +461,23 @@ export class SyncSshTransport {
   }
 
   async fetchSessionManifest(peerId: string): Promise<SyncSessionManifest> {
+    // wss 数据面优先：一次 direct-tcpip 通道代替「SSH 握手 + 远端 helper 进程」。
+    if (this.relayDataPlane !== undefined) {
+      try {
+        const { body } = await this.relayDataPlane.relayInternal(peerId, 'GET', '/api/dshb/sync/internal/sessions/manifest')
+        const value = JSON.parse(body.toString('utf8')) as unknown
+        if (!isRecord(value) || value.ok !== true || !isRecord(value.manifest)) throw new SyncSshProbeError('helper')
+        const manifest = value.manifest
+        if (manifest.protocolVersion !== 1 || typeof manifest.instanceId !== 'string' ||
+          !Array.isArray(manifest.entries) || !Array.isArray(manifest.skipped) || typeof manifest.digest !== 'string') {
+          throw new SyncSshProbeError('protocol')
+        }
+        return manifest as unknown as SyncSessionManifest
+      } catch (error) {
+        // 中继层错误（通道不可达/凭据失败等）降级 helper 协议；数据/协议错误照常抛出。
+        if (!((error as Error | undefined)?.name === 'RemoteRelayError')) throw error
+      }
+    }
     const value = await this.fetchDataOperation(peerId, 'session-manifest')
     if (!isRecord(value) || value.ok !== true || !isRecord(value.manifest)) throw new SyncSshProbeError('helper')
     const manifest = value.manifest
@@ -480,6 +519,23 @@ export class SyncSshTransport {
     prefixes: readonly SyncSessionEventPrefix[] = [],
     deferredObjects = false,
   ): Promise<SyncSessionBundle> {
+    // wss 数据面优先：POST body 小（keys+digest），响应可达数十 MB（64MB relay 上限内）。
+    if (this.relayDataPlane !== undefined) {
+      try {
+        const { body } = await this.relayDataPlane.relayInternal(peerId, 'POST', '/api/dshb/sync/internal/sessions/entries',
+          Buffer.from(JSON.stringify({ keys, manifestDigest, prefixes, deferredObjects }), 'utf8'))
+        const value = JSON.parse(body.toString('utf8')) as unknown
+        if (!isRecord(value) || value.ok !== true || !isRecord(value.bundle)) throw new SyncSshProbeError('helper')
+        const bundle = value.bundle
+        if (bundle.protocolVersion !== 1 || typeof bundle.instanceId !== 'string' ||
+          !Array.isArray(bundle.entries) || !Array.isArray(bundle.skipped) || typeof bundle.digest !== 'string') {
+          throw new SyncSshProbeError('protocol')
+        }
+        return bundle as unknown as SyncSessionBundle
+      } catch (error) {
+        if (!((error as Error | undefined)?.name === 'RemoteRelayError')) throw error
+      }
+    }
     const value = await this.fetchDataOperation(peerId, 'session-entries', { keys, manifestDigest, prefixes, deferredObjects })
     if (!isRecord(value) || value.ok !== true || !isRecord(value.bundle)) throw new SyncSshProbeError('helper')
     const bundle = value.bundle

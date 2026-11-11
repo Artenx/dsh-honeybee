@@ -267,7 +267,18 @@ export class SessionInstructionSnapshotStore {
     }
     const existing = this.data.records[snapshot.sessionId]
     if (existing) {
-      if (JSON.stringify(existing) !== JSON.stringify(snapshot)) throw new Error('session instruction snapshot already differs')
+      // 工作区注册表可能在两次导入间被重建（ID 变化、路径不变）；按指令内容与捕获时间
+      // 判等，workspaceId 以本次快照为准更新，避免把注册表重建误判为指令冲突。
+      if (existing.text !== snapshot.text || existing.capturedAt !== snapshot.capturedAt ||
+        (existing.digest ?? undefined) !== (snapshot.digest ?? undefined) ||
+        (existing.workspaceRevision ?? undefined) !== (snapshot.workspaceRevision ?? undefined)) {
+        throw new Error('session instruction snapshot already differs')
+      }
+      if (existing.workspaceId !== snapshot.workspaceId) {
+        this.data.records[snapshot.sessionId] = { ...existing, workspaceId: snapshot.workspaceId }
+        this.save()
+        return { ...this.data.records[snapshot.sessionId]! }
+      }
       return { ...existing }
     }
     this.data.records[snapshot.sessionId] = { ...snapshot }

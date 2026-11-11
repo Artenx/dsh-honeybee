@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { SyncHostKeyChallengeError, SyncHostKeyChallengeExpiredError } from './host-key.js'
 import { SyncPeerInputError, SyncPeerManager, SyncPeerNotFoundError } from './peer-manager.js'
+import type { SyncPeerView } from './peer-manager.js'
 import { SyncRemoteProbe, SyncSshProbeError, SyncSshTransport } from './ssh-transport.js'
 import { SyncCoordinator, SyncCoordinatorError } from './coordinator.js'
 
@@ -117,11 +118,19 @@ function sendRunFailure(res: ServerResponse, error: unknown): void {
   sendJson(res, 500, { ok: false, error: 'sync run failed' })
 }
 
+export interface MetadataPeerRemovalResult {
+  sessionsArchived: number
+  workspacesRemoved: number
+  workspacesDetached: number
+}
+
 export function registerSyncPeerRoutes(
   ctx: Context,
   manager: SyncPeerManager,
   transport?: SyncSshTransport,
   coordinator?: SyncCoordinator,
+  removeMetadataImports?: (peer: SyncPeerView, remoteInstanceId?: string) => Promise<MetadataPeerRemovalResult>,
+  clearMetadataImports?: (peerId: string) => void,
 ): void {
   ctx.effect(() =>
     ctx.webServer.register({
@@ -329,13 +338,31 @@ export function registerSyncPeerRoutes(
 
         if (req.method === 'DELETE') {
           try {
+            const peer = await manager.get(peerId)
+            if (!peer) {
+              sendJson(res, 404, { ok: false, error: 'sync peer not found' })
+              return
+            }
+            let cleanup: MetadataPeerRemovalResult | undefined
+            if (peer.mode === 'metadata' && removeMetadataImports) {
+              if (!transport) {
+                sendJson(res, 503, { ok: false, error: 'SSH sync transport unavailable; metadata imports were not removed' })
+                return
+              }
+              // Prefer the authenticated instance identity; tracked on-demand imports
+              // still allow safe cleanup if the peer is offline at deletion time.
+              let remoteInstanceId: string | undefined
+              try { remoteInstanceId = (await transport.probe(peerId)).instanceId } catch {}
+              cleanup = await removeMetadataImports(peer, remoteInstanceId)
+            }
             if (!(await manager.remove(peerId))) {
               sendJson(res, 404, { ok: false, error: 'sync peer not found' })
               return
             }
-            sendJson(res, 200, { ok: true })
-          } catch {
-            sendJson(res, 500, { ok: false, error: 'sync peer removal failed' })
+            if (peer.mode === 'metadata') clearMetadataImports?.(peerId)
+            sendJson(res, 200, { ok: true, ...(cleanup ? { cleanup } : {}) })
+          } catch (error) {
+            sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : 'sync peer removal failed' })
           }
           return
         }

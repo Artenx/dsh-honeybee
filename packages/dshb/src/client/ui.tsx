@@ -8,11 +8,12 @@ import { DirectoryFlowOccupant } from './directory-flow.js'
 import { installMobile } from './mobile.js'
 import { registerWorkspaceInstructionMenu } from './workspace-instruction-menu.js'
 import { installRemoteSessionEntry } from './remote-session.js'
-import { installRemoteCatalogEntry } from './remote-catalog.js'
+import { installRemoteWorkspacesSection } from './remote-workspaces.js'
+import { openRemoteSessionFromHash } from './remote-session-bootstrap.js'
 import { SyncPeersSection } from './sync-peers.js'
 import { SyncOfflineSection } from './sync-offline.js'
 
-export const inject = ['connection', 'workspaces', 'slots', 'layout', 'conversation']
+export const inject = ['connection', 'workspaces', 'slots', 'layout', 'conversation', 'sessions', 'uiWorkspace']
 
 const SECTION_ID = 'dshb-nodes'
 
@@ -640,6 +641,17 @@ export function apply(ctx: ClientContext): void {
        position:fixed 经 portal 渲染。子代理很多时 flex 压缩 node（flex-shrink:1 默认），
        文字挤压且不触发滚动。给 node flex-shrink:0 让 menu 整体 overflow:auto 滚动。 */
     [class*="_menu"] [class*="_node"] { flex-shrink: 0 !important; }
+    /* 模型选择菜单（dsh-client-ui-model-selection）：上游对模型名/描述默认 ellipsis 截断，
+       桌面端也会被省略号截断成只显示前几个字母。解除截断让完整名称换行显示。
+       菜单本身 max-width:min(420px,100vw-32px) 且 overflow-y:auto，长名换行不会撑破布局。
+       选择器同时覆盖当前 hash（htuFrW_）与语义名（modelName/description/itemLabel），
+       上游升级换 hash 后仍生效。 */
+    [class*="_modelName"], [class*="_itemLabel"], [class*="_description"], [class*="_cellValue"], [class*="_triggerLabel"] {
+      white-space: normal !important;
+      overflow-wrap: break-word !important;
+      text-overflow: clip !important;
+      overflow: visible !important;
+    }
     /* 终端组件（dsh-web-frontend，CSS 模块前缀 1gdtu_）桌面端修复：上游 _command_ 默认
        overflow:hidden+text-overflow:ellipsis，LLM 调 bash 的长命令在桌面端被省略号
        截断、看不到完整内容（输出区 _output_ 本就可横向滚动，唯命令区不行）。宽屏与
@@ -672,6 +684,10 @@ export function apply(ctx: ClientContext): void {
 
   installMobile(ctx)
 
+  // 远端会话定位引导：本地端经 relay 以 #dshb-session=<id> 打开远端首页时，
+  // 对端 dshb 在自己的客户端里读取 hash 并调用 uiWorkspace.openSession。
+  openRemoteSessionFromHash(ctx)
+
   registerWorkspaceInstructionMenu(ctx)
 
   ctx.plugin({
@@ -689,7 +705,7 @@ export function apply(ctx: ClientContext): void {
         sub.slots.register({ name: 'sidebar.workspaces.directoryFlow', priority: -10 }, DirectoryFlowOccupant),
       )
       installRemoteSessionEntry(sub)
-      installRemoteCatalogEntry(sub)
+      installRemoteWorkspacesSection(sub)
     },
   })
 

@@ -401,6 +401,33 @@ export class RemoteRelayService {
     }
   }
 
+  /**
+   * 经 direct-tcpip 通道调用远端 dshb internal 数据端点（manifest/entries/objects）。
+   * 相比 SSH helper 协议省去每次 RPC 的握手与远端进程启动；调用方负责在
+   * RemoteRelayError 时降级回 helper 路径。
+   */
+  async relayInternal(
+    peerId: string,
+    method: 'GET' | 'POST',
+    path: string,
+    body?: Buffer,
+  ): Promise<{ status: number; body: Buffer }> {
+    const authority = await this.remoteAuthority(peerId)
+    const cookie = await this.relayTicket(peerId)
+    const result = await this.relayRequest(peerId, {
+      method,
+      path,
+      authority,
+      headers: body === undefined ? {} : { 'content-type': 'application/json' },
+      body,
+      cookie,
+    })
+    if (result.status !== 200) {
+      throw new RemoteRelayError('internal-request-failed', `remote internal endpoint returned ${result.status}`)
+    }
+    return { status: result.status, body: result.body }
+  }
+
   /** 丢弃指定对端缓存的中继凭据（对端重启或凭据被拒时调用）。 */
   dropTicket(peerId: string): void {
     this.tickets.delete(peerId)

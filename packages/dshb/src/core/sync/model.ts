@@ -70,6 +70,9 @@ export interface SyncCatalogSession {
   sizeBytes?: number
   branchId?: string
   deleted?: boolean
+  archived?: boolean
+  /** 空壳会话（无任何用户消息）：远端 UI 不显示，目录消费方也应过滤。 */
+  blank?: boolean
 }
 
 export interface SyncCatalog {

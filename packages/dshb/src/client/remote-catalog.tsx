@@ -77,7 +77,7 @@ async function fetchPeerCatalog(peerId: string): Promise<Catalog> {
 
 function CatalogPanel({ peers, onClose }: { peers: PeerView[]; onClose: () => void }): ReactElement {
   const [entries, setEntries] = useState<CatalogEntry[] | undefined>(undefined)
-  const [openSession, setOpenSession] = useState<{ peerId: string; title: string } | undefined>(undefined)
+  const [openSession, setOpenSession] = useState<{ peerId: string; sessionId?: string } | undefined>(undefined)
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
@@ -101,7 +101,7 @@ function CatalogPanel({ peers, onClose }: { peers: PeerView[]; onClose: () => vo
   }, [peers, reloadKey])
 
   if (openSession) {
-    return <RemoteSessionOverlay peerId={openSession.peerId} onClose={() => setOpenSession(undefined)} />
+    return <RemoteSessionOverlay peerId={openSession.peerId} sessionId={openSession.sessionId} onClose={() => setOpenSession(undefined)} />
   }
 
   return (
@@ -162,7 +162,7 @@ function CatalogPanel({ peers, onClose }: { peers: PeerView[]; onClose: () => vo
                         className="sess"
                         key={session.origin.originEntityId || session.sessionId}
                         title={`打开远端会话（实时操作 ${entry.peer.name}）`}
-                        onClick={() => setOpenSession({ peerId: entry.peer.id, title: session.title ?? session.sessionId })}
+                        onClick={() => setOpenSession({ peerId: entry.peer.id, sessionId: session.sessionId })}
                       >
                         <span className="s-title">{session.title || session.sessionId}</span>
                         <span className="s-size">{formatSize(session.sizeBytes)}</span>
