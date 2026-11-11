@@ -2106,7 +2106,8 @@ export class SyncSessionService {
       this.pendingMigratedAdoptions.push({ metadata, localSessionId, workspaceId, sourceName })
       return false
     }
-    // workspaceId 可能因工作区被重建而失效：依次按 ID、mirror 路径兜底，最后创建。
+    // workspaceId 可能因工作区被重建而失效：按 ID → mirror 路径兜底。
+    // 找不到则跳过 attach（不创建新工作区，避免本地出现与远端同名的额外工作区）。
     const mapping = Object.values(this.state.read().workspaces).find((item) =>
       item.localWorkspaceId === workspaceId)
     let workspace = registry.get(workspaceId)
@@ -2115,20 +2116,8 @@ export class SyncSessionService {
         normalizeHostPath(item.path) === normalizeHostPath(mapping.localPath))
     }
     if (!workspace) {
-      const mirrorPath = mapping?.localPath
-        ?? join(process.env.DSH_HOME ?? homedir(), '.dsh', 'dshb', 'mirrors', `adopted-${Date.now()}`)
-      mkdirSync(mirrorPath, { recursive: true })
-      workspace = await registry.create(mirrorPath, mapping?.title)
-      if (mapping) {
-        this.state.update((draft) => {
-          const item = draft.workspaces[Object.keys(draft.workspaces).find((key) =>
-            draft.workspaces[key].localWorkspaceId === workspaceId) ?? '']
-          if (item) {
-            item.localWorkspaceId = workspace!.id
-            item.localPath = workspace!.path
-          }
-        })
-      }
+      // 工作区尚未建立：跳过 membership（文件已落盘，下次全量同步会正式 attach）。
+      return false
     }
     const sessionId = makeSessionId(localSessionId)
     const snapshot = await this.requirePersistence().stat(sessionId)
