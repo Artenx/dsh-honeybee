@@ -1,8 +1,13 @@
+import type { SyncSelection } from '../core/sync/model.js'
+
 export interface SyncPeerSecretFlags {
   hasPassword: boolean
   hasKey: boolean
   hasPassphrase: boolean
 }
+
+/** 工作区会话同步三态：不同步 / 全量同步 / 元数据同步（实时访问远端）。 */
+export type SessionSyncChoice = 'off' | 'full' | 'metadata'
 
 export interface SyncPeerForm {
   name: string
@@ -16,17 +21,19 @@ export interface SyncPeerForm {
   remoteDshHome: string
   remoteProfile: string
   remoteWebPort: string
-  direction: 'pull' | 'bidirectional'
-  schedule: 'manual' | 'every-5m'
-  syncSessions: boolean
-  enabled: boolean
+  sessionSync: SessionSyncChoice
+  selection: SyncSelection
 }
 
-export interface SyncPeerFormView extends Omit<SyncPeerForm, 'password' | 'privateKey' | 'passphrase' | 'port' | 'remoteWebPort' | 'remoteDshHome' | 'remoteProfile'> {
+export interface SyncPeerFormView extends Omit<SyncPeerForm, 'password' | 'privateKey' | 'passphrase' | 'port' | 'remoteWebPort' | 'remoteDshHome' | 'remoteProfile' | 'selection'> {
   port: number
   remoteDshHome?: string
   remoteProfile?: string
   remoteWebPort?: number
+  selection?: SyncSelection
+  /** 底层存储字段：由 sessionSync 三态推导。 */
+  syncSessions: boolean
+  mode?: 'full' | 'metadata'
   hasSecret: SyncPeerSecretFlags
 }
 
@@ -42,10 +49,8 @@ export const EMPTY_SYNC_PEER_FORM: SyncPeerForm = {
   remoteDshHome: '',
   remoteProfile: '',
   remoteWebPort: '',
-  direction: 'pull',
-  schedule: 'manual',
-  syncSessions: false,
-  enabled: true,
+  sessionSync: 'off',
+  selection: { mode: 'all', nodes: [], workspaces: [], sessions: [] },
 }
 
 export interface SyncPeerFormRequest {
@@ -80,24 +85,31 @@ export function toSyncPeerForm(peer: SyncPeerFormView): SyncPeerForm {
     remoteDshHome: peer.remoteDshHome ?? '',
     remoteProfile: peer.remoteProfile ?? '',
     remoteWebPort: peer.remoteWebPort == null ? '' : String(peer.remoteWebPort),
-    direction: peer.direction,
-    schedule: peer.schedule,
-    syncSessions: peer.syncSessions,
-    enabled: peer.enabled,
+    sessionSync: peer.syncSessions ? (peer.mode === 'metadata' ? 'metadata' : 'full') : 'off',
+    selection: peer.selection ?? { mode: 'all', nodes: [], workspaces: [], sessions: [] },
   }
 }
 
+/**
+ * 把表单归一化为保存请求：
+ * - 工作节点配置恒同步；方向与时机逻辑已取消（双向交换、仅手动触发）。
+ * - 「打开远端会话」（wss 实时访问）不依赖手动同步，元数据同步无需传输离线文件。
+ */
 export function buildSyncPeerFormRequest(form: SyncPeerForm): SyncPeerFormRequest {
+  const syncSessions = form.sessionSync !== 'off'
   const fields: Record<string, unknown> = {
     name: form.name.trim(),
     host: form.host.trim(),
     port: Number(form.port),
     username: form.username.trim(),
     authKind: form.authKind,
-    direction: form.direction,
-    schedule: form.schedule,
-    syncSessions: form.syncSessions,
-    enabled: form.enabled,
+    direction: 'bidirectional',
+    schedule: 'manual',
+    mode: form.sessionSync === 'metadata' ? 'metadata' : 'full',
+    syncNodes: true,
+    syncSessions,
+    selection: form.selection,
+    enabled: true,
     ...(form.remoteDshHome.trim() ? { remoteDshHome: form.remoteDshHome.trim() } : {}),
     ...(form.remoteProfile.trim() ? { remoteProfile: form.remoteProfile.trim() } : {}),
     ...(form.remoteWebPort.trim() ? { remoteWebPort: Number(form.remoteWebPort) } : {}),

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { SyncNodeManifestError, type SyncNodeApplyResult, type SyncNodeEntry, type SyncNodeService } from './node-sync.js'
 import { SyncHostKeyChallengeError } from './host-key.js'
 import { compareSyncRevision } from './revision.js'
-import { syncRecordKey, type SyncPeer } from './model.js'
+import { syncRecordKey, type SyncCatalog, type SyncPeer } from './model.js'
 import { SyncPeerManager, SyncPeerNotFoundError } from './peer-manager.js'
 import type { SyncStateStore } from './stores.js'
 import { SyncSessionDeltaPrefixError, SyncSshProbeError, SyncSshTransport } from './ssh-transport.js'
@@ -25,7 +25,8 @@ import type {
   SyncSessionManifest,
   SyncSessionManifestEntry,
 } from './session-sync.js'
-import { SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY } from './protocol.js'
+import { SYNC_CATALOG_CAPABILITY, SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY } from './protocol.js'
+import { resolveSyncSelection, selectionIncludesNode, selectionIncludesSession } from './selection.js'
 
 const EMPTY_APPLY_RESULT: SyncNodeApplyResult = { created: 0, updated: 0, deleted: 0, pendingRemoval: 0, skipped: 0 }
 const TRANSPORT_RETRY_DELAY_MS = 250
@@ -184,15 +185,28 @@ function mergeSessionSkipped(...reports: Array<readonly { sessionId: string; rea
   return [...merged.values()]
 }
 
-function assertSelectedSessionEntries(
+/**
+ * 把内容快照与 manifest 清单比对，剔除了「manifest 之后发生变化」的条目
+ * （例如对端正被活跃使用的会话：边抓取边推进，快照必然落后）。剔除的条目
+ * 由调用方计入 skippedSessions 并留待下次同步；对端仍在活跃的会话经远端
+ * 会话通道（wss）实时展示，不依赖内容同步。
+ */
+function partitionStaleSessionEntries(
   expectedEntries: readonly SyncSessionManifestEntry[],
   selectedEntries: readonly SyncSessionEntry[],
-  side: string,
-): void {
+): { retained: SyncSessionEntry[]; stale: Array<{ key: string; fields: string; detail: string }> } {
   const expected = new Map(expectedEntries.map((entry) => [syncSessionEntryKey(entry), entry]))
   const selected = new Map(selectedEntries.map((entry) => [syncSessionEntryKey(entry), entry]))
+  const retained: SyncSessionEntry[] = []
+  const stale: Array<{ key: string; fields: string; detail: string }> = []
   if (selected.size !== selectedEntries.length || selected.size !== expected.size) {
-    throw new SyncCoordinatorError('session-manifest-stale', `${side}会话内容与 manifest 清单不一致`)
+    for (const [key, expectedEntry] of expected) {
+      if (!selected.has(key)) stale.push({ key, fields: 'entry-missing', detail: '' })
+    }
+    for (const key of selected.keys()) {
+      if (!expected.has(key)) stale.push({ key, fields: 'unexpected-entry', detail: '' })
+    }
+    return { retained: [], stale }
   }
   for (const [key, expectedEntry] of expected) {
     const metadata = expectedEntry.metadata
@@ -235,9 +249,12 @@ function assertSelectedSessionEntries(
         ? ` expected(eventCount=${expectedEntry.eventCount}, inherited=${expectedEntry.inheritedEventCount}, digest=${expectedEntry.eventDigest})` +
           ` actual(${eventSummary ? `eventCount=${eventSummary.eventCount}, inherited=${eventSummary.inheritedEventCount}, digest=${eventSummary.eventDigest}` : 'no-events'})`
         : ''
-      throw new SyncCoordinatorError('session-manifest-stale', `${side}会话内容在 manifest 之后发生变化（key=${key}，字段=${mismatches.join(',')}）${detail}`)
+      stale.push({ key, fields: mismatches.join(','), detail })
+      continue
     }
+    if (currentEntry) retained.push(currentEntry)
   }
+  return { retained, stale }
 }
 
 function sessionEventPrefixesFor(
@@ -329,7 +346,9 @@ export class SyncCoordinator {
     })
 
     try {
-      if (peer.syncSessions && !this.sessions) throw new SyncCoordinatorError('sessions-unavailable', '会话同步服务不可用')
+      if (peer.syncSessions && peer.mode !== 'metadata' && !this.sessions) {
+        throw new SyncCoordinatorError('sessions-unavailable', '会话同步服务不可用')
+      }
       const remoteNodeManifest = await this.retryTransport(signal, () => this.transport.fetchNodeManifest(peer.id))
       if (remoteNodeManifest.protocolVersion !== 1 || remoteNodeManifest.instanceId === this.state.instanceId()) {
         throw new SyncCoordinatorError('protocol-invalid', '同步 peer 协议版本或实例身份无效')
@@ -337,7 +356,44 @@ export class SyncCoordinator {
       const remoteEntries = this.nodes.validateManifest(remoteNodeManifest.records)
       const localManifest = await this.nodes.exportManifest()
       const localEntries = this.nodes.validateManifest(localManifest.records)
-      const plan = planNodeTransfers(peer.direction, localEntries, remoteEntries)
+      let catalog: SyncCatalog = {
+        protocolVersion: 1,
+        instanceId: remoteNodeManifest.instanceId,
+        nodes: [],
+        workspaces: [],
+        sessions: [],
+      }
+      if (peer.mode === 'metadata' && peer.syncSessions) {
+        // 元数据同步：只拉目录（节点/工作区/会话列表），不交换会话内容；
+        // 点击同步来的会话时经远端会话通道（wss）实时操作远端 DSH。
+        if (!remoteNodeManifest.capabilities?.includes(SYNC_CATALOG_CAPABILITY)) {
+          throw new SyncCoordinatorError('metadata-catalog-unavailable', '目标同步节点需要升级以支持元数据同步')
+        }
+        catalog = await this.retryTransport(signal, () => this.transport.fetchCatalog(peer.id))
+        if (catalog.instanceId !== remoteNodeManifest.instanceId) {
+          throw new SyncCoordinatorError('protocol-invalid', '节点与目录清单的实例身份不一致')
+        }
+      } else if (peer.selection?.mode === 'selected' && peer.syncSessions &&
+        (peer.selection.workspaces.length > 0 || peer.selection.sessions.length > 0)) {
+        if (!remoteNodeManifest.capabilities?.includes(SYNC_CATALOG_CAPABILITY)) {
+          throw new SyncCoordinatorError('selection-catalog-unavailable', '目标同步节点需要升级以支持自选范围')
+        }
+        catalog = await this.retryTransport(signal, () => this.transport.fetchCatalog(peer.id))
+        if (catalog.instanceId !== remoteNodeManifest.instanceId) {
+          throw new SyncCoordinatorError('protocol-invalid', '节点与目录清单的实例身份不一致')
+        }
+      }
+      const selection = resolveSyncSelection(peer.mode === 'metadata' ? undefined : peer.selection, catalog)
+      // 节点配置交换：全量模式恒开（会话导入依赖节点/工作区映射）；元数据模式
+      // 可由「同步工作节点」关闭——关闭后仅校验对端身份并拉取目录。
+      const syncNodes = peer.mode !== 'metadata' || peer.syncNodes !== false
+      // 节点配置固定从远端拉取（同步语义简化后方向仅作用于会话内容交换）。
+      const fullNodePlan: NodeTransferPlan = syncNodes ? planNodeTransfers('pull', localEntries, remoteEntries) : { toLocal: [], toRemote: [], skipped: 0 }
+      const plan = !syncNodes || selection.all ? fullNodePlan : {
+        ...fullNodePlan,
+        toLocal: fullNodePlan.toLocal.filter((entry) => selectionIncludesNode(entry.metadata, selection)),
+        toRemote: fullNodePlan.toRemote.filter((entry) => selectionIncludesNode(entry.metadata, selection)),
+      }
 
       const localResult = plan.toLocal.length > 0
         ? await this.nodes.applyManifest(plan.toLocal, peer.name, 'peer')
@@ -350,8 +406,11 @@ export class SyncCoordinator {
       let importedSessions = 0
       let exportedSessions = 0
       let skippedSessions = 0
+      let staleSessionCount = 0
       let digest = manifestDigest(remoteEntries)
-      if (peer.syncSessions) {
+      if (peer.mode === 'metadata' && peer.syncSessions) {
+        // 每次同步实时拉取目录并报告计数；会话内容交换整体跳过。
+      } else if (peer.syncSessions) {
         const sessionService = this.sessions!
         let plan: ReturnType<typeof planSessionTransfers>
         let remoteSkipped = 0
@@ -368,7 +427,12 @@ export class SyncCoordinator {
             throw new SyncCoordinatorError('protocol-invalid', '节点与会话 manifest 的实例身份不一致')
           }
           const localManifest = await sessionService.exportManifest()
-          plan = planSessionTransfers(peer.direction, localManifest.entries, remoteManifest.entries)
+          const fullSessionPlan = planSessionTransfers(peer.direction, localManifest.entries, remoteManifest.entries)
+          plan = selection.all ? fullSessionPlan : {
+            ...fullSessionPlan,
+            toLocal: fullSessionPlan.toLocal.filter((entry) => selectionIncludesSession(entry.metadata, selection)),
+            toRemote: fullSessionPlan.toRemote.filter((entry) => selectionIncludesSession(entry.metadata, selection)),
+          }
           remoteSessionDigest = remoteManifest.digest
           localSessionDigest = localManifest.digest
           localInstanceId = localManifest.instanceId
@@ -406,8 +470,12 @@ export class SyncCoordinator {
               if (fetched.instanceId !== remoteManifest.instanceId) {
                 throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
               }
-              assertSelectedSessionEntries(chunkManifest, fetched.entries, '远端')
+              const pullPartition = partitionStaleSessionEntries(chunkManifest, fetched.entries)
+              staleSessionCount += pullPartition.stale.length
               remoteSkippedReports.push(fetched.skipped)
+              if (pullPartition.stale.length > 0) {
+                fetched = { ...fetched, entries: pullPartition.retained }
+              }
               if (useObjectStream) {
                 // 带外对象：bundle 里 deferred 描述符的载荷经对象流 RPC 拉到本地
                 // 收件箱（磁盘流式，内存 O(帧)），随后 applyBundle 按摘要水合。
@@ -436,8 +504,10 @@ export class SyncCoordinator {
                 if (fullRemoteEntries.instanceId !== remoteManifest.instanceId) {
                   throw new SyncCoordinatorError('protocol-invalid', '远端会话内容与 manifest 实例不一致')
                 }
-                assertSelectedSessionEntries(chunkManifest, fullRemoteEntries.entries, '远端')
+                const pullRetryPartition = partitionStaleSessionEntries(chunkManifest, fullRemoteEntries.entries)
+                staleSessionCount += pullRetryPartition.stale.length
                 remoteSkippedReports.push(fullRemoteEntries.skipped)
+                fullRemoteEntries.entries = pullRetryPartition.retained
                 const applied = await sessionService.applyBundle(
                   makeSyncSessionBundle(
                     remoteManifest.instanceId,
@@ -480,14 +550,18 @@ export class SyncCoordinator {
               const chunkManifest = plan.toRemote.filter((entry) => chunkKeySet.has(syncSessionEntryKey(entry)))
               const prefixes = useEventDeltas ? sessionEventPrefixesFor(chunkManifest, remoteManifest.entries) : []
               this.throwIfStopped(signal)
-              const exported = await sessionService.exportEntries(
+              let exported = await sessionService.exportEntries(
                 chunkKeys,
                 localManifest.digest,
                 prefixes,
                 { sharedObjects: useSharedObjects, deferredObjects: useObjectStream },
               )
               this.throwIfStopped(signal)
-              assertSelectedSessionEntries(chunkManifest, exported.entries, '本地')
+              const pushPartition = partitionStaleSessionEntries(chunkManifest, exported.entries)
+              staleSessionCount += pushPartition.stale.length
+              if (pushPartition.stale.length > 0) {
+                exported = { ...exported, entries: pushPartition.retained }
+              }
               const wireSkipped = firstChunk ? mergeSessionSkipped(localManifest.skipped, exported.skipped) : exported.skipped
               let wireBundle = exported.objects !== undefined
                 ? makeSyncSessionBundle(exported.instanceId, exported.entries, wireSkipped, exported.objects)
@@ -517,7 +591,9 @@ export class SyncCoordinator {
                   [],
                   { sharedObjects: wireBundle.objects !== undefined, deferredObjects: false },
                 )
-                assertSelectedSessionEntries(chunkManifest, fullLocalEntries.entries, '本地')
+                const pushRetryPartition = partitionStaleSessionEntries(chunkManifest, fullLocalEntries.entries)
+                staleSessionCount += pushRetryPartition.stale.length
+                fullLocalEntries.entries = pushRetryPartition.retained
                 const skippedReport = firstChunk ? mergeSessionSkipped(localManifest.skipped, fullLocalEntries.skipped) : fullLocalEntries.skipped
                 wireBundle = fullLocalEntries.objects !== undefined
                   ? makeSyncSessionBundle(fullLocalEntries.instanceId, fullLocalEntries.entries, skippedReport, fullLocalEntries.objects)
@@ -564,7 +640,7 @@ export class SyncCoordinator {
         }
         importedSessions = sessionResultCount(sessionLocalResult)
         exportedSessions = sessionResultCount(sessionRemoteResult)
-        skippedSessions = plan.skipped + sessionLocalResult.skipped + sessionRemoteResult.skipped
+        skippedSessions = plan.skipped + sessionLocalResult.skipped + sessionRemoteResult.skipped + staleSessionCount
         digest = `sha256:${createHash('sha256').update(`${digest}\0${remoteSessionDigest}\0${localSessionDigest}`).digest('hex')}`
       }
       const finishedAt = new Date(this.now()).toISOString()
@@ -601,6 +677,12 @@ export class SyncCoordinator {
             importedSessions,
             exportedSessions,
             skippedSessions,
+            ...(staleSessionCount > 0 ? { staleSkippedSessions: staleSessionCount } : {}),
+            ...(peer.mode === 'metadata' && peer.syncSessions ? {
+              catalogNodes: catalog.nodes.length,
+              catalogWorkspaces: catalog.workspaces.length,
+              catalogSessions: catalog.sessions.length,
+            } : {}),
           },
         })
       } catch {}

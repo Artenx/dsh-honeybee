@@ -168,6 +168,7 @@ class MemorySessionPersistence {
       revision: `r${value.revision}`,
       eventCount: value.events.length,
       formatStatus: 'current' as const,
+      sizeBytes: Buffer.byteLength(JSON.stringify(value.events), 'utf8'),
     }
   }
 }
@@ -220,6 +221,7 @@ class MemoryWorkspaceRegistry implements WorkspaceRegistryLike {
     this.workspaces.set(workspace.id, workspace)
     return workspace
   }
+  async delete(id: string): Promise<boolean> { return this.workspaces.delete(id) }
   async archiveSession(id: SessionId): Promise<void> { this.archived.add(String(id)) }
   async unarchiveSession(id: SessionId): Promise<void> { this.archived.delete(String(id)) }
   async pinSession(id: SessionId): Promise<void> { this.pinned.add(String(id)) }
@@ -384,6 +386,8 @@ interface TestEnvironment {
 interface EnvironmentOptions {
   mapNode?: boolean
   omitPinning?: boolean
+  sessionTitle?: string
+  sessionBlank?: boolean
 }
 
 function createEnvironment(kind: 'source' | 'target', options: EnvironmentOptions = {}): TestEnvironment {
@@ -441,6 +445,9 @@ function createEnvironment(kind: 'source' | 'target', options: EnvironmentOption
     () => 1_800_000_000_000,
     home,
     workspaceInstructions,
+    options.sessionTitle || options.sessionBlank !== undefined
+      ? () => ({ ...(options.sessionTitle ? { title: options.sessionTitle } : {}), ...(options.sessionBlank ? { blank: true } : {}) })
+      : undefined,
   )
   return { home, state, persistence, workspaces, bindings, attachments, spills, instructions, journal, workspaceInstructions, service }
 }
@@ -497,6 +504,100 @@ afterEach(() => {
 })
 
 describe('session sync', () => {
+  it('exports a redacted selection catalog with persistence artifact sizes', async () => {
+    const source = createEnvironment('source', { sessionTitle: 'Human readable title' })
+    const id = addSourceSession(source)
+
+    const catalog = await source.service.exportCatalog()
+    const session = catalog.sessions.find((entry) => entry.origin.originEntityId === String(id))
+
+    expect(catalog.workspaces).toHaveLength(1)
+    expect(catalog.workspaces[0]).toMatchObject({
+      origin: { originEntityId: 'workspace-source' },
+      nodeOrigin,
+      remotePath: '/remote/project',
+    })
+    expect(session).toMatchObject({
+      origin: { originEntityId: String(id) },
+      workspaceRemotePath: '/remote/project',
+      nodeOrigin,
+      title: 'Human readable title',
+      sizeBytes: expect.any(Number),
+    })
+    expect(session).not.toHaveProperty('events')
+  })
+
+  it('carries the blank-session projection into the catalog', async () => {
+    const source = createEnvironment('source', { sessionBlank: true })
+    const id = addSourceSession(source)
+
+    const catalog = await source.service.exportCatalog()
+
+    expect(catalog.sessions.find((entry) => entry.sessionId === String(id))?.blank).toBe(true)
+  })
+
+  it('marks workspace-archived sessions as archived in the selection catalog', async () => {
+    const source = createEnvironment('source')
+    const activeId = addSourceSession(source)
+    const archivedId = addPlainSession(source, 'workspace-source', 'session-archived')
+    await source.workspaces.archiveSession(archivedId)
+
+    const catalog = await source.service.exportCatalog()
+    const active = catalog.sessions.find((entry) => entry.sessionId === String(activeId))
+    const archived = catalog.sessions.find((entry) => entry.sessionId === String(archivedId))
+
+    expect(active).toBeDefined()
+    expect(active?.archived).toBeUndefined()
+    expect(archived).toBeDefined()
+    expect(archived?.archived).toBe(true)
+  })
+
+  it('marks imported copies of conflict-archived origins as archived in the catalog', async () => {
+    const source = createEnvironment('source')
+    const sourceId = addSourceSession(source)
+    const target = createEnvironment('target')
+    await target.service.applyBundle(await source.service.exportBundle(), 'source peer', 'p-0123456789abcdef01234567')
+
+    // 源会话变化 → 同步冲突 → 目标把旧副本归档
+    source.persistence.mutateEvent(String(sourceId), (event) => event.type === 'turn/start'
+      ? { ...event, time: event.time + 1 }
+      : event)
+    await target.service.applyBundle(await source.service.exportBundle(), 'source peer', 'p-0123456789abcdef01234567')
+    const archives = target.service.listArchives()
+    expect(archives.length).toBeGreaterThan(0)
+
+    // 归档发生后源会话再变化 → 目标生成同 origin 的新导入副本（新 localId，不在 workspace 归档集合里）
+    source.persistence.mutateEvent(String(sourceId), (event) => event.type === 'turn/end'
+      ? { ...event, time: event.time + 2 }
+      : event)
+    const catalog = await target.service.exportCatalog()
+    const records = Object.values(target.state.read().records).filter((m) => m.kind === 'session' && !m.deleted)
+    for (const record of records) {
+      const entry = catalog.sessions.find((s) => s.sessionId === record.localEntityId)
+      const originArchived = archives.some((archive) =>
+        archive.originInstanceId === record.originInstanceId && archive.originSessionId === record.originEntityId)
+      if (entry) expect(entry.archived ?? false).toBe(originArchived)
+    }
+  })
+
+  it('archives metadata-peer imports and removes their now-empty remote workspace registrations', async () => {
+    const source = createEnvironment('source')
+    addSourceSession(source)
+    const target = createEnvironment('target')
+    const bundle = await source.service.exportBundle()
+    await target.service.applyBundle(bundle, 'source peer', 'p-0123456789abcdef01234567')
+    const localId = target.workspaces.list()[0]?.sessionIds[0]
+    expect(localId).toBeDefined()
+
+    const cleanup = await target.service.removeMetadataPeerImports('i-ffffffffffffffffffffffffffffffff', [String(localId)])
+
+    expect(cleanup).toEqual({ sessionsArchived: 1, workspacesRemoved: 1, workspacesDetached: 0 })
+    expect(target.workspaces.archivedSessionIds.map(String)).toContain(String(localId))
+    expect(target.workspaces.list()).toHaveLength(0)
+    expect(Object.values(target.state.read().records).filter((record) => record.kind === 'session')).toHaveLength(0)
+    expect(Object.values(target.state.read().workspaces)).toHaveLength(0)
+  })
+
   it('reuses one sync-state snapshot and skips writes for unchanged workspace mappings', async () => {
     const source = createEnvironment('source')
     addSourceSession(source)

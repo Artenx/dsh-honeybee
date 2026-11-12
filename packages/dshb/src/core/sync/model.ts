@@ -5,6 +5,83 @@ export type SyncDirection = 'pull' | 'bidirectional'
 export type SyncSchedule = 'manual' | 'every-5m'
 export type SyncEntityKind = 'node' | 'session'
 export type SyncImportMethod = 'peer' | 'offline'
+/** 全量同步传输会话内容；元数据同步只同步目录，点击会话时经 wss 实时操作远端。 */
+export type SyncMode = 'full' | 'metadata'
+
+export interface SyncOrigin {
+  originInstanceId: string
+  originEntityId: string
+}
+
+export interface SyncPeer {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  authKind: 'password' | 'key'
+  remoteDshHome?: string
+  remoteProfile?: string
+  remoteWebPort?: number
+  /** 已取消的方向逻辑；读取旧数据时恒为 'bidirectional'。 */
+  direction: SyncDirection
+  /** 已取消的时机逻辑；读取旧数据时恒为 'manual'（同步仅由「立即同步」触发）。 */
+  schedule: SyncSchedule
+  mode: SyncMode
+  /** 已废弃：工作节点配置恒同步；字段仅为兼容旧持久化数据保留。 */
+  syncNodes?: boolean
+  syncSessions: boolean
+  selection?: SyncSelection
+  enabled: boolean
+  hostKeyFingerprint?: string
+}
+
+export interface SyncWorkspaceOrigin extends SyncOrigin {
+  remotePath: string
+}
+
+export interface SyncSelection {
+  mode: 'all' | 'selected'
+  nodes: SyncOrigin[]
+  workspaces: SyncWorkspaceOrigin[]
+  sessions: SyncOrigin[]
+}
+
+export interface SyncCatalogNode {
+  origin: SyncOrigin
+  name: string
+  type: 'remote-ssh' | 'remote-docker'
+}
+
+export interface SyncCatalogWorkspace {
+  origin: SyncOrigin
+  nodeOrigin: SyncOrigin
+  remotePath: string
+  title: string
+}
+
+export interface SyncCatalogSession {
+  origin: SyncOrigin
+  workspaceOrigin?: SyncOrigin
+  workspaceRemotePath?: string
+  nodeOrigin?: SyncOrigin
+  sessionId: string
+  title?: string
+  sizeBytes?: number
+  branchId?: string
+  deleted?: boolean
+  archived?: boolean
+  /** 空壳会话（无任何用户消息）：远端 UI 不显示，目录消费方也应过滤。 */
+  blank?: boolean
+}
+
+export interface SyncCatalog {
+  protocolVersion: 1
+  instanceId: string
+  nodes: SyncCatalogNode[]
+  workspaces: SyncCatalogWorkspace[]
+  sessions: SyncCatalogSession[]
+}
 
 export interface SyncPeer {
   id: string
@@ -19,16 +96,12 @@ export interface SyncPeer {
   direction: SyncDirection
   schedule: SyncSchedule
   syncSessions: boolean
+  selection?: SyncSelection
   enabled: boolean
   hostKeyFingerprint?: string
 }
 
 export type SyncPeerDraft = Omit<SyncPeer, 'id' | 'hostKeyFingerprint'>
-
-export interface SyncOrigin {
-  originInstanceId: string
-  originEntityId: string
-}
 
 export interface SyncProvenance extends SyncOrigin {
   localEntityId: string
@@ -63,6 +136,12 @@ export interface SyncPeerProgress {
     importedSessions: number
     exportedSessions: number
     skippedSessions: number
+    /** 元数据同步最近一次目录计数（可选，旧状态缺省）。 */
+    catalogNodes?: number
+    catalogWorkspaces?: number
+    catalogSessions?: number
+    /** 内容快照落后于 manifest 而跳过的活跃会话数（可选，旧状态缺省）。 */
+    staleSkippedSessions?: number
   }
 }
 
@@ -113,7 +192,10 @@ const PEER_FIELDS = new Set([
   'remoteWebPort',
   'direction',
   'schedule',
+  'mode',
+  'syncNodes',
   'syncSessions',
+  'selection',
   'enabled',
   'hostKeyFingerprint',
 ])
@@ -147,6 +229,57 @@ function port(value: unknown, label: string): number {
   return value as number
 }
 
+function parseOrigin(value: unknown, label: string): SyncOrigin {
+  const input = record(value, label)
+  if (Object.keys(input).some((key) => key !== 'originInstanceId' && key !== 'originEntityId')) {
+    throw new Error(`${label} contains unsupported fields`)
+  }
+  return {
+    originInstanceId: text(input.originInstanceId, `${label}.originInstanceId`, 512),
+    originEntityId: text(input.originEntityId, `${label}.originEntityId`, 512),
+  }
+}
+
+export function parseSyncSelection(value: unknown): SyncSelection {
+  const input = record(value, 'selection')
+  if (Object.keys(input).some((key) => !['mode', 'nodes', 'workspaces', 'sessions'].includes(key))) {
+    throw new Error('selection contains unsupported fields')
+  }
+  if (input.mode !== 'all' && input.mode !== 'selected') throw new Error('selection mode is invalid')
+  const parseOrigins = (value: unknown, label: string): SyncOrigin[] => {
+    if (value === undefined) return []
+    if (!Array.isArray(value) || value.length > 10_000) throw new Error(`${label} must be an array of at most 10000 items`)
+    const origins = value.map((item, index) => parseOrigin(item, `${label}[${index}]`))
+    const keys = origins.map((origin) => JSON.stringify([origin.originInstanceId, origin.originEntityId]))
+    if (new Set(keys).size !== keys.length) throw new Error(`${label} contains duplicate origins`)
+    return origins
+  }
+  const nodes = parseOrigins(input.nodes, 'selection.nodes')
+  const rawWorkspaces = input.workspaces
+  if (rawWorkspaces !== undefined && (!Array.isArray(rawWorkspaces) || rawWorkspaces.length > 10_000)) {
+    throw new Error('selection.workspaces must be an array of at most 10000 items')
+  }
+  const workspaces = (rawWorkspaces ?? []).map((value, index) => {
+    const workspace = record(value, `selection.workspaces[${index}]`)
+    if (Object.keys(workspace).some((key) => !['originInstanceId', 'originEntityId', 'remotePath'].includes(key)) ||
+      typeof workspace.remotePath !== 'string' || workspace.remotePath.length > 4096 || !posix.isAbsolute(workspace.remotePath) ||
+      posix.normalize(workspace.remotePath) !== workspace.remotePath) {
+      throw new Error(`selection.workspaces[${index}] is invalid`)
+    }
+    const { remotePath, ...origin } = workspace
+    return { ...parseOrigin(origin, `selection.workspaces[${index}]`), remotePath: remotePath as string }
+  })
+  const workspaceKeys = workspaces.map((workspace) => JSON.stringify([
+    workspace.originInstanceId, workspace.originEntityId, workspace.remotePath,
+  ]))
+  if (new Set(workspaceKeys).size !== workspaceKeys.length) throw new Error('selection.workspaces contains duplicate origins')
+  const sessions = parseOrigins(input.sessions, 'selection.sessions')
+  if (input.mode === 'all' && (nodes.length > 0 || workspaces.length > 0 || sessions.length > 0)) {
+    throw new Error('all selection cannot contain explicit origins')
+  }
+  return { mode: input.mode, nodes, workspaces, sessions }
+}
+
 export function parseSyncPeer(value: unknown): SyncPeer {
   const input = record(value, 'sync peer')
   for (const key of Object.keys(input)) {
@@ -166,11 +299,19 @@ export function parseSyncPeer(value: unknown): SyncPeer {
   if (input.authKind !== 'password' && input.authKind !== 'key') {
     throw new Error('authKind must be password or key')
   }
-  if (input.direction !== 'pull' && input.direction !== 'bidirectional') {
+  // direction/schedule/syncNodes 旧字段仅用于读取旧数据不报错；值一律忽略——
+  // 方向与时机逻辑已取消（同步恒为手动触发 + 双向交换），工作节点配置恒同步。
+  if (input.direction !== undefined && input.direction !== 'pull' && input.direction !== 'bidirectional') {
     throw new Error('direction must be pull or bidirectional')
   }
-  if (input.schedule !== 'manual' && input.schedule !== 'every-5m') {
+  if (input.schedule !== undefined && input.schedule !== 'manual' && input.schedule !== 'every-5m') {
     throw new Error('schedule must be manual or every-5m')
+  }
+  if (input.mode !== undefined && input.mode !== 'full' && input.mode !== 'metadata') {
+    throw new Error('mode must be full or metadata')
+  }
+  if (input.syncNodes !== undefined && typeof input.syncNodes !== 'boolean') {
+    throw new Error('syncNodes must be a boolean')
   }
   if (typeof input.syncSessions !== 'boolean' || typeof input.enabled !== 'boolean') {
     throw new Error('syncSessions and enabled must be booleans')
@@ -196,9 +337,13 @@ export function parseSyncPeer(value: unknown): SyncPeer {
     ...(remoteDshHome === undefined ? {} : { remoteDshHome: posix.normalize(remoteDshHome) }),
     ...(remoteProfile === undefined ? {} : { remoteProfile }),
     ...(input.remoteWebPort === undefined ? {} : { remoteWebPort: port(input.remoteWebPort, 'remoteWebPort') }),
-    direction: input.direction,
-    schedule: input.schedule,
+    // 方向与时机逻辑已取消：读取旧数据时一律归一为双向交换 + 手动触发。
+    direction: 'bidirectional',
+    schedule: 'manual',
+    // 旧 peer 数据没有 mode 字段：缺省按全量同步处理，保持既有行为不变。
+    mode: input.mode === undefined ? 'full' : input.mode,
     syncSessions: input.syncSessions,
+    ...(input.selection === undefined ? {} : { selection: parseSyncSelection(input.selection) }),
     enabled: input.enabled,
     ...(hostKeyFingerprint === undefined ? {} : { hostKeyFingerprint }),
   }

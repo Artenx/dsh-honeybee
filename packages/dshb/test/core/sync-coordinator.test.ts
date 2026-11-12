@@ -5,10 +5,11 @@ import { SyncPeerManager } from '../../src/core/sync/peer-manager.js'
 import { SyncSessionDeltaPrefixError, SyncSshProbeError, SyncSshTransport } from '../../src/core/sync/ssh-transport.js'
 import { SyncNodeService, type SyncNodeEntry, type SyncNodeManifest } from '../../src/core/sync/node-sync.js'
 import { SyncStateStore } from '../../src/core/sync/stores.js'
-import type { SyncPeer, SyncPeerView } from '../../src/core/sync/model.js'
+import type { SyncCatalog, SyncPeer, SyncPeerView, SyncSelection } from '../../src/core/sync/model.js'
 import { makeSyncSessionBundle, makeSyncSessionManifest, SyncSessionError, syncSessionEntryKey } from '../../src/core/sync/session-sync.js'
 import type { SyncSessionBundle, SyncSessionEntry, SyncSessionService } from '../../src/core/sync/session-sync.js'
-import { SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY } from '../../src/core/sync/protocol.js'
+import { SYNC_CATALOG_CAPABILITY, SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY } from '../../src/core/sync/protocol.js'
+import { sessionEventDigest, sessionEventListDigest, sessionStateDigest, workspaceDigest } from '../../src/core/sync/session-sync.js'
 
 const localInstanceId = 'i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const remoteInstanceId = 'i-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -21,6 +22,7 @@ const peer: SyncPeerView = {
   authKind: 'password',
   direction: 'bidirectional',
   schedule: 'manual',
+  mode: 'full',
   syncSessions: false,
   enabled: true,
   hasSecret: { hasPassword: true, hasKey: false, hasPassphrase: false },
@@ -185,6 +187,208 @@ describe('sync coordinator', () => {
     expect(test.progress.at(-1)?.lastResult).toMatchObject({ importedSessions: 0, exportedSessions: 1, skippedSessions: 1 })
   })
 
+  it('metadata mode fetches the remote catalog and skips session content transfer', async () => {
+    const metadataPeer: SyncPeerView = {
+      ...peer,
+      mode: 'metadata',
+      syncSessions: true,
+      selection: {
+        mode: 'selected',
+        nodes: [{ originInstanceId: remoteInstanceId, originEntityId: 'node-a' }],
+        workspaces: [],
+        sessions: [],
+      },
+    }
+    const nodeA = nodeEntry(remoteInstanceId, 'node-a', 10, 'a')
+    const nodeB = nodeEntry(remoteInstanceId, 'node-b', 10, 'b')
+    const catalog: SyncCatalog = {
+      protocolVersion: 1,
+      instanceId: remoteInstanceId,
+      nodes: [{ origin: { originInstanceId: remoteInstanceId, originEntityId: 'node-a' }, name: 'A', type: 'remote-ssh' }],
+      workspaces: [],
+      sessions: [{ origin: { originInstanceId: remoteInstanceId, originEntityId: 'session-a' }, sessionId: 'session-a', sizeBytes: 32 }],
+    }
+    const sessions = {
+      exportManifest: vi.fn(),
+      exportEntries: vi.fn(),
+      applyBundle: vi.fn(),
+    }
+    const test = fakeCoordinator([nodeA, nodeB], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [nodeA, nodeB],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_CATALOG_CAPABILITY],
+      })),
+      fetchCatalog: vi.fn(async () => catalog),
+      fetchSessionManifest: vi.fn(),
+      fetchSessionBundle: vi.fn(),
+      fetchSessionEntries: vi.fn(),
+      applySessionBundle: vi.fn(),
+    }, metadataPeer, sessions as unknown as SyncSessionService)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(test.transport.fetchCatalog).toHaveBeenCalledOnce()
+    expect(test.transport.fetchSessionManifest).not.toHaveBeenCalled()
+    expect(test.transport.fetchSessionEntries).not.toHaveBeenCalled()
+    expect(test.transport.applySessionBundle).not.toHaveBeenCalled()
+    expect(test.transport.fetchCatalog).toHaveBeenCalledWith(peer.id)
+    expect(test.nodes.applyManifest).toHaveBeenCalledWith([nodeA, nodeB], metadataPeer.name, 'peer')
+    expect(result).toMatchObject({ importedSessions: 0, exportedSessions: 0, skippedSessions: 0 })
+    expect(test.progress.at(-1)?.lastResult).toMatchObject({
+      catalogNodes: 1,
+      catalogWorkspaces: 0,
+      catalogSessions: 1,
+    })
+  })
+
+  it('metadata mode fails with a stable code when the remote lacks the catalog capability', async () => {
+    const metadataPeer: SyncPeerView = { ...peer, mode: 'metadata', syncSessions: true }
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY],
+      })),
+    }, metadataPeer)
+
+    await expect(test.coordinator.run(peer.id)).rejects.toMatchObject({ code: 'metadata-catalog-unavailable' })
+  })
+
+  it('metadata mode with syncNodes disabled skips node config exchange but still fetches the catalog', async () => {
+    const metadataPeer: SyncPeerView = { ...peer, mode: 'metadata', syncNodes: false, syncSessions: true }
+    const nodeA = nodeEntry(remoteInstanceId, 'node-a', 10, 'a')
+    const catalog: SyncCatalog = {
+      protocolVersion: 1,
+      instanceId: remoteInstanceId,
+      nodes: [],
+      workspaces: [],
+      sessions: [],
+    }
+    const test = fakeCoordinator([nodeA], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [nodeA],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_CATALOG_CAPABILITY],
+      })),
+      fetchCatalog: vi.fn(async () => catalog),
+    }, metadataPeer)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(test.transport.fetchCatalog).toHaveBeenCalledOnce()
+    expect(test.nodes.applyManifest).not.toHaveBeenCalled()
+    expect(test.transport.applyNodeManifest).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ imported: 0, exported: 0 })
+  })
+
+  it('skips sessions whose content moved past the manifest instead of failing the run', async () => {
+    const sessionPeer: SyncPeerView = { ...peer, syncSessions: true, direction: 'pull' as const }
+    // 完整活动会话条目（满足 bundle 校验）；manifest 声明的 eventDigest 与实际
+    // 返回内容不一致，模拟对端正被活跃使用、内容在 manifest 之后推进。
+    const makeFullEntry = (originEntityId: string, digestSeed: string, eventCount: number): SyncSessionEntry => {
+      const workspace = {
+        originInstanceId: remoteInstanceId,
+        originWorkspaceId: 'ws-1',
+        nodeOrigin: { originInstanceId: remoteInstanceId, originEntityId: 'node-a' },
+        remotePath: '/tmp/work',
+        title: 'Work',
+      }
+      const events = Array.from({ length: eventCount }, (_, i) => ({ seq: i, id: `${digestSeed}-e${i}`, type: 'model/selection', role: 'user', source: { kind: 'user' } })) as never
+      return {
+        metadata: {
+          kind: 'session',
+          originInstanceId: remoteInstanceId,
+          originEntityId,
+          localEntityId: originEntityId,
+          revision: { physicalTimeMs: 100, logicalCounter: 0, writerInstanceId: remoteInstanceId },
+          contentDigest: sessionEventDigest({ version: 4, id: originEntityId } as never, 0, events as never, workspace as never, undefined, [], undefined),
+          stateDigest: sessionStateDigest({ ...workspace, contentDigest: workspaceDigest(workspace), revision: { physicalTimeMs: 100, logicalCounter: 0, writerInstanceId: remoteInstanceId } } as never, 0, false, false),
+        },
+        sourceLocalSessionId: originEntityId,
+        header: { version: 4, id: originEntityId } as never,
+        inheritedEventCount: 0,
+        events,
+        workspace: {
+          ...workspace,
+          contentDigest: workspaceDigest(workspace),
+          revision: { physicalTimeMs: 100, logicalCounter: 0, writerInstanceId: remoteInstanceId },
+        } as never,
+        workspacePosition: 0,
+        archived: false,
+        pinned: false,
+        objects: [],
+      }
+    }
+    const liveEntry = makeFullEntry('live-session', 'c', 3)
+    const settledEntry = makeFullEntry('settled-session', 'f', 0)
+    const manifestEntry = {
+      metadata: { ...liveEntry.metadata, contentDigest: `sha256:${'e'.repeat(64)}` },
+      eventCount: 99,
+      eventDigest: `sha256:${'9'.repeat(64)}`,
+      inheritedEventCount: 0,
+    }
+    const settledManifest = {
+      metadata: settledEntry.metadata,
+      eventCount: 0,
+      eventDigest: sessionEventListDigest(settledEntry.events),
+      inheritedEventCount: 0,
+    }
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [manifestEntry, settledManifest])
+    const sessions = {
+      exportManifest: vi.fn(async () => makeSyncSessionManifest(localInstanceId, [])),
+      applyBundle: vi.fn(async () => ({ created: 0, updated: 1, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })),
+    }
+    const fetchSessionEntries = vi.fn(async () => makeSyncSessionBundle(remoteInstanceId, [liveEntry, settledEntry]))
+    const test = fakeCoordinator([], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY],
+      })),
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(result.importedSessions).toBe(1)
+    expect(result.skippedSessions).toBe(1)
+    expect(sessions.applyBundle).toHaveBeenCalledOnce()
+    const appliedBundle = sessions.applyBundle.mock.calls[0]?.[0]
+    expect(appliedBundle.entries.map((entry: SyncSessionEntry) => entry.metadata.originEntityId)).toEqual(['settled-session'])
+  })
+
+  it('metadata mode with syncNodes enabled still exchanges node configuration', async () => {
+    const metadataPeer: SyncPeerView = { ...peer, mode: 'metadata', syncNodes: true, syncSessions: true }
+    const nodeA = nodeEntry(remoteInstanceId, 'node-a', 10, 'a')
+    const catalog: SyncCatalog = {
+      protocolVersion: 1,
+      instanceId: remoteInstanceId,
+      nodes: [],
+      workspaces: [],
+      sessions: [],
+    }
+    const test = fakeCoordinator([nodeA], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [nodeA],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_CATALOG_CAPABILITY],
+      })),
+      fetchCatalog: vi.fn(async () => catalog),
+    }, metadataPeer)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(test.nodes.applyManifest).toHaveBeenCalledOnce()
+    expect(result.imported).toBe(1)
+  })
+
   it('uses session manifests and fetches only entries selected for transfer', async () => {
     const sessionPeer = { ...peer, syncSessions: true }
     const remoteEntry = deletedSessionEntry(remoteInstanceId, 'remote-deleted')
@@ -225,6 +429,88 @@ describe('sync coordinator', () => {
       false,
     )
     expect(test.transport.fetchSessionBundle).not.toHaveBeenCalled()
+  })
+
+  it('filters complete node and session plans by the selected workspace and its dependencies', async () => {
+    const workspaceOrigin = { originInstanceId: remoteInstanceId, originEntityId: 'workspace-selected' }
+    const selectedNode = nodeEntry(remoteInstanceId, 'node-selected', 10, 'a')
+    const otherNode = nodeEntry(remoteInstanceId, 'node-other', 10, 'b')
+    const selectedSession = deletedSessionEntry(remoteInstanceId, 'session-selected')
+    selectedSession.metadata.workspaceOrigin = workspaceOrigin
+    const otherSession = deletedSessionEntry(remoteInstanceId, 'session-other')
+    otherSession.metadata.workspaceOrigin = { originInstanceId: remoteInstanceId, originEntityId: 'workspace-other' }
+    const remoteManifest = makeSyncSessionManifest(remoteInstanceId, [selectedSession, otherSession])
+    const localManifest = makeSyncSessionManifest(localInstanceId, [])
+    const selectedBundle = makeSyncSessionBundle(remoteInstanceId, [selectedSession])
+    const sessionPeer: SyncPeerView = {
+      ...peer,
+      syncSessions: true,
+      selection: {
+        mode: 'selected',
+        nodes: [],
+        workspaces: [{ ...workspaceOrigin, remotePath: '/remote/app' }],
+        sessions: [],
+      } satisfies SyncSelection,
+    }
+    const catalog: SyncCatalog = {
+      protocolVersion: 1,
+      instanceId: remoteInstanceId,
+      nodes: [
+        { origin: { originInstanceId: remoteInstanceId, originEntityId: 'node-selected' }, name: 'Selected', type: 'remote-ssh' },
+        { origin: { originInstanceId: remoteInstanceId, originEntityId: 'node-other' }, name: 'Other', type: 'remote-ssh' },
+      ],
+      workspaces: [{
+        origin: workspaceOrigin,
+        nodeOrigin: { originInstanceId: remoteInstanceId, originEntityId: 'node-selected' },
+        remotePath: '/remote/app',
+        title: 'Selected workspace',
+      }],
+      sessions: [{
+        origin: { originInstanceId: remoteInstanceId, originEntityId: 'session-selected' },
+        workspaceOrigin,
+        workspaceRemotePath: '/remote/app',
+        nodeOrigin: { originInstanceId: remoteInstanceId, originEntityId: 'node-selected' },
+        sessionId: 'session-selected',
+        sizeBytes: 64,
+      }],
+    }
+    const sessions = {
+      exportManifest: vi.fn(async () => localManifest),
+      exportEntries: vi.fn(async () => makeSyncSessionBundle(localInstanceId, [])),
+      applyBundle: vi.fn(async () => ({ created: 1, updated: 0, archived: 0, deleted: 0, skipped: 0, unmapped: 0 })),
+    }
+    const applyNodeManifest = vi.fn(async (_id: string, entries: SyncNodeEntry[]) => ({
+      created: entries.length, updated: 0, deleted: 0, pendingRemoval: 0, skipped: 0,
+    }))
+    const fetchSessionEntries = vi.fn(async () => selectedBundle)
+    const test = fakeCoordinator([selectedNode, otherNode], [], {
+      fetchNodeManifest: vi.fn(async () => ({
+        protocolVersion: 1,
+        instanceId: remoteInstanceId,
+        records: [selectedNode, otherNode],
+        capabilities: [SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_CATALOG_CAPABILITY],
+      })),
+      fetchCatalog: vi.fn(async () => catalog),
+      applyNodeManifest,
+      fetchSessionManifest: vi.fn(async () => remoteManifest),
+      fetchSessionEntries,
+    }, sessionPeer, sessions as unknown as SyncSessionService)
+
+    const result = await test.coordinator.run(peer.id)
+
+    expect(test.transport.fetchCatalog).toHaveBeenCalledOnce()
+    expect(applyNodeManifest).not.toHaveBeenCalled()
+    expect(test.nodes.applyManifest).toHaveBeenCalledWith([selectedNode], sessionPeer.name, 'peer')
+    expect(fetchSessionEntries).toHaveBeenCalledWith(
+      peer.id,
+      [syncSessionEntryKey(selectedSession)],
+      remoteManifest.digest,
+      [],
+      false,
+    )
+    expect(sessions.applyBundle).toHaveBeenCalledOnce()
+    expect(result.imported).toBe(1)
+    expect(result.importedSessions).toBe(1)
   })
 
   it('negotiates the shared-object wire format when both sides declare the capability', async () => {
@@ -360,11 +646,13 @@ describe('sync coordinator', () => {
       applySessionBundle: vi.fn(),
     }, sessionPeer, sessions as unknown as SyncSessionService)
 
-    await expect(test.coordinator.run(peer.id)).rejects.toMatchObject({ code: 'session-manifest-stale' })
+    // 语义变更（0.1.47）：manifest 之后变化/缺失的条目按活跃会话跳过，
+    // 不再让整次同步失败；该会话经远端 wss 通道实时展示。
+    await expect(test.coordinator.run(peer.id)).resolves.toMatchObject({ importedSessions: 0, skippedSessions: 1 })
 
-    expect(sessions.applyBundle).not.toHaveBeenCalled()
-    expect(test.transport.applySessionBundle).not.toHaveBeenCalled()
-    expect(test.progress.at(-1)).toMatchObject({ lastRunStatus: 'failed', watermark: 'previous-watermark' })
+    expect(sessions.applyBundle).toHaveBeenCalledTimes(1)
+    expect(test.progress.at(-1)).toMatchObject({ lastRunStatus: 'succeeded' })
+    expect(test.progress.at(-1)?.lastResult).toMatchObject({ staleSkippedSessions: 1 })
   })
 
   it('retries a local delta prefix mismatch with complete selected entries', async () => {
@@ -448,7 +736,7 @@ describe('sync coordinator', () => {
     await vi.waitFor(() => expect(fetchNodeManifest).toHaveBeenCalledTimes(1))
     expect(fetchNodeManifest).toHaveBeenCalledTimes(1)
     finishFetch?.({ protocolVersion: 1, instanceId: remoteInstanceId, records: [remote] })
-    await expect(first).resolves.toMatchObject({ imported: 1, exported: 1 })
+    await expect(first).resolves.toMatchObject({ imported: 1, exported: 0 })
     expect(test.progress.map((entry) => entry.lastRunStatus)).toEqual(['running', 'succeeded'])
   })
 

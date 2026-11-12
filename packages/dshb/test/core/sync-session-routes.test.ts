@@ -57,4 +57,5 @@ describe('sync session archive routes', () => {
     expect(response.status).toBe(400)
     expect(sessions.restoreArchive).not.toHaveBeenCalled()
   })
+
 })

@@ -1,4 +1,5 @@
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import { useEffect, useState } from 'react'
 
 /**
  * dshb 移动端屏幕适配（参考 dsh-web-mobile 实现，仅保留页面适配与目录抽屉
@@ -364,7 +365,27 @@ function findFrame(): HTMLElement | null {
 }
 
 function getFrame(): HTMLElement | null {
-  return document.querySelector(`[${FRAME_ATTR}="frame"]`) ?? findFrame()
+  return document.querySelector(`[${FRAME_ATTR}^="frame"]`) ?? findFrame()
+}
+
+/**
+ * 上游（dsh >= 0.2.2）AppFrame 自带原生抽屉：viewport < 768 时给 frame 加
+ * data-sidebar-drawer，侧边栏列自行绝对定位 + translate 滑入滑出，并带
+ * drawerMask 遮罩与 leadingSeat 切换按钮。此时 dshb 必须停用自己的抽屉
+ * 布局覆盖（grid-template-columns / > :first-child 绝对定位）——0.2.2 起
+ * centerCol 固定 grid-area:1/2，dshb 的 minmax(0,1fr) 0 0 会把第 2 列压成
+ * 0 宽，会话区整体移出屏幕（手机白屏根因）。
+ */
+let upstreamDrawerCache: boolean | null = null
+function upstreamHandlesDrawer(): boolean {
+  if (upstreamDrawerCache !== null) return upstreamDrawerCache
+  for (const tag of document.querySelectorAll('style')) {
+    if ((tag.textContent ?? '').includes('data-sidebar-drawer')) {
+      upstreamDrawerCache = true
+      return true
+    }
+  }
+  return false
 }
 
 /** viewport-fit=cover：让 safe-area-inset 生效，内容避开刘海/状态栏。 */
@@ -412,7 +433,10 @@ function installFrameMarker(ctx: ClientContext): void {
     const ensure = (): void => {
       if (!narrow.matches) return
       frame = findFrame()
-      if (frame !== null && !frame.hasAttribute(FRAME_ATTR)) frame.setAttribute(FRAME_ATTR, 'frame')
+      if (frame === null) return
+      const native = upstreamHandlesDrawer()
+      const wanted = native ? 'frame-native' : 'frame'
+      if (frame.getAttribute(FRAME_ATTR) !== wanted) frame.setAttribute(FRAME_ATTR, wanted)
     }
     ensure()
     const mo = new MutationObserver(ensure)
@@ -440,6 +464,11 @@ function installDrawerInteractions(ctx: ClientContext, toggleSidebar: () => void
       return narrow.matches && frame !== null && !frame.hasAttribute(COLLAPSED_ATTR)
     }
     const sync = (): void => {
+      if (upstreamHandlesDrawer()) {
+        backdrop?.remove()
+        backdrop = null
+        return
+      }
       if (drawerOpen() && backdrop === null) {
         backdrop = document.createElement('div')
         backdrop.setAttribute(`${FRAME_ATTR}-backdrop`, '')
@@ -870,6 +899,15 @@ interface SlotsLike {
 
 /** 目录抽屉切换按钮（仅切换，不含文件浏览/日志导出等功能按钮）。 */
 function DrawerToggle({ toggleSidebar }: { toggleSidebar: () => void }) {
+  /* 上游（dsh >= 0.2.2）原生 drawer 自带 leadingSeat 切换按钮，dshb 的按钮会重复。
+     apply 时上游 layout CSS 可能尚未注入，挂载后延迟复查一次。 */
+  const [native, setNative] = useState(upstreamHandlesDrawer())
+  useEffect(() => {
+    if (native) return
+    const timer = window.setTimeout(() => { if (upstreamHandlesDrawer()) setNative(true) }, 600)
+    return () => window.clearTimeout(timer)
+  }, [native])
+  if (native) return null
   return (
     <button type="button" data-dshb-mobile="toggle" aria-label="打开目录" title="打开目录" onClick={() => toggleSidebar()}>
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -901,7 +939,7 @@ function installFab(ctx: ClientContext, toggleSidebar: () => void): void {
     }
     let fab: HTMLButtonElement | null = null
     const sync = (): void => {
-      if (!narrow.matches || !heroPhase() || drawerOpen()) {
+      if (upstreamHandlesDrawer() || !narrow.matches || !heroPhase() || drawerOpen()) {
         if (fab !== null) {
           fab.remove()
           fab = null

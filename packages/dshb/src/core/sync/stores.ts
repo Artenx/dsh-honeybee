@@ -215,7 +215,7 @@ function validateProgress(value: unknown): SyncPeerProgress {
     for (const field of counts) {
       if (!isNonNegativeSafeInteger(value.lastResult[field])) throw new Error(`Invalid peer sync result field: ${field}`)
     }
-    const sessionCounts = ['importedSessions', 'exportedSessions', 'skippedSessions'] as const
+    const sessionCounts = ['importedSessions', 'exportedSessions', 'skippedSessions', 'catalogNodes', 'catalogWorkspaces', 'catalogSessions', 'staleSkippedSessions'] as const
     for (const field of sessionCounts) {
       if (value.lastResult[field] !== undefined && !isNonNegativeSafeInteger(value.lastResult[field])) {
         throw new Error(`Invalid peer sync result field: ${field}`)
@@ -229,6 +229,10 @@ function validateProgress(value: unknown): SyncPeerProgress {
       importedSessions: (value.lastResult.importedSessions as number | undefined) ?? 0,
       exportedSessions: (value.lastResult.exportedSessions as number | undefined) ?? 0,
       skippedSessions: (value.lastResult.skippedSessions as number | undefined) ?? 0,
+      catalogNodes: value.lastResult.catalogNodes as number | undefined,
+      catalogWorkspaces: value.lastResult.catalogWorkspaces as number | undefined,
+      catalogSessions: value.lastResult.catalogSessions as number | undefined,
+      staleSkippedSessions: value.lastResult.staleSkippedSessions as number | undefined,
     }
   }
   return progress

@@ -73,10 +73,10 @@ describe('sync peer credentials and metadata', () => {
   it('preserves saved secrets when updates omit them and merges a rotated secret', async () => {
     const { manager, credentials } = createManager()
     const created = await manager.create(peerDraft, { privateKey: 'OLD KEY', passphrase: 'phrase' })
-    const updated = await manager.update(created.id, { schedule: 'every-5m' }, { privateKey: 'NEW KEY' })
+    const updated = await manager.update(created.id, { schedule: 'manual' }, { privateKey: 'NEW KEY' })
     const record = credentials.values()[0] as { payload: Record<string, string> }
 
-    expect(updated.schedule).toBe('every-5m')
+    expect(updated.schedule).toBe('manual')
     expect(updated.hasSecret).toEqual({ hasPassword: false, hasKey: true, hasPassphrase: true })
     expect(record.payload).toEqual({ privateKey: 'NEW KEY', passphrase: 'phrase' })
     expect((await manager.update(created.id, { enabled: false })).enabled).toBe(false)

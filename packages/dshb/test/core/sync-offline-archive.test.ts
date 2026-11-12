@@ -31,22 +31,39 @@ function createServices(
       return {
         protocolVersion: 1,
         instanceId,
-        records: [{
-          metadata: {
-            kind: 'node',
-            originInstanceId: instanceId,
-            originEntityId: 'node-private',
-            localEntityId: 'node-private',
-            revision: { physicalTimeMs: 1, logicalCounter: 0, writerInstanceId: instanceId },
-            contentDigest: `sha256:${'a'.repeat(64)}`,
+        records: [
+          {
+            metadata: {
+              kind: 'node',
+              originInstanceId: instanceId,
+              originEntityId: 'node-private',
+              localEntityId: 'node-private',
+              revision: { physicalTimeMs: 1, logicalCounter: 0, writerInstanceId: instanceId },
+              contentDigest: `sha256:${'a'.repeat(64)}`,
+            },
+            profile: {
+              name: 'Private build node',
+              type: 'remote-ssh',
+              ssh: { host: 'secret-host.internal', port: 22, username: 'operator', auth: { kind: 'password' } },
+            },
+            secrets: { password: 'super-secret-node-password' },
           },
-          profile: {
-            name: 'Private build node',
-            type: 'remote-ssh',
-            ssh: { host: 'secret-host.internal', port: 22, username: 'operator', auth: { kind: 'password' } },
+          {
+            metadata: {
+              kind: 'node',
+              originInstanceId: instanceId,
+              originEntityId: 'node-other',
+              localEntityId: 'node-other',
+              revision: { physicalTimeMs: 1, logicalCounter: 0, writerInstanceId: instanceId },
+              contentDigest: `sha256:${'b'.repeat(64)}`,
+            },
+            profile: {
+              name: 'Other build node',
+              type: 'remote-ssh',
+              ssh: { host: 'other.example.internal', port: 22, username: 'operator', auth: { kind: 'agent' } },
+            },
           },
-          secrets: { password: 'super-secret-node-password' },
-        }],
+        ],
       }
     },
     validateManifest() { return [] },
@@ -60,6 +77,7 @@ function createServices(
   }
   const sessions = {
     async exportBundle() { return makeSyncSessionBundle(instanceId, []) },
+    async exportCatalog() { return { workspaces: [], sessions: [] } },
     async recoverPending() {},
     preflightBundle() {
       if (testOptions.failSessionPreflight) throw new SyncSessionError('revision-conflict', 'session revision conflict')
@@ -153,6 +171,27 @@ afterEach(() => {
 })
 
 describe('offline sync archive', () => {
+  it('exports only selected node origins from the local catalog', async () => {
+    const sourceHome = mkdtempSync(join(tmpdir(), 'dshb-offline-source-'))
+    const targetHome = mkdtempSync(join(tmpdir(), 'dshb-offline-target-'))
+    homes.push(sourceHome, targetHome)
+    const source = createServices(sourceHome)
+    const archive = await source.archives.exportArchive('correct horse battery staple', false, {
+      mode: 'selected',
+      nodes: [{ originInstanceId: instanceId, originEntityId: 'node-private' }],
+      workspaces: [],
+      sessions: [],
+    })
+    try {
+      const target = createServices(targetHome)
+      await target.archives.importArchive('correct horse battery staple', oneChunk(readFileSync(archive.path)))
+      const applied = target.nodeApplies[0]?.records as Array<{ metadata: { originEntityId: string } }>
+      expect(applied.map((entry) => entry.metadata.originEntityId)).toEqual(['node-private'])
+    } finally {
+      archive.cleanup()
+    }
+  })
+
   it('encrypts a default configuration export and imports it as offline provenance', async () => {
     const sourceHome = mkdtempSync(join(tmpdir(), 'dshb-offline-source-'))
     const targetHome = mkdtempSync(join(tmpdir(), 'dshb-offline-target-'))

@@ -1,5 +1,7 @@
 import type { CSSProperties, ReactElement } from 'react'
 import { useEffect, useState } from 'react'
+import type { SyncCatalog } from '../core/sync/model.js'
+import { SyncSelectionPicker } from './sync-selection-picker.js'
 import {
   applyRemoteProbeToForm,
   buildSyncPeerFormRequest,
@@ -52,7 +54,10 @@ function copyText(value: string): void {
 function resultSummary(peer: SyncPeerView): string | undefined {
   const result = peer.progress?.lastResult
   if (!result) return undefined
-  return `节点导入 ${result.imported}、导出 ${result.exported}；会话导入 ${result.importedSessions}、导出 ${result.exportedSessions}；跳过 ${result.skipped}`
+  // skipped 混含节点与跳过计数；会话部分单列，元数据模式下（会话内容交换整体跳过）
+  // 也便于区分「跳过的都是节点」与「会话被选区/水位跳过」。
+  const sessionPart = result.skippedSessions > 0 ? `（其中会话 ${result.skippedSessions}）` : ''
+  return `节点导入 ${result.imported}、导出 ${result.exported}；会话导入 ${result.importedSessions}、导出 ${result.exportedSessions}；跳过 ${result.skipped}${sessionPart}`
 }
 
 interface HostKeyChallenge {
@@ -168,6 +173,8 @@ export function SyncPeersSection(): ReactElement {
   const [probing, setProbing] = useState(false)
   const [probingRemote, setProbingRemote] = useState(false)
   const [remoteProbe, setRemoteProbe] = useState<SyncRemoteProbe | undefined>(undefined)
+  const [catalog, setCatalog] = useState<SyncCatalog | undefined>(undefined)
+  const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [notice, setNotice] = useState<Notice>(undefined)
@@ -204,7 +211,6 @@ export function SyncPeersSection(): ReactElement {
 
   const statusLabel = (peer: SyncPeerView): string => {
     const status = peer.progress?.lastRunStatus
-    if (!peer.enabled) return '已停用'
     if (status === 'running') return '同步中'
     if (status === 'stopped') return '上次已停止（未完成批次已丢弃）'
     if (status === 'failed') return '上次失败'
@@ -216,6 +222,7 @@ export function SyncPeersSection(): ReactElement {
     setSelectedId(id)
     setNotice(undefined)
     setHostKeyChallenge(undefined)
+    setCatalog(undefined)
     const peer = id === 'new' ? undefined : peers.find((item) => item.id === id)
     setForm(peer ? toSyncPeerForm(peer) : EMPTY_SYNC_PEER_FORM)
   }
@@ -280,6 +287,38 @@ export function SyncPeersSection(): ReactElement {
     }
   }
 
+  const loadCatalog = async (): Promise<void> => {
+    if (selectedId === 'new') return
+    setLoadingCatalog(true)
+    setHostKeyChallenge(undefined)
+    try {
+      const response = await fetch(`/api/dshb/sync/peers/${selectedId}/catalog`)
+      const data = await readJsonResponse<{
+        ok?: boolean
+        code?: string
+        fingerprint?: string
+        expected?: string
+        catalog?: SyncCatalog
+        error?: string
+      }>(response, '读取目标节点目录失败')
+      if (data.code === 'host-key-untrusted' || data.code === 'host-key-changed') {
+        setHostKeyChallenge({
+          code: data.code,
+          fingerprint: data.fingerprint ?? '',
+          ...(data.expected ? { expected: data.expected } : {}),
+        })
+        return
+      }
+      if (!response.ok || !data.ok || !data.catalog) throw new Error(data.error ?? '读取目标节点目录失败')
+      setCatalog(data.catalog)
+      setNotice({ kind: 'ok', text: `已读取目标节点目录：${data.catalog.nodes.length} 个工作节点、${data.catalog.workspaces.length} 个工作区、${data.catalog.sessions.length} 个会话` })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '读取目标节点目录失败' })
+    } finally {
+      setLoadingCatalog(false)
+    }
+  }
+
   const probeRemote = async (): Promise<void> => {
     const secretReady = form.authKind === 'password' ? form.password !== '' : form.privateKey !== ''
     if (selectedId === 'new' && (!form.host.trim() || !form.username.trim() || !secretReady)) {
@@ -338,7 +377,7 @@ export function SyncPeersSection(): ReactElement {
   }
 
   const runSync = async (): Promise<void> => {
-    if (selectedId === 'new' || !selectedPeer?.enabled) return
+    if (selectedId === 'new') return
     setSyncing(true)
     try {
       const response = await fetch(`/api/dshb/sync/peers/${selectedId}/run`, { method: 'POST' })
@@ -409,13 +448,27 @@ export function SyncPeersSection(): ReactElement {
   }
 
   const remove = async (): Promise<void> => {
-    if (selectedId === 'new' || !window.confirm('删除此同步节点及其连接凭据？')) return
+    if (selectedId === 'new') return
+    const isMetadata = selectedPeer?.mode === 'metadata' && selectedPeer?.syncSessions
+    const confirmation = isMetadata
+      ? '删除此元数据同步节点后，本机从该节点导入的会话会被归档（从活动工作区移除，原始数据保留在归档中可恢复）；仅含这些会话的远端工作区注册也会删除。继续？'
+      : '删除此全量同步节点后，本机已同步的会话和工作区保留不变，可像本地会话一样归档。继续？'
+    if (!window.confirm(confirmation)) return
     setBusy(true)
     try {
       const response = await fetch(`/api/dshb/sync/peers/${selectedId}`, { method: 'DELETE' })
-      const data = await readJsonResponse<{ ok?: boolean; error?: string }>(response, '删除同步节点失败')
+      const data = await readJsonResponse<{
+        ok?: boolean
+        error?: string
+        cleanup?: { sessionsArchived?: number; workspacesRemoved?: number; workspacesDetached?: number }
+      }>(response, '删除同步节点失败')
       if (!response.ok || !data.ok) throw new Error(data.error ?? '删除同步节点失败')
-      setNotice({ kind: 'ok', text: '同步节点已删除' })
+      const cleanup = data.cleanup
+      const text = isMetadata && cleanup
+        ? '同步节点已删除；' + (cleanup.sessionsArchived ?? 0) + ' 个导入会话已归档（可从归档恢复），' + (cleanup.workspacesRemoved ?? 0) + ' 个远端工作区已移除' + (cleanup.workspacesDetached ? '，' + cleanup.workspacesDetached + ' 个含其他会话的工作区已保留' : '')
+        : isMetadata ? '同步节点已删除；本机归档清理未返回结果，请检查相关工作区' : '同步节点已删除；全量同步的本地会话和工作区已保留不变'
+      setNotice({ kind: 'ok', text })
+      window.dispatchEvent(new Event('dshb:sync-peers-changed'))
       setSelectedId('new')
       setForm(EMPTY_SYNC_PEER_FORM)
       reload()
@@ -640,42 +693,49 @@ export function SyncPeersSection(): ReactElement {
         {/* 同步策略 */}
         <div style={{ ...groupTitle, marginTop: 20 }}>同步策略</div>
 
-        <div className="dshb-sync-two-col">
-          <div style={field}>
-            <span style={label}>同步方向</span>
-            <select style={inputStyle} value={form.direction}
-              onChange={(e) => setForm((c) => ({ ...c, direction: e.target.value as SyncPeerForm['direction'] }))}>
-              <option value="pull">单向拉取到本机</option>
-              <option value="bidirectional">双向同步</option>
-            </select>
-          </div>
-          <div style={field}>
-            <span style={label}>同步时机</span>
-            <select style={inputStyle} value={form.schedule}
-              onChange={(e) => setForm((c) => ({ ...c, schedule: e.target.value as SyncPeerForm['schedule'] }))}>
-              <option value="manual">手动</option>
-              <option value="every-5m">每 5 分钟</option>
-            </select>
+        <div style={field}>
+          <span style={label}>工作节点配置</span>
+          <div style={hint}>点击「立即同步」时从远端 DSH 实例拉取。</div>
+        </div>
+
+        <div style={field}>
+          <span style={label}>工作区会话</span>
+          <select style={inputStyle} value={form.sessionSync}
+            onChange={(e) => setForm((c) => ({ ...c, sessionSync: e.target.value as SyncPeerForm['sessionSync'] }))}>
+            <option value="off">不同步</option>
+            <option value="full">全量同步</option>
+            <option value="metadata">元数据同步</option>
+          </select>
+          <div style={hint}>
+            {form.sessionSync === 'metadata'
+              ? '不传输离线文件：侧栏会话行的「打开远端会话」自动经加密 SSH 通道实时显示远端会话消息，可直接继续对话与审批，不受同步时机限制。'
+              : form.sessionSync === 'full'
+                ? '点击「立即同步」时把会话完整内容传输到本机，导入后可离线继续；数据量大时耗时较长。'
+                : '仅同步工作节点配置；需要会话时再切换为全量或元数据同步。'}
           </div>
         </div>
 
-        <div style={{ ...field, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
-            <input type="checkbox" checked={form.syncSessions} style={{ marginTop: 2 }}
-              onChange={(e) => setForm((c) => ({ ...c, syncSessions: e.target.checked }))} />
-            <span>
-              <span style={{ fontSize: 13 }}>同步工作区会话</span>
-              <span style={{ display: 'block', fontSize: 11, opacity: 0.5, marginTop: 2 }}>
-                覆盖已绑定 SSH 或 Docker 远程节点的工作区，保留冲突分支供恢复
-              </span>
-            </span>
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input type="checkbox" checked={form.enabled}
-              onChange={(e) => setForm((c) => ({ ...c, enabled: e.target.checked }))} />
-            <span style={{ fontSize: 13 }}>启用此同步节点</span>
-          </label>
-        </div>
+        {selectedPeer && form.sessionSync === 'full' && (
+          <div style={{ ...field, display: 'grid', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+              <span style={label}>同步范围</span>
+              <button type="button" style={secondaryBtn} disabled={loadingCatalog || probing || busy} onClick={() => void loadCatalog()}>
+                {loadingCatalog ? '读取范围中…' : catalog ? '重新读取同步范围' : '读取同步范围'}
+              </button>
+            </div>
+            <div style={hint}>每次点击都会从目标同步节点实时拉取可选项。选择工作区会包含其会话；单独选择会话时会自动纳入所需的工作区与节点。</div>
+            {catalog && (
+              <SyncSelectionPicker
+                catalog={catalog}
+                selection={form.selection}
+                name={`sync-selection-${selectedPeer.id}`}
+                onChange={(selection) => setForm((current) => ({ ...current, selection }))}
+                includeSessions={form.sessionSync === 'full' || form.sessionSync === 'metadata'}
+                disabled={busy}
+              />
+            )}
+          </div>
+        )}
 
         {/* 主机指纹 */}
         {selectedPeer?.hostKeyFingerprint && (
@@ -740,7 +800,7 @@ export function SyncPeersSection(): ReactElement {
             </button>
           )}
           {!isNew && (
-            <button type="button" onClick={() => void (syncInProgress ? stopSync() : runSync())} disabled={busy || probing || stopping || (!selectedPeer?.enabled && !syncInProgress)} style={secondaryBtn}>
+            <button type="button" onClick={() => void (syncInProgress ? stopSync() : runSync())} disabled={busy || probing || stopping} style={secondaryBtn}>
               {stopping ? '正在停止…' : syncInProgress ? '停止同步' : '立即同步'}
             </button>
           )}

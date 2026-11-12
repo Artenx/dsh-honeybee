@@ -10,13 +10,13 @@ import {
 } from '../../src/client/sync-peer-form.js'
 
 describe('sync peer form model', () => {
-  it('defaults to manual pull with session sync disabled', () => {
+  it('defaults to session sync disabled with no direction or schedule', () => {
     expect(EMPTY_SYNC_PEER_FORM).toMatchObject({
-      direction: 'pull',
-      schedule: 'manual',
-      syncSessions: false,
-      enabled: true,
+      sessionSync: 'off',
     })
+    expect(EMPTY_SYNC_PEER_FORM).not.toHaveProperty('direction')
+    expect(EMPTY_SYNC_PEER_FORM).not.toHaveProperty('schedule')
+    expect(EMPTY_SYNC_PEER_FORM).not.toHaveProperty('enabled')
   })
 
   it('requires valid SSH fields and credentials for the selected auth method', () => {
@@ -49,10 +49,8 @@ describe('sync peer form model', () => {
       remoteDshHome: '/home/sync/.dsh',
       remoteProfile: 'web',
       remoteWebPort: 3090,
-      direction: 'bidirectional',
-      schedule: 'every-5m',
       syncSessions: true,
-      enabled: false,
+      mode: 'metadata',
       hasSecret: { hasPassword: false, hasKey: true, hasPassphrase: true },
     }
     const form = toSyncPeerForm(peer)
@@ -61,10 +59,7 @@ describe('sync peer form model', () => {
       name: 'Peer',
       port: '2222',
       remoteWebPort: '3090',
-      direction: 'bidirectional',
-      schedule: 'every-5m',
-      syncSessions: true,
-      enabled: false,
+      sessionSync: 'metadata',
     })
     expect(form.password).toBe('')
     expect(form.privateKey).toBe('')
@@ -85,7 +80,35 @@ describe('sync peer form model', () => {
 
     expect(request.fields).toMatchObject({ name: 'Peer', host: 'peer.example', username: 'sync', port: 22 })
     expect(request.fields).not.toHaveProperty('remoteDshHome')
+    expect(request.fields.selection).toEqual({ mode: 'all', nodes: [], workspaces: [], sessions: [] })
     expect(request.secrets).toEqual({ privateKey: 'selected private key', passphrase: 'key phrase' })
+  })
+
+  it('round-trips an explicit stable-origin selection scope', () => {
+    const selection = {
+      mode: 'selected' as const,
+      nodes: [{ originInstanceId: 'i-source', originEntityId: 'node-a' }],
+      workspaces: [{ originInstanceId: 'i-source', originEntityId: 'workspace-a', remotePath: '/work/app' }],
+      sessions: [{ originInstanceId: 'i-source', originEntityId: 'session-a' }],
+    }
+    const form = { ...EMPTY_SYNC_PEER_FORM, selection }
+    const request = buildSyncPeerFormRequest(form)
+    const peer = {
+      name: 'Peer',
+      host: 'peer.example',
+      port: 22,
+      username: 'sync',
+      authKind: 'password' as const,
+      direction: 'pull' as const,
+      schedule: 'manual' as const,
+      syncSessions: true,
+      enabled: true,
+      selection,
+      hasSecret: { hasPassword: true, hasKey: false, hasPassphrase: false },
+    }
+
+    expect(request.fields.selection).toEqual(selection)
+    expect(toSyncPeerForm(peer).selection).toEqual(selection)
   })
 
   it('validates optional remote web port boundaries', () => {

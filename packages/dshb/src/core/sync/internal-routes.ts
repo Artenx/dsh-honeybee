@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { isLoopbackRequest } from '../../auth/loopback.js'
@@ -10,9 +12,11 @@ import {
   SYNC_SESSION_EVENT_TAIL_CAPABILITY,
   SYNC_SESSION_MANIFEST_CAPABILITY,
   SYNC_SESSION_OBJECT_STREAM_CAPABILITY,
+  SYNC_CATALOG_CAPABILITY,
 } from './protocol.js'
 import { SyncSessionError, type SyncSessionEventPrefix, type SyncSessionService, validateObjectPayload } from './session-sync.js'
 import type { SyncStateStore } from './stores.js'
+import { exportSyncCatalog } from './catalog.js'
 
 // 与 MAX_SYNC_TRANSFER_BYTES 对齐的请求体硬上限：超限直接断开（resolve null → 400），
 // 避免对端（或恶意请求）把宿主堆吃满。协调器分批后正常请求远小于该值。
@@ -141,6 +145,7 @@ export function registerSyncInternalRoutes(
     'peer-handshake',
     ...(nodeSync ? ['node-sync'] : []),
     ...(sessionSync ? ['session-sync', SYNC_SESSION_MANIFEST_CAPABILITY, SYNC_SESSION_EVENT_TAIL_CAPABILITY, SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY, SYNC_SESSION_OBJECT_STREAM_CAPABILITY] : []),
+    ...(nodeSync && sessionSync ? [SYNC_CATALOG_CAPABILITY] : []),
   ]
   ctx.effect(() =>
     ctx.webServer.register({
@@ -211,6 +216,28 @@ export function registerSyncInternalRoutes(
     }),
   )
 
+  if (nodeSync && sessionSync) ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/dshb/sync/internal/catalog',
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req.socket.remoteAddress, req.headers.host)) {
+          sendJson(res, 403, { ok: false, error: 'loopback access required' })
+          return
+        }
+        if (req.method !== 'GET') {
+          sendJson(res, 405, { ok: false, error: 'method not allowed' })
+          return
+        }
+        try {
+          sendJson(res, 200, { ok: true, catalog: await exportSyncCatalog(nodeSync, sessionSync) })
+        } catch {
+          sendJson(res, 500, { ok: false, error: 'sync catalog export failed' })
+        }
+      },
+    }),
+  )
+
   if (!sessionSync) return
   ctx.effect(() =>
     ctx.webServer.register({
@@ -275,6 +302,49 @@ export function registerSyncInternalRoutes(
         }
         if (req.method === 'POST' && action === 'objects') {
           await handleSessionObjects(sessionSync, req, res)
+          return
+        }
+        if (req.method === 'POST' && action === 'file') {
+          // 超限会话降级路径：按会话 ID 返回原始 session.v4.jsonl.zstd 字节。
+          // 会话存储目录由 mirror localPath 推导（与 dsh persistence 的 '--cwd--' 命名一致）。
+          const body = await readJsonBody(req)
+          const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : ''
+          const remotePath = typeof body?.remotePath === 'string' ? body.remotePath : ''
+          if (!sessionId.startsWith('session-') || !remotePath.startsWith('/')) {
+            sendJson(res, 400, { ok: false, code: 'session-request-invalid', error: 'sessionId and remotePath are required' })
+            return
+          }
+          // 同一 remotePath 可能有多个 mirror（不同节点各一个镜像）；
+          // 逐个尝试，取存在且非空、header.id 匹配的会话文件。
+          const mappings = Object.values(state.read().workspaces).filter(
+            (item) => item.remotePath === remotePath)
+          if (mappings.length === 0) {
+            sendJson(res, 404, { ok: false, code: 'workspace-unmapped', error: 'no local mapping for remote path' })
+            return
+          }
+          let payload: Buffer | undefined
+          for (const mapping of mappings) {
+            const home = mapping.localPath.split('/dshb/mirrors/')[0]
+            if (home === mapping.localPath) continue
+            const sessionDir = join(home, 'sessions', `--${mapping.localPath.split('/').filter(Boolean).join('-')}--`, sessionId)
+            try {
+              const data = readFileSync(join(sessionDir, 'session.v4.jsonl.zstd'))
+              // 文件是 zstd 分帧压缩的二进制（帧内可能含任意字节），不能按明文 JSONL 校验；
+              // 只做非空校验，header.id 的最终校验由接收端解压后完成。
+              if (data.length < 64) continue
+              payload = data
+              break
+            } catch {
+              // 该镜像里没有此会话或文件损坏：尝试下一个镜像。
+            }
+          }
+          if (payload === undefined) {
+            sendJson(res, 404, { ok: false, code: 'session-file-missing',
+              error: `session file not found in any mirror (${mappings.length} candidates)` })
+            return
+          }
+          res.writeHead(200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' })
+          res.end(payload)
           return
         }
         if (req.method === 'POST' && action === 'apply') {

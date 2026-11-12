@@ -33,7 +33,10 @@ const PATCH_FIELDS = new Set([
   'remoteWebPort',
   'direction',
   'schedule',
+  'mode',
+  'syncNodes',
   'syncSessions',
+  'selection',
   'enabled',
 ])
 const MAX_SECRET_BYTES = 64 * 1024

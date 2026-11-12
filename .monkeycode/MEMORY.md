@@ -137,6 +137,48 @@ Entries discovered by the Agent during task execution should follow this format:
   - 当前远端 DSHB 版本号 0.1.18 与本地相同（本地含未提交的 delivery marker 修复与 202 异步受理修复），故验证靠 lib 文件哈希而非版本号
 
 [Project Knowledge Summary]
+- Date: 2026-11-05
+- Context: 排查「同步协议不兼容：SSH channel error: remote helper exited with code 1」（用户桌面端与 3204 均复现）
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 「同步协议不兼容」（ssh-protocol）有两类触发：远端 helper 请求内部路由返回非 200（helper exitCode=1），或 readFrames/帧解码失败。看 lastResult 里 catalog 计数是否已写入——已写说明失败在会话内容阶段，未写说明在节点/目录阶段
+  - 手动复刻 helper：从构建产物取 REMOTE_SYNC_HELPER_COMMAND 的 b64（node -e eval 自包含），经 ssh2 exec + 帧协议喂 request control；data 帧头 36 字节（4 序列+32 摘要）；TCP 粘包必须逐帧解（SyncFrameDecoder），按 chunk 偏移会错位
+  - 「session ... contains event type unknown to this harness」= 本地 dsh CLI 依赖树里 dsh-session 版本过旧（0.1.7-rc.1 缺 job/registered 等），远端 0.2.1-rc.4 会话含新类型。修复：全新 npm install @deepseek-ai/dsh@0.2.1-rc.4 建独立运行树（勿在旧树 --no-save 补装，会打断依赖链接），再建 @artenx/dshb symlink
+  - 沙箱到 193 的 SSH 通道对大流量（全量同步几十 MB）触发透明代理冻结 → ssh-protocol/ssh-timeout；元数据同步（目录 ~17KB）稳定；全量大同步在桌面端（用户网络直连 193）不受影响
+  - 实例进程长期运行后即使 dshb 是 symlink 也用着启动时的旧模块；对比 sync/peers API 返回的 direction 等归一化字段可判断进程构建代次，重启实例即加载新构建
+[Project Knowledge Summary]
+- Date: 2026-11-04
+- Context: 0.1.46 部署 193 后容器重启循环（webStartup 缺失），根因是 tar 部署从不覆盖 dshb 包内 cordis.patch.yml
+- Category: Operations & Deployment
+- Instructions:
+  - tar 部署（lib+package.json）会保留 193 上 dshb 包内的旧 cordis.patch.yml——该文件属于包内容（npm files 含它），随版本演进；部署 tar 必须包含并覆盖它，否则包内补丁定义（如 0.1.34 已删除的 dshb-web-startup → @artenx/dshb/auth/startup）会潜伏到某次重启引爆 ERR_PACKAGE_PATH_NOT_EXPORTED
+  - profile 根的 cordis.patch.yml（用户配置）与 dshb 包内的 cordis.patch.yml（包自带补丁层）是两个文件：前者 tar 不覆盖，后者必须覆盖
+  - 诊断启动循环：docker ps 显示 Restarting (1)；诊断日志在宿主 /home/mt/.dsh/logs/startup-*.log（容器反复重启时 docker exec 不可用，必须走宿主 bind 路径读）
+
+[Project Knowledge Summary]
+- Date: 2026-11-04
+- Context: Agent 实现规格任务 3（远端会话页 wss 流式交互）时的架构结论与端到端验证方式
+- Category: Operations & Deployment
+- Instructions:
+  - 远端会话页方案 = 本地反代 + iframe 加载远端完整官方 UI（不做自研消息渲染）。可行性的前提已核实：官方前端（dsh-web-frontend dist）无 URL 路由（无 pushState/hashchange 路由）、资源引用与 fetch 全部是文档相对路径（`fetch('api/...')` 无前导斜杠），因此放在本地代理前缀 `/api/dshb/sync/relay/<peerId>/app/` 下时所有子请求自然落在代理前缀内
+  - 浏览器实时通道是 `/api/remote.mux` 升级（dsh-api-gateway REMOTE_STREAM_MUX_PATH，admitConnection 认证）；本地侧 per-peer 懒注册 `registerUpgrade` 精确路径透传（registerUpgrade 是 exact-path 匹配，不能动态通配）；升级透传必须用 piping 状态标志防「101 头边界后重复解析」（echo 服务器上会回环放大）
+  - 测试双工透传时不要给浏览器侧 PassThrough 挂 data 监听（会拉成 flowing 使 read() 返回 undefined）；断言用收集数组。mock req 用 setTimeout(end) 而非 emit('end')（PassThrough 的 end 需真实调用才能传播）
+  - 端到端验证脚本：/tmp/opencode/ws-e2e.mjs（WebSocket 连 3206 的 relay upgrade 路径，期望 101）；A(3206)/B(3207) 的 dshb 是 symlink 指向 workspace 构建产物
+  - 193 发布流程：本地 tar lib+package.json → scp /tmp → 备份 TARGET/lib → 解压 → chown 1001:1001 → docker restart dsh（~2s healthy）；备份目录 /root/dshb-backup-<stamp>
+
+[Project Knowledge Summary]
+- Date: 2026-11-04
+- Context: Agent 排查 193 上 TX_4-8 工作区全部会话假死（turn/start 后零步进、cancel 无效），根因是 dshb exec-ssh 层；0.1.41 修复（keepalive + 操作级超时）并已部署 193
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 假死特征：会话 running:true、inbox 可进可消费，但 turn/start 之后无 step/start、sessionStats 全 0、无 error/turn/end 事件 —— 挂点必在 preStep 的 systemPrompt.assemble 内（system-prompt/assemble waterfall），首查 dsh-working-directory 的 ensure → ctx.fs.stat(cwd)
+  - dshb decorateFileSystem（src/router/decorate-fs.ts）按路径前缀把 DSH 的 fs.stat/readText 等包装为远程世界转发：cwd 命中 dshb mirror 绑定（/home/mt/.dsh/dshb/mirrors/<nodeId>/...）就经 SSH 转发到该节点。故「某节点 mirror 路径下新 turn 全挂、其他路径正常」= 该节点 SSH 通道冻结 + 无超时
+  - exec-ssh 原缺陷：keepaliveInterval:0（半开 TCP 永不报错）+ 连接池复用死 client + SFTP/exec 无操作超时。修复（connection.ts/executor.ts）：keepalive 15s×3、invalidate() 作废重建、guard() 按 DSHB_SSH_OP_TIMEOUT_MS（默认 20s）超时并作废连接；连接池持有同一 SshConnection 对象即可自愈
+  - 远程进程断点定位法（本次成功实践）：docker exec dsh sh -c "kill -USR1 1" 激活 inspector → 容器内跑 CDP WebSocket 脚本（/tmp/cdp-bp.mjs，源码在 /tmp/opencode/）→ Debugger.setBreakpointByUrl 按 node_modules 文件名+行号（先 sha256sum 对比本地 node_modules 确认同版本）→ 触发探针看 PAUSED 序列缺失处即挂点
+  - 193 排障通道：root@193.112.17.199 密码在 /tmp/opencode/dshv19preview/.credentials.yaml 的 dshb-core/p-16dc7e8241fa9de58cbe4533 记录（sshpass -e + SSHPASS 环境变量注入，勿外泄）；本地 3204 实例经 /api/dshb/sync/relay/p-16dc7e8241fa9de58cbe4533/call/<ns>/<method> 可调远端 DSH Remote API（session/list、session/page、session/projections、workspace/archiveSession 等）
+  - 193 dshb 部署为普通 npm 目录（/home/mt/.dsh/profiles/web/node_modules/@artenx/dshb），无 symlink；本地 sync-a/sync-b（3206/3207）的 dshb 是 symlink 指向 workspace 构建产物，pnpm build 后重启进程即加载新代码
+
+[Project Knowledge Summary]
 - Date: 2026-10-31
 - Context: Agent 为 0.1.23/0.1.24 同步优化做双实例 SSH 同步实测时排查沙箱网络冻结
 - Category: Troubleshooting & Debugging
@@ -156,3 +198,19 @@ Entries discovered by the Agent during task execution should follow this format:
   - 桌面端（Electron 宿主堆约 1.4GB）节点同步 OOM 崩溃的根因是单次传输/驻留全部会话：导出端 canonicalJson 巨型字符串 + events.map 深拷贝（4-5 倍放大）、附件 base64 内联 JSON、导出对象缓存无上限、接收端整包 JSON.parse。0.1.31 起的修复约定：传输限额 128MB（MAX_SYNC_TRANSFER_BYTES）、摘要必须流式逐事件哈希且与 canonicalJson 逐字节等价（改算法需两端同版，否则 revision-conflict）、附件缓存 64MB LRU、超大附件记 session-payload-too-large 跳过该会话、协调器按 12MB/批自适应分批（单会话独占一批）。改动同步内存逻辑时必须保持这些边界
   - 上游 dsh-client-ui-model-selection 自 0.2.1-rc.2 起菜单已 position:fixed 并自带 place() 视口钳制（portal 到 body）；插件此前写入的 left/width !important 兜底会覆盖上游计算，对菜单内搜索框自动聚焦做 blur 会触发上游 onBlur 的 close()（焦点移出菜单即关闭）——手机上表现为菜单刚打开就被关掉。插件只保留模型名换行与字号适配，定位与焦点完全交还上游
   - 3204 预览 profile 的 `profiles/web/package.json` 的 `dsh.profile.bundles` 曾丢失 `@artenx/dshb` 导致插件不激活（/login 404、内部路由 401 unauthorized 来自 DSH 自身围栏）；修复为手补 bundles 数组并重启
+
+[Project Knowledge Summary]
+- Date: 2026-11-06
+- Context: Agent 排查 193 升级 DSH 0.2.2-rc.1 后 iPhone Safari 打开 Web UI 白屏（桌面正常）
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 白屏根因是 dshb mobile.tsx 自绘抽屉与 0.2.2 原生抽屉冲突：0.2.2 起 AppFrame 在 viewport<768 给 frame 加 data-sidebar-drawer（侧栏列自带绝对定位+translate+drawerMask+leadingSeat），且 centerCol 从无 grid-area 改为固定 grid-area:1/2；dshb 旧规则 `[data-dshb-mobile="frame"]{grid-template-columns:minmax(0,1fr) 0 0!important}` 会把第 2 列压成 0 宽 → 会话区 0x844@390 移出屏幕（实测：正确态 columns=0px 390px 0px，冲突态=390px 0px 0px）。0.2.1 无 grid-area 靠自动布局落在第 1 列，故旧规则当时可用
+  - 0.1.50 修复模式：运行时扫描 style 标签探测 `data-sidebar-drawer`（上游 CSS 晚注入，须 MutationObserver 内复查升级标记），命中则 frame 标记改打 frame-native 使 dshb 抽屉 CSS 整体失效，并停用 dshb 切换按钮/FAB/遮罩防重复；打包测试锁定该让位逻辑
+  - 同步「跳过 N」语义（0.1.52 排障）：UI 的 skipped = 节点 plan/apply skip + 会话 skip + stale（coordinator.ts:655），元数据模式（mode=metadata）下会话内容交换整体跳过（仅同步节点/工作区元数据并拉目录计数）——「会话导入 0 导出 0」是模式设计行为；「跳过 4」= 4 个工作节点元数据与对端已一致（无变化），均为正常
+  - 同步 relay 反代黑屏根因与修复（0.1.54）：dshb-auth 的 AuthGate 此前只认自己的 session cookie，不认 relay 铸造的 dsh browser-auth 格式 cookie（dsh-auth-<sha256(authority)>，HMAC 用 browser-session 密钥）——relay 反代请求被当未认证，远端返回 404，iframe 黑屏。修复：relay-auth 加 verifyRelayCookie/requestHasValidRelayCookie（与 mint 对称），AuthGate.decide 在 loopback/session 之后、redirect-login 之前加 relay cookie 放行分支（decide 改 async，guarded 全链路 await）；auth 插件注入 credentials 懒加载缓存 browser-session 密钥。relay cookie 仅由远端 SSH 回环内部路由铸造、10 分钟有效，攻击者无法伪造。修复在服务端（被反代的远端），必须部署到 193
+  - 193「隐形覆盖」部署法（0.1.54 实测）：npm staged 未审批时 dsh plugin add 拉不到新版；tar 覆盖 lib+cordis.patch.yml 但**不动 package.json**（保持版本号与 pnpm-lock 一致），reconcile 校验 node_modules 版本===lock 版本通过不重装，新代码得以驻留。等 registry 审批后再 dsh plugin add 正规升级同步版本号
+  - 元数据同步（mode=metadata）的能力边界与目录浏览（0.1.53）：该模式只交换工作节点配置 + 拉目录计数，会话内容交换整体跳过（coordinator.ts:411 设计行为）；0.1.52 及之前远端目录（工作区/会话清单）拉回后只落三个计数即丢弃，桌面端无展示通道（用户感知"元数据没被同步"）。0.1.53 补全：侧栏 footer「远端」按钮 → 目录浮层实时拉 /api/dshb/sync/peers/<id>/catalog（该路由早已存在，全量模式选区在用）→ 按工作区分组 → 点击经既有 SSH relay overlay 实时打开远端 app；core 零改动。侧栏注入点：sidebar.footer.action（footer 操作区）；目录浮层样式与 relay overlay（data-dshb-remote-overlay）复用 remote-session.tsx
+  - 远端探测端口自动发现的两个坑（0.1.52 修复）：①候选端口写死（3080/8080/3079/3204/3206/3207/9080 + ps 抓 --port），docker 映射端口（docker-proxy 用 -host-port 13080 格式）抓不到 → 候选补 /proc/net/tcp[6] 全量监听端口（Linux；macOS 静默跳过）；②并发探测窗口不回填——done() 只递减 active，超出首批 4 个的候选永不探测，进程靠 event loop 耗尽自然退出（表现为"探测通过但部分端口从未扫到"）→ done() 内回填 probe() 并加 settled 防重入（timeout destroy 后 error 双回调）；实机验证法：本地 build 后把 buildRemoteProbeScript() 输出 scp 到对端 sh 执行看 handshake 行
+  - 通用教训：dshb 引用上游 hashed class（1gdtu_/4qrvp_/7KE1Ra_ 等）的规则在上游升级后会静默失效（0.2.2 实测 23 个选择器 21 个 0 命中），排障时先在真实 DOM 上 querySelectorAll 数命中再谈冲突；凡基于上游布局结构的覆盖（grid 列、绝对定位、z-index）必须做能力探测而非写死
+  - headless Chrome 无法复现该 bug 的原因：MOBILE_QUERY=`(max-width:1023px) and (pointer:coarse)`，headless 报 pointer:fine，dshb 抽屉标记根本没打上（CDP setEmulatedMedia 不支持 pointer 特性，模拟粗指针无效）；真机差异要靠 dshb-debug 面板（#dshb-debug，含 layout 转储）在真机上取证
+  - 193 dshb 增量部署流程（0.1.49/0.1.50 实测）：本地 `tar czf lib cordis.patch.yml package.json` → scp 到 /tmp → 服务器校验旧版本号 → `cp -a` 备份到 /root/dshb-backup-* → tar 解压覆盖 `/home/mt/.dsh/profiles/web/node_modules/@artenx/dshb` → chown 1001:1001 lib → docker restart dsh → 轮询 /api/dshb/sync/peers 健康检查；npm staged 发布（pnpm --filter @artenx/dshb publish --no-git-checks）需 npmjs.com 审批后 latest 才生效，急用时走增量部署。**坑（0.1.51 实测）**：tar 覆盖后 profile 清单仍留旧版本（dependencies/pnpm-lock.yaml），日常依赖 reconcile 按锁文件跑 pnpm install 会把 node_modules 回滚到旧版（本次 0.1.51→0.1.18，且旧版 engines 与 dsh 0.2.2-rc.1 不兼容、重启即被 startup 拒载）；插件 UI 显示的版本读 profile 依赖声明而非 node_modules 实际内容。部署后必须 `docker exec dsh dsh plugin --profile web add @artenx/dshb@<ver>` 正规升级使 dependencies/lock/node_modules 三者一致并重启验证 `dsh plugin --profile web list` 无 incompatible 告警

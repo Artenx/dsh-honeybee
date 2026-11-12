@@ -323,6 +323,8 @@ SSH 是 peer 身份和传输通道。每个实例在运行中的 DSHB 进程内�
 | Local Sync API | 在当前 DSHB 进程内调用 NodeRegistry、workspaceRegistry、SessionPersistence、attachments、storage 与项目指令快照服务 |
 | Remote SSH helper | 以固定程序入口和结构化输入调用远端 loopback Sync API；stdout/stderr 不输出秘密字段 |
 | SyncScheduler | 启动时读取已启用 peer，并为 `every-5m` peer 安排 300 秒任务；同一 peer 的运行任务不重叠 |
+| SyncCatalog | 汇总可迁移节点、工作区和会话摘要；不返回节点秘密或会话事件 |
+| SyncSelectionPicker | 每次读取同步范围时刷新目标 peer 目录；以树形清单选择节点、工作区和会话；会话显示可读标题（缺省显示“未命名会话”，完整 ID 放在提示中），文件大小显示在名称之后；选择子级时自动纳入恢复依赖 |
 
 #### Peer configuration
 
@@ -339,7 +341,9 @@ interface SyncPeer {
   remoteWebPort?: number
   direction: 'pull' | 'bidirectional'
   schedule: 'manual' | 'every-5m'
+  mode: 'full' | 'metadata'
   syncSessions: boolean
+  selection?: SyncSelection
   enabled: boolean
   hostKeyFingerprint?: string
 }
@@ -347,9 +351,40 @@ interface SyncPeer {
 
 `SyncPeer` 不含密码、私钥或 passphrase。秘密以 peer ID 为凭据键保存在 DSH credentials 服务；API/UI 只返回秘密存在状态。同步 SSH 连接首次连接时展示 host-key 指纹并要求信任，后续指纹变化时拒绝同步。
 
+`selection` 缺省或 `mode: 'all'` 表示既有全量范围。`mode: 'selected'` 持久化 `nodes`、`workspaces`、`sessions` 三类来源引用；每个引用由 `(originInstanceId, originEntityId)` 唯一标识。同步节点清单提供目标端可迁移目录；离线导出清单提供本机可迁移目录。选择节点包含该节点配置；选择工作区包含其全部会话和父节点；选择单个会话包含该会话及父工作区、节点依赖。UI 在工作区全选与逐会话选择间提供明确切换。目录仅包含摘要、名称/路径、来源身份和可选 `sizeBytes`，不包含节点秘密、事件正文、附件或 spill payload。
+
+```ts
+interface SyncSelection {
+  mode: 'all' | 'selected'
+  nodes: SyncOrigin[]
+  workspaces: Array<SyncOrigin & { remotePath: string }>
+  sessions: SyncOrigin[]
+}
+
+interface SyncCatalog {
+  protocolVersion: 1
+  instanceId: string
+  nodes: Array<{ origin: SyncOrigin; name: string; type: 'remote-ssh' | 'remote-docker' }>
+  workspaces: Array<{ origin: SyncOrigin; nodeOrigin: SyncOrigin; remotePath: string; title: string }>
+  sessions: Array<{
+    origin: SyncOrigin
+    workspaceOrigin?: SyncOrigin
+    workspaceRemotePath?: string
+    nodeOrigin?: SyncOrigin
+    sessionId: string
+    title?: string
+    sizeBytes?: number
+    branchId?: string
+    deleted?: boolean
+  }>
+}
+```
+
 #### Peer endpoints
 
 运行中的 DSHB 提供 loopback-only 的 peer handshake、manifest、export、apply 和 run-status 接口。远端 helper 通过自身主机上的 `127.0.0.1` 或 `::1` 调用接口；本机 SyncCoordinator 通过 SSH stdin/stdout 在两端传输长度前缀的 NDJSON 控制帧与二进制数据块。所有远端命令使用固定 helper 入口，参数通过 stdin 编码，不拼接用户输入到 shell 命令。
+
+`GET /api/dshb/sync/internal/catalog` 是 loopback-only 摘要目录接口，通过独立 `sync-selection-catalog-v1` capability 协商。同步范围选择器每次打开或刷新时从目标 peer 实时拉取目录；离线导出选择器读取本机目录。会话标题从 session title projection cache 零 I/O 读取，缺少标题时显示“未命名会话”并将 session ID 放入提示；`sizeBytes` 仅在同步范围列表中显示，且位于会话名称之后。
 
 Handshake 返回 `instanceId`、DSHB sync protocol version、DSH session format version、数据根目录状态与能力集合。helper 优先发现 DSH WebServer 端口；桌面 profile 或自定义端口无法发现时由 peer 配置提供 `remoteWebPort`。未知协议版本、缺失 DSHB 插件或未运行的 WebServer 均在数据传输前失败。
 
@@ -382,6 +417,7 @@ interface SyncRevision {
 - 多 peer 间转发继续保留原始 origin；同一 revision/hash 的 SSH、离线包或重复传输都收敛到同一记录。归档分支以稳定 branchId 去重，不会在 A→B→A 往返时复制出新分支。
 - 不同版本按 HLC 排序；相同 HLC 使用 writer instance ID 排序。Session 的输家版本按 LWW Session Archive 转存，不进行事件级合并。
 - `syncSessions` 属于每个 peer 的持久设置。该开关开启后，该 peer 每次手动或定时运行都带上节点 manifest 和会话 manifest；关闭时仍同步节点配置。
+- `selection` 属于每个 peer 的持久设置。旧 peer 缺省按 `all` 处理。协调器先用完整 manifest 执行 HLC/LWW 比较，再从计划中过滤未选实体；部分清单不参与缺项或删除推断。
 
 ### Correctness Properties
 
@@ -392,12 +428,15 @@ interface SyncRevision {
 5. `local-host` 和 `local-docker` 节点，以及没有非默认远程工作区映射的会话永远不进入同步 bundle。
 6. SSH 密码、私钥、passphrase 不进入 node view、peer view、同步日志或诊断文本。
 7. 单次 LWW 裁决由 HLC 与 writer instance ID 给出同一确定顺序；相同输家 revision/content 只生成一个 branchId，事件流完整保留在恢复归档中。
+8. 过滤只作用于完整 manifest 比较后的传输计划；范围外记录及其 tombstone 状态在两端保持不变。
+9. 每个选中工作区/会话所需的节点依赖随选择一并纳入；相同来源引用在重复编辑和同步后保持稳定。
+10. 会话目录只返回来源身份、工作区摘要、显示 ID 和 `sizeBytes`，不得返回事件、附件、spill 内容或节点秘密。
 
 ### Synchronization Flow
 
 1. UI 调用本机 `/api/dshb/sync/peers/:peerId/run`；本机路由由现有 DSHB 登录门保护。
 2. SyncCoordinator 获取 peer lock，读取 host key pin，建立 SSH 并执行远端固定 helper。
-3. 两端交换 handshake 与增量 manifest；根据 direction、`syncSessions` 和 last-success watermarks 形成导入/导出计划。
+3. 两端交换 handshake 与完整 manifest；根据 direction、`syncSessions`、selection 和 last-success watermarks 形成导入/导出计划。选择范围在差异规划后过滤。
 4. 单向 `pull` 只把 peer 作为来源、本机作为目标；同步记录在本机由 peer 版本覆盖，本机变化不推送。
 5. 双向模式先交换双方变化集，再按记录 HLC 选择活动版本；一方仅有新版本时向另一端复制，双边变更时采用较新版本。
 6. 两端在 staging 中接收、校验并解析数据；检查 SHA-256、记录身份、格式版本、对象引用、cwd 映射和空间限额。
@@ -416,6 +455,8 @@ interface SyncRevision {
 - 来源 workspace 的 `cwd` 先经 WorkspaceRegistry 和 WorkspaceBindings 解析成 `(originNodeId, remotePath)`，目标以对应 imported node 的本机 binding 计算 `mirrorPath`，然后重建目标 WorkspaceRegistry entry；会话 header 的 cwd 指向目标 mirrorPath。
 - 如果 workspace 的 remotePath 在目标实例无法由导入 node 表达，相关会话不创建，peer 结果列出未导入原因；已成功导入的节点配置保持完整。
 - 为避免跨 source ID 和 cwd 的 JSONL 物理路径重复，导入时生成本地 SessionId，并通过 origin mapping 关联来源 SessionId。父会话、fork lineage、项目指令 snapshots、workspace memberships 同批重映射。
+- 节点/会话的 `selection` 以来源身份匹配两侧完整 manifest。节点选择包含节点配置；所选工作区包含同一来源工作区的会话；所选会话包含其工作区与节点依赖。双向计划只过滤所选来源记录，不将范围外的缺席解释为删除。
+- manifest 导出的 `sizeBytes` 来自 `SessionPersistence.stat/list` snapshot；该字段是物理 artifact 大小，仅用于选择目录和 UI 展示，不参与 session 内容摘要或 HLC 版本比较。
 
 ### LWW Session Archive
 
@@ -448,12 +489,14 @@ SessionPersistence 是 append-only；两个 peer 从同一水位各自产生事�
 5. Peer integration: one-way pull, bidirectional push/pull, multiple peers, A→B→C forwarding without duplicate origin records, manual run and fake-clock 5-minute scheduler.
 6. Failure recovery: SSH drop mid-transfer, corrupted chunk, full target disk, remote DSHB stopped, session changes during export; prior committed state and sync watermarks remain valid.
 7. End-to-end: import remote SSH/Docker node and complete session history into a second profile, continue the session against the imported remote workspace, then verify newest-wins archival on concurrent branches.
+8. Scope selection: full manifests are compared before selection filtering; selected node/workspace/session records and required parents transfer in pull and bidirectional modes; excluded active records and tombstones remain unchanged.
+9. Directory and size: local/remote catalogues contain no secret or payload fields; each session reports persistence `sizeBytes`, and missing sizes render as unknown or not persisted.
 
 ### Offline Configuration Archive
 
 “工作节点”视图的操作栏在“新建节点”和“同步节点”旁提供“导出配置”和“导入配置”。离线传输复用同一 `SyncBundleManifest`、origin identity、HLC 和 LWW archive 语义，不包含 sync peer 连接资料。
 
-Export UI 允许勾选“包含工作区会话”，默认关闭。导出数据包含非 `local-host`、非 `local-docker` 节点配置、节点凭据和 origin revisions；会话选项开启时再包含符合 remote-ssh/remote-docker 工作区规则的会话、附件、spill objects、项目指令快照和 workspace membership。`local-host`、`local-docker`、SSH peer credentials、DSHB Web 登录凭据不进入离线包。
+Export UI 允许勾选“包含工作区会话”，默认关闭；用户可选择全部可导出内容或从本机目录选择节点、工作区和会话。导出数据包含非 `local-host`、非 `local-docker` 节点配置、节点凭据和 origin revisions；会话选项开启时再按选择范围包含符合 remote-ssh/remote-docker 工作区规则的会话、附件、spill objects、项目指令快照和 workspace membership。`local-host`、`local-docker`、SSH peer credentials、DSHB Web 登录凭据不进入离线包。筛选发生在完整节点/会话导出结果生成之后，避免遗漏记录转化为 tombstone。
 
 归档采用版本化 `.dshb-sync` 文件格式：
 
@@ -473,3 +516,4 @@ Export UI 允许勾选“包含工作区会话”，默认关闭。导出数据�
 3. Session inclusion unchecked exports no session logs or attachment objects; checked includes only eligible remote workspace sessions.
 4. Import the same offline package twice and import a package back to its origin; both remain idempotent and preserve source identity.
 5. Import an archive from instance B into A, then sync A to B; verify B skips its own origin versions and only applies genuinely newer records.
+6. Select node, workspace and session scopes independently; verify node/workspace dependencies are included and unselected entries/tombstones are absent from the archive without changing source state.

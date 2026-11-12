@@ -24,6 +24,13 @@ input,textarea,select,[contenteditable="true"]{font-size:16px!important}
 export function loopbackCompatScript(): string {
   return `<script>
 ;(function () {
+  if (typeof Promise !== 'undefined' && typeof Promise.withResolvers !== 'function') {
+    Promise.withResolvers = function () {
+      var resolve, reject
+      var promise = new Promise(function (res, rej) { resolve = res; reject = rej })
+      return { promise: promise, resolve: resolve, reject: reject }
+    }
+  }
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function' && typeof crypto.getRandomValues === 'function') {
     crypto.randomUUID = function () {
       var b = crypto.getRandomValues(new Uint8Array(16))

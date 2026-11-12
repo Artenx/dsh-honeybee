@@ -8,6 +8,7 @@ export const SYNC_SESSION_BUNDLE_OBJECTS_CAPABILITY = 'session-bundle-objects-v1
 // 磁盘到磁盘的帧流传输（内存占用 O(单帧)），单对象与会话引用总量不再受
 // JSON 传输上限约束。两端都声明该能力时才启用，旧版本对端回退内联路径。
 export const SYNC_SESSION_OBJECT_STREAM_CAPABILITY = 'session-object-stream-v1'
+export const SYNC_CATALOG_CAPABILITY = 'sync-selection-catalog-v1'
 export const MAX_SYNC_CONTROL_FRAME_BYTES = 64 * 1024
 export const MAX_SYNC_DATA_CHUNK_BYTES = 1024 * 1024
 // 单次传输（bundle 请求/响应、原始附件/溢出流）的硬上限。必须远小于宿主进程

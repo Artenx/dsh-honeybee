@@ -21,6 +21,8 @@ import { compareSyncRevision, HybridLogicalClock } from './revision.js'
 import type { SyncRevision } from './revision.js'
 import { isNonNegativeSafeInteger, isRecord, syncRecordKey, syncWorkspaceKey } from './model.js'
 import type {
+  SyncCatalogSession,
+  SyncCatalogWorkspace,
   SyncImportMethod,
   SyncOrigin,
   SyncRecordMetadata,
@@ -204,6 +206,7 @@ interface SessionExportOptions {
   manifestOnly?: boolean
   selectedKeys?: ReadonlySet<string>
   payloadCache?: SessionManifestPayloadCache
+  catalog?: { workspaces: Map<string, SyncCatalogWorkspace>; sessions: SyncCatalogSession[] }
   sharedObjects?: boolean
   deferredObjects?: boolean
 }
@@ -412,6 +415,7 @@ interface SessionSnapshotLike {
   formatStatus?: 'current' | 'migration-required'
   revision: unknown
   eventCount?: number
+  sizeBytes?: number
 }
 
 interface SessionMetadataSnapshot {
@@ -478,6 +482,7 @@ export interface WorkspaceRegistryLike {
   list(): WorkspaceLike[]
   get(id: string): WorkspaceLike | undefined
   create(path: string, title?: string): Promise<WorkspaceLike>
+  delete?(workspaceId: string): Promise<boolean>
   archiveSession(sessionId: SessionId, options?: { stopActivity?: boolean }): Promise<void>
   unarchiveSession(sessionId: SessionId): Promise<void>
   pinSession?(sessionId: SessionId): Promise<void>
@@ -875,7 +880,7 @@ function attachmentReferences(events: readonly SessionEvent[]): { images: ImageA
   return { images: [...images.values()], files: [...files.values()] }
 }
 
-function sessionEventDigest(
+export function sessionEventDigest(
   header: SessionHeader,
   inheritedEventCount: number,
   events: readonly SessionEvent[],
@@ -989,7 +994,7 @@ export function sessionEventListDigest(events: readonly SessionEvent[]): string 
   return `sha256:${hash.digest('hex')}`
 }
 
-function sessionStateDigest(
+export function sessionStateDigest(
   workspace: SyncSessionWorkspace,
   workspacePosition: number,
   archived: boolean,
@@ -1308,7 +1313,7 @@ function findSessionOriginByLocalId(state: SyncState, localSessionId: string): S
   return metadata ? { originInstanceId: metadata.originInstanceId, originEntityId: metadata.originEntityId } : undefined
 }
 
-function workspaceDigest(workspace: Omit<SyncSessionWorkspace, 'revision' | 'contentDigest'>): string {
+export function workspaceDigest(workspace: Omit<SyncSessionWorkspace, 'revision' | 'contentDigest'>): string {
   return sha256(canonicalJson(workspace))
 }
 
@@ -1916,6 +1921,7 @@ export class SyncSessionService {
     private readonly now: () => number = Date.now,
     home?: string,
     workspaceInstructions?: WorkspaceInstructionStore,
+    private readonly getSessionProjection?: (header: SessionHeader) => { title?: string; blank?: boolean } | undefined,
   ) {
     this.exportCacheStore = new SyncSessionExportCacheStore(home)
     this.objectInbox = new SyncSessionObjectInbox(home)
@@ -2084,6 +2090,72 @@ export class SyncSessionService {
     return discarded
   }
 
+  /**
+   * 超限会话整文件迁移后的收尾：把已落盘的本地会话挂到工作区并写 membership。
+   * 只做 membership（不重放事件）；供 open-session 的 file 迁移路径调用。
+   */
+  async adoptMigratedSession(
+    metadata: SyncRecordMetadata,
+    localSessionId: string,
+    workspaceId: string,
+    sourceName: string,
+  ): Promise<boolean> {
+    const registry = this.getWorkspaces()
+    if (!registry) {
+      // registry 尚未注入（桌面端启动时序）：登记待补挂，不阻断 open-session 返回。
+      this.pendingMigratedAdoptions.push({ metadata, localSessionId, workspaceId, sourceName })
+      return false
+    }
+    // workspaceId 可能因工作区被重建而失效：按 ID → mirror 路径兜底。
+    // 找不到则跳过 attach（不创建新工作区，避免本地出现与远端同名的额外工作区）。
+    const mapping = Object.values(this.state.read().workspaces).find((item) =>
+      item.localWorkspaceId === workspaceId)
+    let workspace = registry.get(workspaceId)
+    if (!workspace && mapping) {
+      workspace = registry.list().find((item) =>
+        normalizeHostPath(item.path) === normalizeHostPath(mapping.localPath))
+    }
+    if (!workspace) {
+      // 工作区尚未建立：跳过 membership（文件已落盘，下次全量同步会正式 attach）。
+      return false
+    }
+    const sessionId = makeSessionId(localSessionId)
+    const snapshot = await this.requirePersistence().stat(sessionId)
+    if (!snapshot) throw new SyncSessionError('session-format', '迁移后的会话文件不可读')
+    const entry = {
+      metadata,
+      workspace: {
+        originInstanceId: metadata.workspaceOrigin?.originInstanceId ?? '',
+        originWorkspaceId: metadata.workspaceOrigin?.originEntityId ?? '',
+        remotePath: workspace.path,
+        title: workspace.title,
+        nodeOrigin: { originInstanceId: metadata.originInstanceId, originEntityId: '' },
+        contentDigest: 'sha256:' + '0'.repeat(64),
+      },
+      workspacePosition: 0,
+      archived: registry.archivedSessionIds.includes(sessionId),
+      pinned: false,
+      events: [],
+      objects: [],
+    } as never as SyncSessionEntry
+    await this.applyMembershipOnly(entry, metadata, sourceName, workspace, 'peer')
+    return true
+  }
+
+  /** registry 注入后补挂迁移会话（由 index.ts 的 inject 回调调用）。 */
+  private pendingMigratedAdoptions: Array<{ metadata: SyncRecordMetadata; localSessionId: string; workspaceId: string; sourceName: string }> = []
+  async flushPendingMigratedAdoptions(): Promise<void> {
+    const pending = this.pendingMigratedAdoptions
+    this.pendingMigratedAdoptions = []
+    for (const item of pending) {
+      try {
+        await this.adoptMigratedSession(item.metadata, item.localSessionId, item.workspaceId, item.sourceName)
+      } catch {
+        // 补挂失败不阻断：文件已落盘，下次 open 会再试。
+      }
+    }
+  }
+
   async recoverPending(): Promise<void> {
     const failures: unknown[] = []
     for (const batch of this.journal.pendingBatches()) {
@@ -2113,6 +2185,103 @@ export class SyncSessionService {
 
   listArchives(): SyncSessionArchive[] {
     return Object.values(this.state.read().archives).sort((a, b) => a.archivedAt.localeCompare(b.archivedAt))
+  }
+
+  exportCatalog(): Promise<{ workspaces: SyncCatalogWorkspace[]; sessions: SyncCatalogSession[] }> {
+    return this.serializeMutation(async () => {
+      const catalog = { workspaces: new Map<string, SyncCatalogWorkspace>(), sessions: [] as SyncCatalogSession[] }
+      for (const mapping of Object.values(this.state.read().workspaces)) {
+        const nodeOrigin = this.nodes.originForLocalNode(mapping.localNodeId)
+        if (!nodeOrigin) continue
+        const workspace: SyncCatalogWorkspace = {
+          origin: { originInstanceId: mapping.originInstanceId, originEntityId: mapping.originWorkspaceId },
+          nodeOrigin,
+          remotePath: mapping.remotePath,
+          title: mapping.title,
+        }
+        catalog.workspaces.set(syncWorkspaceKey(mapping.originInstanceId, mapping.originWorkspaceId, mapping.remotePath), workspace)
+      }
+      await this.exportBundleNow({ manifestOnly: true, catalog })
+      return { workspaces: [...catalog.workspaces.values()], sessions: catalog.sessions }
+    })
+  }
+
+  /**
+   * Detach metadata-mode imports when their peer is removed. DSH persistence is append-only,
+   * so imported sessions are archived (hidden from active workspaces and still recoverable)
+   * rather than physically erased. Full-sync peers deliberately do not call this method.
+   */
+  removeMetadataPeerImports(
+    peerInstanceId: string | undefined,
+    trackedLocalSessionIds: readonly string[] = [],
+    fallbackSourceName?: string,
+  ): Promise<{ sessionsArchived: number; workspacesRemoved: number; workspacesDetached: number }> {
+    return this.serializeMutation(async () => {
+      const registry = this.getWorkspaces()
+      if (!registry) throw new SyncSessionError('workspace-unavailable', '工作区注册表不可用')
+      const snapshot = this.state.read()
+      const trackedIds = new Set(trackedLocalSessionIds)
+      const directlyOwnedRecords = Object.entries(snapshot.records).filter(([, metadata]) =>
+        metadata.kind === 'session' && metadata.importedVia === 'peer' && !metadata.deleted && (
+          trackedIds.has(metadata.localEntityId) ||
+          (peerInstanceId !== undefined && metadata.originInstanceId === peerInstanceId) ||
+          (fallbackSourceName !== undefined && metadata.sourceName === fallbackSourceName)
+        ))
+      const workspaceOriginKeys = new Set<string>()
+      for (const [, metadata] of directlyOwnedRecords) {
+        if (metadata.workspaceOrigin) workspaceOriginKeys.add(JSON.stringify([
+          metadata.workspaceOrigin.originInstanceId, metadata.workspaceOrigin.originEntityId,
+        ]))
+      }
+      const peerWorkspaceEntries = Object.entries(snapshot.workspaces).filter(([, mapping]) =>
+        (peerInstanceId !== undefined && mapping.originInstanceId === peerInstanceId) ||
+        workspaceOriginKeys.has(JSON.stringify([mapping.originInstanceId, mapping.originWorkspaceId])))
+      for (const [, mapping] of peerWorkspaceEntries) {
+        workspaceOriginKeys.add(JSON.stringify([mapping.originInstanceId, mapping.originWorkspaceId]))
+      }
+      const peerWorkspaceKeys = new Set(peerWorkspaceEntries.map(([key]) => key))
+      const peerRecords = directlyOwnedRecords
+      const localSessionIds = new Set(peerRecords.map(([, metadata]) => metadata.localEntityId))
+      const alreadyArchived = new Set(registry.archivedSessionIds.map(String))
+      let sessionsArchived = 0
+      for (const localId of localSessionIds) {
+        if (alreadyArchived.has(localId)) continue
+        await registry.archiveSession(makeSessionId(localId), { stopActivity: true })
+        await registry.unpinSession?.(makeSessionId(localId))
+        sessionsArchived += 1
+      }
+
+      let workspacesRemoved = 0
+      let workspacesDetached = 0
+      const checkedWorkspaceIds = new Set<string>()
+      for (const [, mapping] of peerWorkspaceEntries) {
+        if (checkedWorkspaceIds.has(mapping.localWorkspaceId)) continue
+        checkedWorkspaceIds.add(mapping.localWorkspaceId)
+        const workspace = registry.get(mapping.localWorkspaceId)
+        if (!workspace) continue
+        const onlyPeerSessions = workspace.sessionIds.every((id) => localSessionIds.has(String(id)))
+        if (onlyPeerSessions && typeof registry.delete === 'function' && await registry.delete(workspace.id)) {
+          this.bindings.remove(workspace.path)
+          workspacesRemoved += 1
+        } else {
+          workspacesDetached += 1
+        }
+      }
+
+      const removedRecordKeys = new Set(peerRecords.map(([key]) => key))
+      this.state.update((draft) => {
+        for (const key of removedRecordKeys) delete draft.records[key]
+        for (const key of peerWorkspaceKeys) delete draft.workspaces[key]
+        for (const [branchId, archive] of Object.entries(draft.archives)) {
+          const workspaceMatches = archive.workspaceOrigin && workspaceOriginKeys.has(JSON.stringify([
+            archive.workspaceOrigin.originInstanceId,
+            archive.workspaceOrigin.originEntityId,
+          ]))
+          if (archive.originInstanceId === peerInstanceId || workspaceMatches) delete draft.archives[branchId]
+        }
+      })
+      return { sessionsArchived, workspacesRemoved, workspacesDetached }
+    })
   }
 
   restoreArchive(branchId: string): Promise<SessionId> {
@@ -2195,6 +2364,16 @@ export class SyncSessionService {
     const preservedLocalIds = new Set<string>()
     const workspaceById = new Map<string, WorkspaceLike>()
     const archivedBranchSessionIds = new Set(Object.values(stateIndex.state.archives).map((archive) => archive.localSessionId))
+    // 冲突归档按「origin 会话」判定：同 origin 的导入副本（session-sync-*）在归档
+    // 发生后内容 digest 变化会得到新的本地 ID，仅按 localSessionId 跳过会漏掉它们。
+    // 但仅限真正的「冲突副本」——归档记录的 localSessionId 与被归档 origin 不同；
+    // 若归档的就是 origin 会话本身（两者相等），其副本不应被连带标记为归档，
+    // 否则会与导出端 registry 的活跃状态冲突。
+    const archivedOriginKeys = new Set(Object.values(stateIndex.state.archives)
+      .filter((archive) => String(archive.localSessionId) !== archive.originSessionId)
+      .map((archive) => syncRecordKey('session', { originInstanceId: archive.originInstanceId, originEntityId: archive.originSessionId })))
+    const isArchivedForCatalog = (localId: string, metadata: SyncRecordMetadata): boolean =>
+      archivedIds.has(localId) || archivedOriginKeys.has(sessionOriginKey(metadata))
     const objectCache = new ExportObjectCache()
     const descriptorCache = new Map<string, SyncSessionWorkspace>()
     const getWorkspaceDescriptor = (
@@ -2215,6 +2394,48 @@ export class SyncSessionService {
       descriptorCache.set(key, descriptor)
       return descriptor
     }
+    const catalogWorkspacesByOrigin = new Map<string, SyncCatalogWorkspace>()
+    for (const workspace of options.catalog?.workspaces.values() ?? []) {
+      catalogWorkspacesByOrigin.set(JSON.stringify([workspace.origin.originInstanceId, workspace.origin.originEntityId]), workspace)
+    }
+    const collectWorkspace = (descriptor: SyncSessionWorkspace): SyncCatalogWorkspace | undefined => {
+      if (!options.catalog) return undefined
+      const origin = { originInstanceId: descriptor.originInstanceId, originEntityId: descriptor.originWorkspaceId }
+      const workspace: SyncCatalogWorkspace = {
+        origin,
+        nodeOrigin: descriptor.nodeOrigin,
+        remotePath: descriptor.remotePath,
+        title: descriptor.title,
+      }
+      options.catalog.workspaces.set(syncWorkspaceKey(origin.originInstanceId, origin.originEntityId, descriptor.remotePath), workspace)
+      catalogWorkspacesByOrigin.set(JSON.stringify([origin.originInstanceId, origin.originEntityId]), workspace)
+      return workspace
+    }
+    const collectSession = (
+      metadata: SyncRecordMetadata,
+      workspace: SyncCatalogWorkspace | undefined,
+      sessionId: string,
+      sizeBytes?: number,
+      extra: { branchId?: string; deleted?: boolean; archived?: boolean; title?: string; blank?: boolean } = {},
+    ): void => {
+      if (!options.catalog) return
+      options.catalog.sessions.push({
+        origin: { originInstanceId: metadata.originInstanceId, originEntityId: metadata.originEntityId },
+        ...(workspace ? {
+          workspaceOrigin: workspace.origin,
+          workspaceRemotePath: workspace.remotePath,
+          nodeOrigin: workspace.nodeOrigin,
+        }
+        : metadata.workspaceOrigin ? { workspaceOrigin: metadata.workspaceOrigin } : {}),
+        sessionId,
+        ...(extra.title ? { title: extra.title } : {}),
+        ...(extra.blank ? { blank: true } : {}),
+        ...(isNonNegativeSafeInteger(sizeBytes) ? { sizeBytes } : {}),
+        ...(extra.branchId ? { branchId: extra.branchId } : {}),
+        ...(extra.deleted ? { deleted: true } : {}),
+        ...(extra.archived ? { archived: true } : {}),
+      })
+    }
 
     for (const workspace of workspaces) {
       workspaceById.set(String(workspace.id), workspace)
@@ -2224,6 +2445,10 @@ export class SyncSessionService {
       if (!node || !isNodeRemoteType(node.type)) continue
       const nodeOrigin = this.nodes.originForLocalNode(node.id)
       if (!nodeOrigin) continue
+
+      if (workspace.sessionIds.length > 0) {
+        collectWorkspace(getWorkspaceDescriptor(workspace, binding, nodeOrigin))
+      }
 
       for (let position = 0; position < workspace.sessionIds.length; position += 1) {
         const sessionId = String(workspace.sessionIds[position])
@@ -2235,6 +2460,7 @@ export class SyncSessionService {
           : syncRecordKey('session', { originInstanceId: instanceId, originEntityId: sessionId })
         if (selectedKeys && !selectedKeys.has(localKey)) continue
         const descriptor = getWorkspaceDescriptor(workspace, binding, nodeOrigin, currentSession?.workspaceOrigin)
+        const catalogWorkspace = collectWorkspace(descriptor)
         const snapshot = await persistence.stat(makeSessionId(sessionId))
         if (!snapshot) continue
         if (snapshot.formatStatus === 'migration-required') {
@@ -2254,6 +2480,12 @@ export class SyncSessionService {
           )
           if (cached) {
             entries.push(cached)
+            const projection = this.getSessionProjection?.(snapshot.header)
+            collectSession(cached.metadata, catalogWorkspace, sessionId, snapshot.sizeBytes, {
+              ...(projection?.title ? { title: projection.title } : {}),
+              ...(projection?.blank ? { blank: true } : {}),
+              ...(isArchivedForCatalog(sessionId, cached.metadata) ? { archived: true } : {}),
+            })
             eligibleLocalIds.add(sessionId)
             continue
           }
@@ -2273,15 +2505,52 @@ export class SyncSessionService {
             stateIndex,
             objectCache,
             options.deferredObjects === true,
+            manifestOnly,
           )
         } catch (error) {
           if (!(error instanceof SyncSessionError && error.code === 'session-too-large')) throw error
           skipped.push({ sessionId, reason: 'session-payload-too-large' })
           preservedLocalIds.add(sessionId)
+          // 目录（catalog）只描述条目，不传输内容：会话内容超限不等于会话不存在，
+          // 仍需列出，否则远端 UI 可见的会话会在目录里凭空消失。
+          // manifest（按需打开的数据源）同理：产出元数据条目（metadata + eventCount/Digest），
+          // 让 open-session 能定位会话；真正拉取内容时再对超限给出明确错误。
+          if (options.catalog || manifestOnly) {
+            const projection = this.getSessionProjection?.(snapshot.header)
+            const archivedForCatalog = archivedIds.has(sessionId) ||
+              (currentSession !== undefined && archivedOriginKeys.has(sessionOriginKey(currentSession)))
+            if (manifestOnly) {
+              // 事件摘要三件套需要完整读日志才能算，超大 会话跳过——manifest 允许
+              // 三者同时缺省（validateManifestEntry 宽松分支），open-session 端
+              // 定位条目只依赖 metadata.localEntityId。
+              entries.push({
+                metadata: currentSession ?? { originInstanceId: instanceId, originEntityId: sessionId } as SyncRecordMetadata,
+              })
+            }
+            if (options.catalog) {
+            collectSession(
+              currentSession ?? { originInstanceId: instanceId, originEntityId: sessionId } as SyncRecordMetadata,
+              catalogWorkspace,
+              sessionId,
+              snapshot.sizeBytes,
+              {
+                ...(projection?.title ? { title: projection.title } : {}),
+                ...(projection?.blank ? { blank: true } : {}),
+                ...(archivedForCatalog ? { archived: true } : {}),
+              },
+            )
+            }
+          }
           continue
         }
         if (exported) {
           const { entry } = exported
+          const projection = this.getSessionProjection?.(snapshot.header)
+          collectSession(entry.metadata, catalogWorkspace, sessionId, snapshot.sizeBytes, {
+            ...(projection?.title ? { title: projection.title } : {}),
+            ...(projection?.blank ? { blank: true } : {}),
+            ...(isArchivedForCatalog(sessionId, entry.metadata) ? { archived: true } : {}),
+          })
           if (manifestOnly && options.payloadCache) {
             const key = syncSessionEntryKey(entry)
             const size = estimateJsonBytes(entry, MAX_MANIFEST_PAYLOAD_CACHE_BYTES - options.payloadCache.bytes)
@@ -2312,6 +2581,11 @@ export class SyncSessionService {
       if (selectedKeys && !selectedKeys.has(syncSessionEntryKey({ metadata }))) continue
       if (metadata.deleted) {
         entries.push({ metadata })
+        const workspaceOrigin = metadata.workspaceOrigin
+        const catalogWorkspace = workspaceOrigin
+          ? catalogWorkspacesByOrigin.get(JSON.stringify([workspaceOrigin.originInstanceId, workspaceOrigin.originEntityId]))
+          : undefined
+        collectSession(metadata, catalogWorkspace, metadata.localEntityId, undefined, { deleted: true })
         const tombstoneKey = sessionExportCacheKey(metadata.localEntityId)
         this.exportCache.delete(tombstoneKey)
         this.exportCacheStore.delete(tombstoneKey)
@@ -2346,6 +2620,7 @@ export class SyncSessionService {
       if (!nodeOrigin) continue
       const archivedMetadata = stateIndex.archivesByLocalSessionId.get(archive.localSessionId)
       const descriptor = getWorkspaceDescriptor(workspace, binding, nodeOrigin, archivedMetadata?.workspaceOrigin)
+      const catalogWorkspace = collectWorkspace(descriptor)
       const snapshot = await persistence.stat(makeSessionId(archive.localSessionId))
       if (!snapshot) continue
       let exported: SessionExportResult | undefined
@@ -2372,6 +2647,12 @@ export class SyncSessionService {
       }
       if (exported) {
         const { entry } = exported
+        const projection = this.getSessionProjection?.(snapshot.header)
+        collectSession(entry.metadata, catalogWorkspace, archive.localSessionId, snapshot.sizeBytes, {
+          branchId: archive.branchId,
+          archived: true,
+          ...(projection?.title ? { title: projection.title } : {}),
+        })
         if (manifestOnly && options.payloadCache) {
           const key = syncSessionEntryKey(entry)
           const size = estimateJsonBytes(entry, MAX_MANIFEST_PAYLOAD_CACHE_BYTES - options.payloadCache.bytes)
@@ -3418,6 +3699,7 @@ export class SyncSessionService {
     stateIndex?: SessionStateIndex,
     objectCache?: ExportObjectCache,
     deferredObjects = false,
+    manifestOnly = false,
   ): Promise<SessionExportResult | undefined> {
     const { header, inheritedEventCount, events, revision: sourceRevision } = await this.readStableSession(persistence, sessionId, firstSnapshot)
     const localSessionId = String(sessionId)

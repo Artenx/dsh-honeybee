@@ -1,5 +1,7 @@
 import type { CSSProperties, ReactElement } from 'react'
 import { useState } from 'react'
+import type { SyncCatalog, SyncSelection } from '../core/sync/model.js'
+import { SyncSelectionPicker } from './sync-selection-picker.js'
 
 type Notice = { kind: 'ok' | 'error'; text: string } | undefined
 
@@ -46,6 +48,9 @@ export function SyncOfflineSection(props: { onImported?: () => void }): ReactEle
   const [exportPassword, setExportPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [includeSessions, setIncludeSessions] = useState(false)
+  const [selection, setSelection] = useState<SyncSelection>({ mode: 'all', nodes: [], workspaces: [], sessions: [] })
+  const [catalog, setCatalog] = useState<SyncCatalog | undefined>(undefined)
+  const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [importPassword, setImportPassword] = useState('')
   const [file, setFile] = useState<File | undefined>(undefined)
   const [fileInputKey, setFileInputKey] = useState(0)
@@ -64,7 +69,7 @@ export function SyncOfflineSection(props: { onImported?: () => void }): ReactEle
       const response = await fetch('/api/dshb/sync/offline/export', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ password: exportPassword, includeSessions }),
+        body: JSON.stringify({ password: exportPassword, includeSessions, selection }),
       })
       if (!response.ok) throw await responseError(response, '导出离线配置失败')
       const blob = await response.blob()
@@ -86,6 +91,21 @@ export function SyncOfflineSection(props: { onImported?: () => void }): ReactEle
       setStatus('')
       setExportPassword('')
       setConfirmPassword('')
+    }
+  }
+
+  const loadCatalog = async (): Promise<void> => {
+    setLoadingCatalog(true)
+    try {
+      const response = await fetch('/api/dshb/sync/offline/catalog')
+      const data = await response.json() as { ok?: boolean; catalog?: SyncCatalog; error?: string }
+      if (!response.ok || !data.ok || !data.catalog) throw new Error(data.error ?? '读取本机目录失败')
+      setCatalog(data.catalog)
+      setNotice({ kind: 'ok', text: `已读取本机目录：${data.catalog.nodes.length} 个工作节点、${data.catalog.workspaces.length} 个工作区、${data.catalog.sessions.length} 个会话` })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '读取本机目录失败' })
+    } finally {
+      setLoadingCatalog(false)
     }
   }
 
@@ -163,6 +183,21 @@ export function SyncOfflineSection(props: { onImported?: () => void }): ReactEle
               <input type="checkbox" checked={includeSessions} disabled={busy !== undefined} onChange={(event) => setIncludeSessions(event.target.checked)} />
               <span>包含可映射的远程工作区会话<span style={{ display: 'block', fontSize: 11, opacity: 0.65, marginTop: 3 }}>包含会话日志与附件，导出文件可能较大。</span></span>
             </label>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <button type="button" style={buttonStyle} disabled={busy !== undefined || loadingCatalog} onClick={() => void loadCatalog()}>
+                {loadingCatalog ? '读取本机目录中…' : catalog ? '刷新本机目录' : '读取本机目录'}
+              </button>
+              {catalog && (
+                <SyncSelectionPicker
+                  catalog={catalog}
+                  selection={selection}
+                  name="offline-sync-selection"
+                  onChange={setSelection}
+                  includeSessions={includeSessions}
+                  disabled={busy !== undefined}
+                />
+              )}
+            </div>
             <div className="dshb-sync-offline-actions"><button type="button" style={buttonStyle} disabled={busy !== undefined} onClick={() => void exportArchive()}>{busy === 'export' ? '正在导出…' : '导出 .dshb-sync'}</button></div>
           </div>
         </section>

@@ -15,7 +15,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
-  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.2.1--rc.2-blue?style=flat-square" alt="upstream dsh 0.2.1-rc.2" /></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/upstream-dsh%400.2.2--rc.1-blue?style=flat-square" alt="upstream dsh 0.2.2-rc.1" /></a>
   <img src="https://img.shields.io/badge/status-developing-orange?style=flat-square" alt="status" />
 </p>
 

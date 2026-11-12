@@ -63,12 +63,12 @@ export function decorateWebServer(
     fallbackServer.fallback = wrapped
   }
 
-  function guarded(
+  async function guarded(
     route: WebRoute,
     req: IncomingMessage,
     res: ServerResponse,
-  ): void | Promise<void> {
-    const decision = gate.decide(req)
+  ): Promise<void> {
+    const decision = await gate.decide(req)
     if (decision === 'allow') {
       rewriteToLoopback(req, webServer.port)
       return route.handler(req, res)
@@ -90,13 +90,13 @@ export function decorateWebServer(
     res.end(JSON.stringify({ ok: false, error: 'unauthorized' }))
   }
 
-  function guardedUpgrade(
+  async function guardedUpgrade(
     route: WebUpgradeRoute,
     req: IncomingMessage,
     socket: Duplex,
     head: Buffer,
-  ): void | Promise<void> {
-    const decision = gate.decide(req)
+  ): Promise<void> {
+    const decision = await gate.decide(req)
     if (decision === 'allow' || decision === 'exempt') {
       if (decision === 'allow') rewriteToLoopback(req, webServer.port)
       return route.handler(req, socket, head)

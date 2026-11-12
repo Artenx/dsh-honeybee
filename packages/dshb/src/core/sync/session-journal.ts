@@ -145,6 +145,17 @@ export class SyncSessionJournalStore {
     return [...new Set(Object.values(this.load().batches).map((batch) => batch.peerId))]
   }
 
+  /** 返回包含该同步记录键的最近一次导入批次；用于把本地会话映射回来源 peer。 */
+  peerIdForRecordKey(recordKey: string): string | undefined {
+    if (typeof recordKey !== 'string' || recordKey.length === 0 || recordKey.length > 8192) return undefined
+    let hit: JournalBatch | undefined
+    for (const batch of Object.values(this.load().batches)) {
+      if (!batch.recordKeys.includes(recordKey)) continue
+      if (!hit || batch.startedAt > hit.startedAt) hit = batch
+    }
+    return hit?.peerId
+  }
+
   pendingBatches(): Array<{ batchId: string; peerId: string; sourceName: string; bundleDigest: string; importedVia: SyncImportMethod; allowSameInstance: boolean }> {
     return Object.entries(this.load().batches).map(([batchId, batch]) => ({
       batchId,

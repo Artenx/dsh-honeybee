@@ -3,7 +3,7 @@ import type { ClientChannel } from 'ssh2'
 import { once } from 'node:events'
 import { classifySshError } from '../../exec-ssh/connection.js'
 import { SyncPeerManager, SyncPeerNotFoundError, type SyncPeerSecrets } from './peer-manager.js'
-import { isRecord, type SyncPeer } from './model.js'
+import { isRecord, type SyncCatalog, type SyncPeer } from './model.js'
 import { SyncHostKeyChallengeError, SyncHostKeyChallenges, inspectSyncHostKey } from './host-key.js'
 import type { SyncNodeApplyResult, SyncNodeManifest } from './node-sync.js'
 import {
@@ -19,6 +19,7 @@ import {
 } from './protocol.js'
 import { REMOTE_SYNC_HELPER_COMMAND } from './remote-helper.js'
 import type { SyncSessionApplyResult, SyncSessionBundle, SyncSessionEventPrefix, SyncSessionManifest, SyncSessionObject } from './session-sync.js'
+import { validateSyncCatalog } from './catalog.js'
 
 const SSH_READY_TIMEOUT_MS = 30_000
 const SSH_READ_IDLE_TIMEOUT_MS = 60_000
@@ -193,8 +194,17 @@ export class SyncSshTransport {
   private readonly hostKeyChallenges = new SyncHostKeyChallenges()
   /** 每对端当前打开的 SSH 会话：手动停止同步时立即关闭通道，等待中的 readFrames 随即返回。 */
   private readonly openSessions = new Map<string, Set<SyncSshSession>>()
+  /** wss 中继数据面（可选注入）：会话 manifest/entries 优先经 direct-tcpip 通道读取，失败降级 helper。 */
+  private relayDataPlane: {
+    relayInternal(peerId: string, method: 'GET' | 'POST', path: string, body?: Buffer): Promise<{ status: number; body: Buffer }>
+  } | undefined
 
   constructor(private readonly peerManager: SyncPeerManager) {}
+
+  /** 注入 wss 中继数据面（RemoteRelayService）；index.ts 在两者都就绪后调用。 */
+  setRelayDataPlane(relay: NonNullable<SyncSshTransport['relayDataPlane']>): void {
+    this.relayDataPlane = relay
+  }
 
   private trackSession(peerId: string, session: SyncSshSession): void {
     const sessions = this.openSessions.get(peerId) ?? new Set<SyncSshSession>()
@@ -220,6 +230,19 @@ export class SyncSshTransport {
     return sessions.size
   }
 
+  /**
+   * 拉取远端超限会话的原始会话文件（session.v4.jsonl.zstd 字节）。
+   * 仅经 wss 中继数据面：file 端点由远端 dshb 按 mirror 映射定位文件。
+   */
+  async fetchSessionFileViaInternal(peerId: string, sessionId: string, remotePath: string): Promise<Buffer> {
+    if (this.relayDataPlane === undefined) {
+      throw new SyncSshProbeError('helper')
+    }
+    const { body } = await this.relayDataPlane.relayInternal(peerId, 'POST', '/api/dshb/sync/internal/sessions/file',
+      Buffer.from(JSON.stringify({ sessionId, remotePath }), 'utf8'))
+    return body
+  }
+
   async probe(peerId: string): Promise<SyncRemoteHandshake> {
     const { peer, session } = await this.openSession(peerId)
     try {
@@ -241,14 +264,14 @@ export class SyncSshTransport {
     }
   }
 
-  async openSession(peerId: string): Promise<{ peer: SyncPeer; session: SyncSshSession }> {
+  /** 建立 peer 的 SSH 连接（含 host-key 校验与凭据）；调用方负责 client.end()。 */
+  private async connectClient(peerId: string): Promise<{ peer: SyncPeer; client: Client }> {
     const { peer, secrets } = await this.peerManager.connectionData(peerId)
     if (peer.authKind === 'password' && !secrets.password) throw new SyncSshProbeError('auth')
     if (peer.authKind === 'key' && !secrets.privateKey) throw new SyncSshProbeError('auth')
 
     const client = new Client()
     let challenge: SyncHostKeyChallengeError | undefined
-    let sessionOpened = false
     try {
       await new Promise<void>((resolve, reject) => {
         let settled = false
@@ -280,7 +303,57 @@ export class SyncSshTransport {
           finish(error)
         }
       })
+      return { peer, client }
+    } catch (error) {
+      try {
+        client.end()
+      } catch {}
+      throw error
+    }
+  }
 
+  /**
+   * 打开到远端回环 TCP 目标的 direct-tcpip 通道（元数据同步的远端会话
+   * wss 通道用）。通道复用 peer 的 host-key 校验与凭据；调用方负责
+   * client.end() 与流销毁。
+   */
+  async openDirectChannel(
+    peerId: string,
+    targetHost: string,
+    targetPort: number,
+  ): Promise<{ peer: SyncPeer; client: Client; stream: ClientChannel }> {
+    const { peer, client } = await this.connectClient(peerId)
+    try {
+      const stream = await new Promise<ClientChannel>((resolve, reject) => {
+        const deadline = setTimeout(() => {
+          reject(new Error('Timed out while waiting for the direct-tcpip channel'))
+          client.end()
+        }, SSH_READY_TIMEOUT_MS)
+        client.forwardOut('127.0.0.1', 0, targetHost, targetPort, (error, opened) => {
+          clearTimeout(deadline)
+          if (error) reject(error)
+          else resolve(opened!)
+        })
+      })
+      return { peer, client, stream }
+    } catch (error) {
+      try {
+        client.end()
+      } catch {}
+      if (error instanceof SyncHostKeyChallengeError || error instanceof SyncPeerNotFoundError || error instanceof SyncSshProbeError) {
+        throw error
+      }
+      const category = classifySshError(error)
+      if (category === 'auth' || category === 'network' || category === 'timeout') throw new SyncSshProbeError(category)
+      if (category === 'hostkey') throw new SyncSshProbeError('hostkey')
+      throw new SyncSshProbeError('helper')
+    }
+  }
+
+  async openSession(peerId: string): Promise<{ peer: SyncPeer; session: SyncSshSession }> {
+    let sessionOpened = false
+    const { peer, client } = await this.connectClient(peerId)
+    try {
       const channel = await new Promise<ClientChannel>((resolve, reject) => {
         const execDeadline = setTimeout(() => {
           reject(new Error('Timed out while waiting for the sync helper channel'))
@@ -300,7 +373,6 @@ export class SyncSshTransport {
       if (error instanceof SyncHostKeyChallengeError || error instanceof SyncPeerNotFoundError || error instanceof SyncSshProbeError) {
         throw error
       }
-      if (challenge) throw challenge
       const category = classifySshError(error)
       if (category === 'auth' || category === 'network' || category === 'timeout') {
         throw new SyncSshProbeError(category)
@@ -389,6 +461,23 @@ export class SyncSshTransport {
   }
 
   async fetchSessionManifest(peerId: string): Promise<SyncSessionManifest> {
+    // wss 数据面优先：一次 direct-tcpip 通道代替「SSH 握手 + 远端 helper 进程」。
+    if (this.relayDataPlane !== undefined) {
+      try {
+        const { body } = await this.relayDataPlane.relayInternal(peerId, 'GET', '/api/dshb/sync/internal/sessions/manifest')
+        const value = JSON.parse(body.toString('utf8')) as unknown
+        if (!isRecord(value) || value.ok !== true || !isRecord(value.manifest)) throw new SyncSshProbeError('helper')
+        const manifest = value.manifest
+        if (manifest.protocolVersion !== 1 || typeof manifest.instanceId !== 'string' ||
+          !Array.isArray(manifest.entries) || !Array.isArray(manifest.skipped) || typeof manifest.digest !== 'string') {
+          throw new SyncSshProbeError('protocol')
+        }
+        return manifest as unknown as SyncSessionManifest
+      } catch (error) {
+        // 中继层错误（通道不可达/凭据失败等）降级 helper 协议；数据/协议错误照常抛出。
+        if (!((error as Error | undefined)?.name === 'RemoteRelayError')) throw error
+      }
+    }
     const value = await this.fetchDataOperation(peerId, 'session-manifest')
     if (!isRecord(value) || value.ok !== true || !isRecord(value.manifest)) throw new SyncSshProbeError('helper')
     const manifest = value.manifest
@@ -399,6 +488,30 @@ export class SyncSshTransport {
     return manifest as unknown as SyncSessionManifest
   }
 
+  async fetchCatalog(peerId: string): Promise<SyncCatalog> {
+    const value = await this.fetchDataOperation(peerId, 'catalog')
+    if (!isRecord(value) || value.ok !== true || !isRecord(value.catalog)) throw new SyncSshProbeError('helper')
+    try {
+      return validateSyncCatalog(value.catalog)
+    } catch {
+      throw new SyncSshProbeError('protocol')
+    }
+  }
+
+  /** 取得远端铸造的中继凭据（≤10 分钟签名 cookie），供元数据同步的 wss 通道使用。 */
+  async fetchRelayTicket(peerId: string, authority: string): Promise<{ name: string; value: string; maxAgeSeconds: number }> {
+    const value = await this.fetchDataOperation(peerId, 'relay-ticket', { authority })
+    if (!isRecord(value) || value.ok !== true || !isRecord(value.cookie)) throw new SyncSshProbeError('helper')
+    const cookie = value.cookie
+    if (typeof cookie.name !== 'string' || !cookie.name.startsWith('dsh-auth-') ||
+      typeof cookie.value !== 'string' || cookie.value.length < 8 || cookie.value.length > 4096 ||
+      !Number.isSafeInteger(cookie.maxAgeSeconds) || (cookie.maxAgeSeconds as number) < 1 ||
+      (cookie.maxAgeSeconds as number) > 600) {
+      throw new SyncSshProbeError('protocol')
+    }
+    return { name: cookie.name, value: cookie.value, maxAgeSeconds: cookie.maxAgeSeconds as number }
+  }
+
   async fetchSessionEntries(
     peerId: string,
     keys: readonly string[],
@@ -406,6 +519,23 @@ export class SyncSshTransport {
     prefixes: readonly SyncSessionEventPrefix[] = [],
     deferredObjects = false,
   ): Promise<SyncSessionBundle> {
+    // wss 数据面优先：POST body 小（keys+digest），响应可达数十 MB（64MB relay 上限内）。
+    if (this.relayDataPlane !== undefined) {
+      try {
+        const { body } = await this.relayDataPlane.relayInternal(peerId, 'POST', '/api/dshb/sync/internal/sessions/entries',
+          Buffer.from(JSON.stringify({ keys, manifestDigest, prefixes, deferredObjects }), 'utf8'))
+        const value = JSON.parse(body.toString('utf8')) as unknown
+        if (!isRecord(value) || value.ok !== true || !isRecord(value.bundle)) throw new SyncSshProbeError('helper')
+        const bundle = value.bundle
+        if (bundle.protocolVersion !== 1 || typeof bundle.instanceId !== 'string' ||
+          !Array.isArray(bundle.entries) || !Array.isArray(bundle.skipped) || typeof bundle.digest !== 'string') {
+          throw new SyncSshProbeError('protocol')
+        }
+        return bundle as unknown as SyncSessionBundle
+      } catch (error) {
+        if (!((error as Error | undefined)?.name === 'RemoteRelayError')) throw error
+      }
+    }
     const value = await this.fetchDataOperation(peerId, 'session-entries', { keys, manifestDigest, prefixes, deferredObjects })
     if (!isRecord(value) || value.ok !== true || !isRecord(value.bundle)) throw new SyncSshProbeError('helper')
     const bundle = value.bundle
@@ -581,9 +711,10 @@ export class SyncSshTransport {
     }
   }
 
+
   private async fetchDataOperation(
     peerId: string,
-    operation: 'node-manifest' | 'session-bundle' | 'session-manifest' | 'session-entries',
+    operation: 'node-manifest' | 'session-bundle' | 'session-manifest' | 'session-entries' | 'catalog' | 'relay-ticket',
     requestBody?: Record<string, unknown>,
   ): Promise<unknown> {
     const body = requestBody === undefined ? undefined : Buffer.from(JSON.stringify(requestBody), 'utf8')
@@ -752,23 +883,44 @@ export function buildRemoteProbeScript(dshHome?: string, preferredWebPort?: numb
     'done',
     'ps -eo args= 2>/dev/null | grep -E "dsh .*--profile|--profile .*--port|dsh web" | grep -v grep | head -6',
     `node -e '`
-    + 'const http=require("http");'
-    + 'const ports=process.argv.slice(1).map(Number).filter(Number.isInteger);'
-    + 'let i=0;'
+    + 'const http=require("http"),fs=require("fs");'
+    + 'const seed=process.argv.slice(1).map(Number).filter(Number.isInteger);'
+    + 'const ports=new Set(seed);'
+    // Linux：把宿主全部 TCP 监听端口纳入候选（docker 映射场景 127.0.0.1:13080 之类
+    // 无法从进程参数推断）。macOS 无 /proc，静默跳过、由静态候选兜底。
+    + 'for(const f of ["/proc/net/tcp","/proc/net/tcp6"]){'
+    + 'try{const t=fs.readFileSync(f,"utf8");'
+    + 'for(const line of t.split("\\n").slice(1)){'
+    + 'const c=line.trim().split(/\\s+/);'
+    + 'if(c[3]==="0A"){const p=parseInt((c[1]||"").split(":")[1],16);'
+    + 'if(p>=1024&&p<=65535)ports.add(p)}}}catch(e){}}'
+    + 'const list=[...ports];'
+    // 已保存的对端配置端口最先探测，静态候选次之，宿主全量监听最后；
+    // 本机回环 ECONNREFUSED 立即返回，仅挂起连接吃满 700ms 超时，4 路并发控制最坏耗时。
+    + 'const preferred=' + (preferredWebPort !== undefined ? String(preferredWebPort) : 'null') + ';'
+    + 'const rank=p=>p===preferred?0:(seed.includes(p)?1:2);'
+    + 'list.sort((a,b)=>rank(a)-rank(b));'
+    + 'let i=0;let active=0;'
+    + 'function done(){active--;if(i>=list.length&&active===0)process.exit(0);probe()}'
     + 'function probe(){'
-    + 'if(i>=ports.length)process.exit(0);'
-    + 'const port=ports[i++];'
+    + 'while(i<list.length&&active<4){'
+    + 'const port=list[i++];'
+    + 'let settled=false;'
+    + 'function finish(){if(settled)return;settled=true;done()}'
     + 'const req=http.get({host:"127.0.0.1",port,path:"/api/dshb/sync/internal/handshake",timeout:700},res=>{'
     + 'let body="";res.on("data",c=>body+=c);res.on("end",()=>{'
     + 'try{const j=JSON.parse(body);if(j&&j.ok===true&&typeof j.instanceId==="string")'
-    + '{console.log("handshake "+port+" "+j.instanceId)}}catch(e){}probe()})});'
-    + 'req.on("timeout",()=>{req.destroy();probe()});'
-    + 'req.on("error",()=>probe());'
-    + '}probe()'
+    + '{console.log("handshake "+port+" "+j.instanceId)}}catch(e){}finish()})});'
+    + 'req.on("timeout",()=>{req.destroy();finish()});'
+    + 'req.on("error",()=>finish());'
+    + 'active++}'
+    + '}'
+    + 'probe()'
     + "' "
     + (preferredWebPort !== undefined ? ` ${preferredWebPort}` : '')
     + ' 3080 8080 3079 3204 3206 3207 9080'
-    + ` $(ps -eo args= 2>/dev/null | grep -o "\\-\\-port [0-9]\\+" | awk '{print $2}' | head -6)`,
+    // docker 端口映射（docker-proxy -host-port 13080）与裸 dsh --port 均纳入。
+    + ` $(ps -eo args= 2>/dev/null | grep -oE "(--port|-host-port) [0-9]+" | awk '{print $2}' | head -8)`,
     `echo ${REMOTE_PROBE_END_MARKER}`,
   ].join('\n')
 }

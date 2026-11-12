@@ -36,8 +36,8 @@ export default class AuthedWebServer extends WebServer {
     })
   }
 
-  private guarded(route: WebRoute, req: IncomingMessage, res: ServerResponse): void | Promise<void> {
-    const decision = this.gate.decide(req)
+  private async guarded(route: WebRoute, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const decision = await this.gate.decide(req)
     if (decision === 'allow') {
       rewriteToLoopback(req, this.port)
       return route.handler(req, res)
@@ -59,13 +59,13 @@ export default class AuthedWebServer extends WebServer {
     res.end(JSON.stringify({ ok: false, error: 'unauthorized' }))
   }
 
-  private guardedUpgrade(
+  private async guardedUpgrade(
     route: WebUpgradeRoute,
     req: IncomingMessage,
     socket: Duplex,
     head: Buffer,
-  ): void | Promise<void> {
-    const decision = this.gate.decide(req)
+  ): Promise<void> {
+    const decision = await this.gate.decide(req)
     if (decision === 'allow' || decision === 'exempt') {
       if (decision === 'allow') rewriteToLoopback(req, this.port)
       return route.handler(req, socket, head)

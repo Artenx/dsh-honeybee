@@ -126,6 +126,17 @@ describe('移动端页面兼容', () => {
     expect(html).not.toContain('[class*="7KE1Ra_menu"]')
     expect(html).not.toContain('[class*="_menu"]:has([class*="modelName"])')
   })
+
+  it('注入 Promise.withResolvers polyfill 供旧 WebKit 使用', () => {
+    const html = installLoopbackCompat('<html><head></head><body></body></html>')
+    expect(html).toContain('Promise.withResolvers = function')
+  })
+
+  it('dshb-debug 屏幕错误面板已移除（0.1.51）', () => {
+    const html = installLoopbackCompat('<html><head></head><body></body></html>')
+    expect(html).not.toContain('dshb-debug-panel')
+    expect(html).not.toContain('dshb-debug')
+  })
 })
 
 describe('登录限速（需求 1.5）', () => {

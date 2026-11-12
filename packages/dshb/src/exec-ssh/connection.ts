@@ -34,6 +34,7 @@ export interface SshConnectionError extends Error {
 }
 
 const HANDSHAKE_TIMEOUT_MS = 30_000
+const KEEPALIVE_INTERVAL_MS = 15_000
 const MAX_RETRIES = 5
 const BASE_DELAY_MS = 500
 
@@ -55,13 +56,15 @@ export function toConnectionError(err: unknown): SshConnectionError {
   return e
 }
 
-function buildConnectConfig(target: SshTarget, secrets: SshSecrets): ConnectConfig {
+export function buildConnectConfig(target: SshTarget, secrets: SshSecrets): ConnectConfig {
   const cfg: ConnectConfig = {
     host: target.host,
     port: target.port,
     username: target.username,
     readyTimeout: HANDSHAKE_TIMEOUT_MS,
-    keepaliveInterval: 0,
+    // A frozen half-open TCP connection must be detected: after 3 missed
+    // keepalives ssh2 emits close/error so getClient() can rebuild.
+    keepaliveInterval: KEEPALIVE_INTERVAL_MS,
     keepaliveCountMax: 3,
   }
   switch (target.auth.kind) {
@@ -97,16 +100,27 @@ export class SshConnection {
     if (this.connecting) return this.connecting
     this.connecting = this.connectWithRetry()
     try {
-      this.client = await this.connecting
-      this.client.on('close', () => {
-        this.client = null
-      })
-      this.client.on('error', () => {
-        this.client = null
-      })
-      return this.client
+      return await this.connecting
     } finally {
       this.connecting = null
+    }
+  }
+
+  /**
+   * Discard the current client after an operation-level fault (for example a
+   * timed-out channel or SFTP request on a frozen connection) so the next
+   * getClient() performs a fresh handshake instead of reusing a dead socket.
+   */
+  invalidate(): void {
+    if (this.closed) return
+    const client = this.client
+    this.client = null
+    if (client) {
+      try {
+        client.end()
+      } catch {
+        // client already torn down
+      }
     }
   }
 
@@ -115,7 +129,9 @@ export class SshConnection {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (this.closed) throw toConnectionError(new Error('connection closed'))
       try {
-        return await this.connectOnce()
+        const client = await this.connectOnce()
+        this.client = client
+        return client
       } catch (err) {
         lastErr = err
         const cat = classifySshError(err)
@@ -139,7 +155,17 @@ export class SshConnection {
         settled = true
         fn()
       }
-      client.once('ready', () => finish(() => resolve(client)))
+      client.once('ready', () => finish(() => {
+        // Drop the cached client when the underlying socket dies so the next
+        // getClient() reconnects instead of handing out a dead connection.
+        client.once('close', () => {
+          if (this.client === client) this.client = null
+        })
+        client.once('error', () => {
+          if (this.client === client) this.client = null
+        })
+        resolve(client)
+      }))
       client.on('error', (err: unknown) => {
         try {
           client.end()

@@ -50,4 +50,5 @@ export function registerSyncSessionRoutes(ctx: Context, sessions: SyncSessionSer
       },
     }),
   )
+
 }

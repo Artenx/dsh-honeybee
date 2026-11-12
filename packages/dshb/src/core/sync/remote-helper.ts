@@ -12,13 +12,15 @@ const PATHS = {
   'node-apply': { path: '/api/dshb/sync/internal/nodes/apply', method: 'POST' },
   'session-bundle': { path: '/api/dshb/sync/internal/sessions/bundle', method: 'GET' },
   'session-manifest': { path: '/api/dshb/sync/internal/sessions/manifest', method: 'GET' },
+  catalog: { path: '/api/dshb/sync/internal/catalog', method: 'GET' },
   'session-entries': { path: '/api/dshb/sync/internal/sessions/entries', method: 'POST' },
   'session-apply': { path: '/api/dshb/sync/internal/sessions/apply', method: 'POST' },
   'session-objects': { path: '/api/dshb/sync/internal/sessions/objects', method: 'POST' },
   'session-objects-push': { path: '/api/dshb/sync/internal/sessions/objects', method: 'POST' },
+  'relay-ticket': { path: '/api/dshb/sync/internal/relay-ticket', method: 'POST' },
 }
-const BUFFERED_BODY_OPERATIONS = ['node-apply', 'session-entries', 'session-apply', 'session-objects']
-const STREAMING_RESPONSE_OPERATIONS = ['node-manifest', 'session-bundle', 'session-manifest', 'session-entries', 'session-objects']
+const BUFFERED_BODY_OPERATIONS = ['node-apply', 'session-entries', 'session-apply', 'session-objects', 'relay-ticket']
+const STREAMING_RESPONSE_OPERATIONS = ['node-manifest', 'session-bundle', 'session-manifest', 'session-entries', 'session-objects', 'catalog', 'relay-ticket']
 
 function encodeControl(value) {
   const body = Buffer.from(JSON.stringify(value) + '\n', 'utf8')
